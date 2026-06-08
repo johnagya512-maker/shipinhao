@@ -28,6 +28,9 @@ class TaskCreate(BaseModel):
     time_limit: int = Field(default=900, ge=60, le=3600)
     enable_subtitles: bool = True
     enable_animations: bool = True
+    processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
+    pause_mode: str = "none"             # none | key_nodes | every_step | custom
+    pause_steps: list[str] = Field(default_factory=list)  # custom 模式勾选的步骤
 
 
 class RerunRequest(BaseModel):

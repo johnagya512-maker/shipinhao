@@ -42,6 +42,14 @@ class Task(Base):
     time_limit: Mapped[int] = mapped_column(Integer, default=900)
     enable_subtitles: Mapped[bool] = mapped_column(Boolean, default=True)
     enable_animations: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 处理模式：full_auto（完整跑）/ semi_auto（不改写，仅分句）/ direct（不改写、机械切分）
+    processing_mode: Mapped[str] = mapped_column(String(12), default="full_auto")
+    # 暂停确认：none（不停）/ key_nodes（关键节点）/ every_step（每步）/ custom（自定义步骤）
+    pause_mode: Mapped[str] = mapped_column(String(12), default="none")
+    # 自定义暂停的步骤集合（pause_mode=custom 时生效），如 ["B","E"]
+    pause_steps: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 当前暂停在哪个 step（awaiting_confirm 时有值；恢复后清空）
+    paused_at: Mapped[str | None] = mapped_column(String(2), nullable=True)
     total_cost: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
     error_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

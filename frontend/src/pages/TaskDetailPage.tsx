@@ -5,12 +5,16 @@ import { api, ApiError } from '../api/client'
 import type { TaskResultsOut, TaskStatus } from '../api/types'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
-  pending: '待处理', processing: '处理中', awaiting_audio: '待上传音频',
+  pending: '待处理', processing: '处理中', awaiting_confirm: '待确认', awaiting_audio: '待上传音频',
   completed: '已完成', blocked: '已拦截', failed: '失败', cancelled: '已取消',
 }
 const MODULE_NAME: Record<string, string> = {
-  A: 'A 清洗', B: 'B 改写', D: 'D 图书识别', E: 'E 配图',
-  F: 'F 配音分段', G: 'G 视频合成', H: 'H 合规审查',
+  A: 'A 清洗', B: 'B 改写', D: 'D 图书识别', E: 'E 配图', P: 'P 提示词生成',
+  F: 'F 配音分段', G: 'G 视频合成', H: 'H 合规审查', T: 'T 配音',
+}
+// 暂停步骤 → 中文，用于「待确认」提示。
+const STEP_LABEL: Record<string, string> = {
+  B: '智能改写', H: '合规审查', F: '分句分镜', P: '提示词生成', E: '批量生图',
 }
 
 export default function TaskDetailPage() {
@@ -33,7 +37,7 @@ export default function TaskDetailPage() {
 
   useEffect(() => { load() }, [load])
 
-  // 进行中状态每 3 秒轮询。
+  // 进行中状态每 3 秒轮询（待确认不轮询——等用户点确认）。
   useEffect(() => {
     const s = data?.task.status
     if (s !== 'processing' && s !== 'pending') return
@@ -81,6 +85,18 @@ export default function TaskDetailPage() {
     }
   }
 
+  async function onResume() {
+    setBusy(true); setError(null)
+    try {
+      await api.resume(id)
+      await load()
+    } catch (err) {
+      setError((err as ApiError).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (error && !data) {
     return <div className="px-4 py-2 rounded-lg text-sm bg-red-50 text-red-700">{error}</div>
   }
@@ -91,6 +107,7 @@ export default function TaskDetailPage() {
   const canRerun = ['blocked', 'failed', 'cancelled'].includes(task.status)
   const canCancel = !['completed', 'failed', 'cancelled'].includes(task.status)
   const hasDownload = task.status === 'completed'
+  const awaitingConfirm = task.status === 'awaiting_confirm'
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -135,6 +152,21 @@ export default function TaskDetailPage() {
           <button onClick={onCancel} disabled={busy} className="btn-ghost">取消任务</button>
         )}
       </div>
+
+      {awaitingConfirm && (
+        <div className="bg-brand-600/10 border border-brand-500/30 rounded-2xl p-5 mb-5">
+          <div className="text-sm font-semibold text-brand-300 mb-1">
+            已暂停 · 等待确认
+            {task.paused_at && <span className="ml-2 text-slate-400 font-normal">当前停在：{STEP_LABEL[task.paused_at] || task.paused_at} 之后</span>}
+          </div>
+          <p className="text-xs text-slate-400 mb-3">检查下方该步骤产物，确认无误后继续后续步骤（已完成步骤不会重算、不重复扣费）。</p>
+          <button onClick={onResume} disabled={busy}
+            className="px-5 py-2.5 rounded-lg bg-brand-600 text-white text-sm font-medium
+              shadow-sm shadow-brand-600/20 transition-colors hover:bg-brand-700 disabled:opacity-50">
+            {busy ? '继续中…' : '确认并继续'}
+          </button>
+        </div>
+      )}
 
       {canRerun && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 mb-5">

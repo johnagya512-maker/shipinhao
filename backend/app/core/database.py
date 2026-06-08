@@ -39,6 +39,10 @@ def _ensure_columns():
         ("tasks", "voice", "VARCHAR(120)"),
         ("tasks", "reference_image", "VARCHAR(500)"),
         ("tasks", "bgm", "VARCHAR(120)"),
+        ("tasks", "processing_mode", "VARCHAR(12) DEFAULT 'full_auto'"),
+        ("tasks", "pause_mode", "VARCHAR(12) DEFAULT 'none'"),
+        ("tasks", "pause_steps", "JSON"),
+        ("tasks", "paused_at", "VARCHAR(2)"),
         ("configs", "bgm_dir", "VARCHAR(500)"),
     ]
     insp = inspect(engine)

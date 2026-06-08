@@ -74,6 +74,27 @@ const OPTIONAL_MODULES = [
   { key: 'F', name: 'F 配音分段' },
   { key: 'H', name: 'H 合规审查' },
 ]
+// 处理模式：决定前段文案怎么来（后续生图/配音/成片三模式一致）。
+const PROCESSING_MODES = [
+  { key: 'full_auto', name: '全自动', desc: '清洗+AI改写+智能分句（推荐）' },
+  { key: 'semi_auto', name: '半自动', desc: '用原文，仅AI智能分句，不改写' },
+  { key: 'direct', name: '直接出片', desc: '不改写，按标点机械切分（仍合规审查）' },
+]
+// 暂停确认：在关键步骤后停下等人工确认。
+const PAUSE_MODES = [
+  { key: 'none', name: '不暂停', desc: '一条龙跑完' },
+  { key: 'key_nodes', name: '关键节点', desc: '改写稿+生图后停（推荐）' },
+  { key: 'every_step', name: '每步确认', desc: '每步后都停' },
+  { key: 'custom', name: '自定义', desc: '自选暂停步骤' },
+]
+// 可作为暂停点的步骤（面向用户命名 → 后端 step）。被处理模式跳过的会灰显。
+const PAUSE_STEPS: { key: string; name: string; skipModes: string[]; needsModule?: string }[] = [
+  { key: 'B', name: '智能改写', skipModes: ['semi_auto', 'direct'] },
+  { key: 'H', name: '合规审查', skipModes: [] },
+  { key: 'F', name: '分句分镜', skipModes: [] },
+  { key: 'P', name: '提示词生成', skipModes: [], needsModule: 'E' },
+  { key: 'E', name: '批量生图', skipModes: [], needsModule: 'E' },
+]
 
 export default function TaskCreatePage() {
   const nav = useNavigate()
@@ -83,6 +104,7 @@ export default function TaskCreatePage() {
     target_audience: '50+女性', track: 'character_story',
     monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16',
     cost_limit: 1.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
+    processing_mode: 'full_auto', pause_mode: 'none', pause_steps: [],
   })
   const [est, setEst] = useState<EstimateOut | null>(null)
   const [estimating, setEstimating] = useState(false)
@@ -393,6 +415,68 @@ export default function TaskCreatePage() {
                     )
                   })}
                 </div>
+              </div>
+
+              <div>
+                <span className="text-sm text-slate-400">处理模式 <span className="text-[11px] text-slate-600">· 决定文案怎么来，后续生图/配音/成片一致</span></span>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {PROCESSING_MODES.map((m) => {
+                    const on = (form.processing_mode ?? 'full_auto') === m.key
+                    return (
+                      <button key={m.key} type="button"
+                        onClick={() => set({ processing_mode: m.key })}
+                        className={`text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                          on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                        }`}>
+                        <div className={`text-sm font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">{m.desc}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+                {form.processing_mode !== 'full_auto' && (
+                  <p className="mt-1.5 text-[11px] text-amber-400/80">半自动/直接出片不做 AI 改写，「改写强度 / 叙事视角 / 带货模式」不生效。</p>
+                )}
+              </div>
+
+              <div>
+                <span className="text-sm text-slate-400">暂停确认 <span className="text-[11px] text-slate-600">· 在关键步骤后停下等你确认</span></span>
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {PAUSE_MODES.map((m) => {
+                    const on = (form.pause_mode ?? 'none') === m.key
+                    return (
+                      <button key={m.key} type="button"
+                        onClick={() => set({ pause_mode: m.key })}
+                        className={`text-left px-2.5 py-2 rounded-lg border transition-colors ${
+                          on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                        }`}>
+                        <div className={`text-[13px] font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">{m.desc}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+                {form.pause_mode === 'custom' && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {PAUSE_STEPS.map((s) => {
+                      const skipped = (s.skipModes ?? []).includes(form.processing_mode ?? 'full_auto')
+                        || (s.needsModule != null && !form.modules.includes(s.needsModule))
+                      const on = (form.pause_steps ?? []).includes(s.key)
+                      return (
+                        <button key={s.key} type="button" disabled={skipped}
+                          onClick={() => {
+                            const cur = form.pause_steps ?? []
+                            set({ pause_steps: cur.includes(s.key) ? cur.filter((k) => k !== s.key) : [...cur, s.key] })
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                            skipped ? 'border-slate-800 text-slate-700 cursor-not-allowed line-through'
+                              : on ? 'bg-brand-600/15 border-brand-500 text-brand-300'
+                                   : 'border-slate-700 text-slate-400 hover:border-slate-600'
+                          }`} title={skipped ? '当前处理模式/模块下此步骤被跳过' : ''}>{s.name}</button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">

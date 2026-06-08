@@ -106,6 +106,16 @@ def run_images(provider, api_key, book_info, segments, out_dir: Path,
     reference_image 非空时作为角色一致性参考喂给绘图模型（best-effort，模型不支持则退回纯文生图）。
     单张被内容审核反复拒绝时降级为占位图，不中断整条链路。
     多张并发生成（线程池，I/O 密集），保持封面→内容→结尾的顺序返回。"""
+    tasks = build_image_prompts(book_info, segments, out_dir, image_count=image_count,
+                                track=track, image_style=image_style)
+    return render_images(provider, api_key, tasks, model=model, concurrency=concurrency,
+                         aspect_ratio=aspect_ratio, reference_image=reference_image)
+
+
+def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
+                        track="character_story", image_style=None):
+    """Step 3「提示词生成」：组装绘图任务列表（提示词+落盘路径），不调用绘图 API。
+    返回 [(prompt, sub_type, out_path, suggested_duration), ...]，保持封面→内容→结尾顺序。"""
     image_count = max(MIN_IMAGES, min(MAX_IMAGES, image_count))
     n_content = image_count - 2
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -136,8 +146,13 @@ def run_images(provider, api_key, book_info, segments, out_dir: Path,
         tasks.append((_wrap(style, f"{desc}的场景画面"), "content",
                       out_dir / f"content_{i}.png", 10))
     tasks.append((_wrap(style, cta_subject), "cta", out_dir / "cta.png", 6))
+    return tasks
 
-    # 并发生成。max_workers 受 concurrency 与任务数双重约束。
+
+def render_images(provider, api_key, tasks, model=None, concurrency=5,
+                  aspect_ratio="9:16", reference_image=None):
+    """Step 4「批量生图」：按 build_image_prompts 产出的任务列表并发生成。
+    单张失败降级占位图，不中断整批。保持任务列表顺序返回。"""
     from concurrent.futures import ThreadPoolExecutor
     results: list = [None] * len(tasks)
     workers = max(1, min(concurrency, len(tasks)))

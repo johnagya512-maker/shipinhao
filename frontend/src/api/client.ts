@@ -127,6 +127,7 @@ export const api = {
       method: 'POST', body: JSON.stringify({ transcript: transcript ?? null }),
     }),
   cancel: (id: string) => request<TaskOut>(`/tasks/${id}/cancel`, { method: 'POST' }),
+  resume: (id: string) => request<TaskOut>(`/tasks/${id}/resume`, { method: 'POST' }),
 
   // 上传音频用 FormData，不能带 JSON Content-Type，单独处理。
   uploadAudio: async (id: string, file: File, outputMode: 'jianying' | 'mp4' = 'jianying') => {

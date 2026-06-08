@@ -2,6 +2,7 @@
 export type TaskStatus =
   | 'pending'
   | 'processing'
+  | 'awaiting_confirm'
   | 'awaiting_audio'
   | 'completed'
   | 'blocked'
@@ -30,6 +31,9 @@ export interface TaskCreate {
   time_limit?: number
   enable_subtitles?: boolean
   enable_animations?: boolean
+  processing_mode?: string
+  pause_mode?: string
+  pause_steps?: string[]
 }
 
 export interface TaskOut {
@@ -89,6 +93,10 @@ export interface TaskDetail {
   monetization_mode: string
   enable_subtitles: boolean
   enable_animations: boolean
+  processing_mode?: string
+  pause_mode?: string
+  pause_steps?: string[] | null
+  paused_at?: string | null
   error_code?: string | null
   error_message?: string | null
   created_at: string

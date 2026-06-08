@@ -34,6 +34,14 @@ def _run_pipeline_bg(task_id: str):
         db.close()
 
 
+def _resume_pipeline_bg(task_id: str):
+    db = SessionLocal()
+    try:
+        orchestrator.resume_pipeline(db, task_id)
+    finally:
+        db.close()
+
+
 @router.post("/tasks", response_model=TaskOut)
 def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get_db)):
     modules = set(body.modules)
@@ -71,6 +79,8 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         reference_image=(body.reference_image or None),
         cost_limit=body.cost_limit, time_limit=body.time_limit,
         enable_subtitles=body.enable_subtitles, enable_animations=body.enable_animations,
+        processing_mode=body.processing_mode, pause_mode=body.pause_mode,
+        pause_steps=body.pause_steps or None,
         status="pending",
     )
     db.add(task)
@@ -218,6 +228,24 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)):
     return task
 
 
+@router.post("/tasks/{task_id}/resume", response_model=TaskOut)
+def resume_task(task_id: str, bg: BackgroundTasks, db: Session = Depends(get_db)):
+    """暂停确认后继续执行（处理模式/暂停确认功能）。仅 awaiting_confirm 可调。
+    从暂停点续跑：已完成步骤走缓存不重算、不重复扣费。"""
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    if task.status != "awaiting_confirm":
+        raise HTTPException(400, detail="任务当前不处于待确认状态")
+    if cost_svc.daily_cap_reached(db):
+        raise HTTPException(402, detail="E2003: 每日成本上限已达")
+    task.status = "pending"
+    db.commit()
+    bg.add_task(_resume_pipeline_bg, task.id)
+    db.refresh(task)
+    return task
+
+
 @router.get("/tasks/{task_id}/results")
 def get_task_results(task_id: str, db: Session = Depends(get_db)):
     """任务详情：各模块产物（PRD 6.3）。供详情页展示清洗/改写/分段/合规/配图结果。"""
@@ -234,6 +262,8 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
             "keyword": task.keyword, "track": task.track, "modules": task.modules,
             "target_audience": task.target_audience, "monetization_mode": task.monetization_mode,
             "enable_subtitles": task.enable_subtitles, "enable_animations": task.enable_animations,
+            "processing_mode": task.processing_mode, "pause_mode": task.pause_mode,
+            "pause_steps": task.pause_steps, "paused_at": task.paused_at,
             "error_code": task.error_code, "error_message": task.error_message,
             "created_at": task.created_at, "updated_at": task.updated_at,
         },

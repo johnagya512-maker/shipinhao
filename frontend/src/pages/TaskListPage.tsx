@@ -5,11 +5,12 @@ import { api, ApiError } from '../api/client'
 import type { TaskListItem, TaskStatus } from '../api/types'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
-  pending: '待处理', processing: '处理中', awaiting_audio: '待上传音频',
+  pending: '待处理', processing: '处理中', awaiting_confirm: '待确认', awaiting_audio: '待上传音频',
   completed: '已完成', blocked: '已拦截', failed: '失败', cancelled: '已取消',
 }
 const STATUS_COLOR: Record<TaskStatus, string> = {
   pending: 'bg-slate-700 text-slate-300', processing: 'bg-blue-500/15 text-blue-400',
+  awaiting_confirm: 'bg-purple-500/15 text-purple-400',
   awaiting_audio: 'bg-amber-500/15 text-amber-400', completed: 'bg-green-500/15 text-green-400',
   blocked: 'bg-orange-500/15 text-orange-400', failed: 'bg-red-500/15 text-red-400',
   cancelled: 'bg-slate-700 text-slate-500',

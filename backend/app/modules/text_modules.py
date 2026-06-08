@@ -93,7 +93,22 @@ def run_split(provider, model, key, script_text, keyword=None, title=None, targe
     return {"segments": segments, "segment_count": len(segments)}, r
 
 
-def run_compliance(provider, model, key, script, track="character_story"):
+def mechanical_split(script_text: str):
+    """直接出片模式的机械切分：按换行/句末标点切句，不调 LLM、不计费。
+    用于 processing_mode=direct——保留原文措辞，仅做口播分段。
+    返回与 run_split 同构的 dict（无 LLMResult）。"""
+    raw_lines = [ln.strip() for ln in re.split(r"[\r\n]+", script_text) if ln.strip()]
+    segs: list[str] = []
+    for line in raw_lines:
+        parts = re.split(r"(?<=[。！？!?…；;])", line)
+        for p in parts:
+            p = p.strip()
+            if p:
+                segs.append(p)
+    if not segs:  # 无标点的整段：兜底按长度切，约 30 字一句
+        segs = [script_text[i:i + 30] for i in range(0, len(script_text), 30)] or [script_text]
+    segments = [{"text": s, "estimated_duration": max(1, round(len(s) / 5))} for s in segs]
+    return {"segments": segments, "segment_count": len(segments)}
     """模块 H：先规则匹配（按赛道词库），再 LLM 语义判定，合并结果。"""
     matched = _rule_match(script, track)
     prompt = _render(prompts.MODULE_H, script=script)

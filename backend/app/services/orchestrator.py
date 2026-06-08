@@ -31,6 +31,57 @@ class TaskAborted(Exception):
         self.message = message
 
 
+class _Paused(Exception):
+    """内部信号：命中暂停点，需停下等用户确认（非错误）。"""
+    def __init__(self, step: str):
+        self.step = step
+
+
+def _step_order(task) -> list[str]:
+    """本次任务实际会执行、且可作为暂停点的 step 序列（按执行先后）。
+    B 改写仅 full_auto 跑；E 配图需在 modules 中。"""
+    steps: list[str] = []
+    if task.processing_mode == "full_auto":
+        steps.append("B")          # Step1 智能改写
+    steps += ["H", "F"]            # Step0 合规闸门 / Step2 分句分镜
+    if "E" in (task.modules or []):
+        steps += ["P", "E"]        # Step3 提示词 / Step4 批量生图
+    steps.append("T")              # Step5 配音
+    return steps
+
+
+def _key_nodes(steps: list[str]) -> set[str]:
+    """关键节点：改写稿（无改写则退回合规闸门）+ 批量生图。"""
+    nodes = {"B" if "B" in steps else "H"}
+    if "E" in steps:
+        nodes.add("E")
+    return nodes
+
+
+def _should_pause(task, step: str) -> bool:
+    """该 step 刚“新算完”后是否应暂停等确认。"""
+    mode = task.pause_mode or "none"
+    if mode == "none":
+        return False
+    steps = _step_order(task)
+    if step not in steps:
+        return False
+    if mode == "every_step":
+        return True
+    if mode == "key_nodes":
+        return step in _key_nodes(steps)
+    if mode == "custom":
+        return step in set(task.pause_steps or [])
+    return False
+
+
+def _maybe_pause(db: Session, task: Task, step: str):
+    """新算完一个 step 后调用；命中暂停点则抛 _Paused。"""
+    if _should_pause(task, step):
+        raise _Paused(step)
+
+
+
 def _get_result(db: Session, task_id: str, module: str) -> ModuleResult | None:
     return db.query(ModuleResult).filter_by(task_id=task_id, module=module).first()
 
@@ -60,11 +111,13 @@ def _check_limits(db: Session, task: Task, started: float):
         raise TaskAborted("COST_EXCEEDED", "成本超过上限")
 
 
-def _llm_step(db, task, cfg, llm_key, module, fn, started):
-    """执行一个 LLM 模块：断点复用 + 重试 + 计费 + 限额检查。返回 output。"""
+def _llm_step(db, task, cfg, llm_key, module, fn, started, pausable=True):
+    """执行一个 LLM 模块：断点复用 + 重试 + 计费 + 限额检查。返回 output。
+    pausable=True 时，仅在“本次新算完”后检查暂停点（缓存复用直接返回，不再暂停，
+    保证 resume 能越过上次的暂停点继续）。"""
     existing = _get_result(db, task.id, module)
     if existing and existing.status == "success":
-        return existing.output  # 断点续跑：复用已成功结果，不重复扣费
+        return existing.output  # 断点续跑：复用已成功结果，不重复扣费，也不再触发暂停
 
     def _do():
         return fn()
@@ -77,6 +130,8 @@ def _llm_step(db, task, cfg, llm_key, module, fn, started):
     _save_result(db, task.id, module, "success", output=output, cost=c,
                  tokens_in=llm_result.tokens_in, tokens_out=llm_result.tokens_out, retry=attempts)
     _check_limits(db, task, started)
+    if pausable:
+        _maybe_pause(db, task, module)
     return output
 
 
@@ -118,7 +173,7 @@ def run_pipeline(db: Session, task_id: str):
         a_out = _llm_step(db, task, cfg, llm_key, "A",
                           lambda: tm.run_clean(cfg.llm_provider, cfg.llm_model, llm_key,
                                                task.transcript, task.keyword, task.title, task.author),
-                          started)
+                          started, pausable=False)
         cleaned = a_out["cleaned_text"]
 
         # keyword 兜底提取（PRD 9.2）：未填则用 A 输出首句近似
@@ -126,18 +181,21 @@ def run_pipeline(db: Session, task_id: str):
             task.keyword = cleaned[:8]
             db.commit()
 
-        # B 改写
-        b_out = _llm_step(db, task, cfg, llm_key, "B",
-                          lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
-                                                 cleaned, task.target_audience, task.title,
-                                                 track=task.track,
-                                                 monetization_mode=task.monetization_mode,
-                                                 rewrite_strength=task.rewrite_strength,
-                                                 narrative_perspective=task.narrative_perspective),
-                          started)
-        script = b_out["script"]
+        # B 改写（仅 full_auto 跑；semi_auto/direct 直接用清洗稿，不改写）
+        if task.processing_mode == "full_auto":
+            b_out = _llm_step(db, task, cfg, llm_key, "B",
+                              lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                     cleaned, task.target_audience, task.title,
+                                                     track=task.track,
+                                                     monetization_mode=task.monetization_mode,
+                                                     rewrite_strength=task.rewrite_strength,
+                                                     narrative_perspective=task.narrative_perspective),
+                              started)
+            script = b_out["script"]
+        else:
+            script = cleaned
 
-        # H 合规闸门（强制，按赛道词库）
+        # H 合规闸门（强制，按赛道词库；三种处理模式都跑——保留合规兜底）
         h_out = _llm_step(db, task, cfg, llm_key, "H",
                           lambda: tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
                                                     script, track=task.track),
@@ -149,11 +207,20 @@ def run_pipeline(db: Session, task_id: str):
             db.commit()
             return
 
-        # F 分段（必选）
-        f_out = _llm_step(db, task, cfg, llm_key, "F",
-                          lambda: tm.run_split(cfg.llm_provider, cfg.llm_model, llm_key,
-                                               script, task.keyword, task.title),
-                          started)
+        # F 分段（必选）。direct 模式机械切分（不调 LLM、不计费）；其余走 LLM 分句。
+        if task.processing_mode == "direct":
+            existing_f = _get_result(db, task.id, "F")
+            if existing_f and existing_f.status == "success":
+                f_out = existing_f.output
+            else:
+                f_out = tm.mechanical_split(script)
+                _save_result(db, task.id, "F", "success", output=f_out)
+                _maybe_pause(db, task, "F")
+        else:
+            f_out = _llm_step(db, task, cfg, llm_key, "F",
+                              lambda: tm.run_split(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                   script, task.keyword, task.title),
+                              started)
         segments = f_out["segments"]
 
         # D 识别（可选，失败跳过）
@@ -167,23 +234,38 @@ def run_pipeline(db: Session, task_id: str):
             except Exception as e:
                 _save_result(db, task.id, "D", "failed", output={"error": str(e)})
 
-        # E 配图（必选）
+        # E 配图（必选）。拆两步：P 提示词生成（不调绘图 API）→ E 批量生图。
         if "E" in task.modules:
             out_dir = storage_root(db) / task.id / "images"
+            # 张数按改写后文案字数自动匹配（约 5 字/秒口播、6 秒/张），
+            # 不依赖 F 分段数（其段数/估时波动大），保证节奏稳定。
+            est_dur = len(script) / cost_svc.CHARS_PER_SECOND
+            n_images = im.count_for_duration(est_dur)
+
+            # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
+            existing_p = _get_result(db, task.id, "P")
+            if existing_p and existing_p.status == "success":
+                prompts_list = [(p["prompt"], p["sub_type"], Path(p["out_path"]), p["duration"])
+                                for p in existing_p.output["prompts"]]
+            else:
+                prompts_list = im.build_image_prompts(book_info, segments, out_dir,
+                                                      image_count=n_images,
+                                                      track=task.track, image_style=task.image_style)
+                _save_result(db, task.id, "P", "success",
+                             output={"prompts": [{"prompt": p, "sub_type": st,
+                                                  "out_path": str(op), "duration": sd}
+                                                 for (p, st, op, sd) in prompts_list]})
+                _maybe_pause(db, task, "P")
+
+            # Step4 批量生图（"E"）
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
-                # 张数按改写后文案字数自动匹配（约 5 字/秒口播、6 秒/张），
-                # 不依赖 F 分段数（其段数/估时波动大），保证节奏稳定。
-                est_dur = len(script) / cost_svc.CHARS_PER_SECOND
-                n_images = im.count_for_duration(est_dur)
                 images, _ = with_retry(
-                    lambda: im.run_images(cfg.image_provider, img_key, book_info, segments, out_dir,
-                                          image_count=n_images,
-                                          track=task.track, image_style=task.image_style,
-                                          model=cfg.image_model,
-                                          concurrency=cfg.concurrency,
-                                          aspect_ratio=task.aspect_ratio,
-                                          reference_image=task.reference_image),
+                    lambda: im.render_images(cfg.image_provider, img_key, prompts_list,
+                                             model=cfg.image_model,
+                                             concurrency=cfg.concurrency,
+                                             aspect_ratio=task.aspect_ratio,
+                                             reference_image=task.reference_image),
                     IMAGE_RETRY)
                 img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * len(images)
                 cost_svc.record_cost(db, task.id, "E", cfg.image_provider, img_cost)
@@ -194,6 +276,7 @@ def run_pipeline(db: Session, task_id: str):
                                                  "suggested_duration": r.suggested_duration} for r in images]},
                              cost=img_cost)
                 _check_limits(db, task, started)
+                _maybe_pause(db, task, "E")
 
         # F 分段完成后：尝试自动 TTS 配音 → 自动成片。
         # 无 TTS Key 时降级为 awaiting_audio，等用户手动上传音频。
@@ -238,10 +321,27 @@ def run_pipeline(db: Session, task_id: str):
             task.status = "awaiting_audio"
             db.commit()
 
+    except _Paused as p:
+        # 命中暂停点：置 awaiting_confirm，记录停在哪个 step，等用户确认后 resume。
+        task = db.get(Task, task.id) or task
+        task.status = "awaiting_confirm"
+        task.paused_at = p.step
+        db.commit()
     except TaskAborted as e:
         _fail(db, task, e.code, e.message)
     except Exception as e:
         _fail(db, task, "E5001", str(e))
+
+
+def resume_pipeline(db: Session, task_id: str):
+    """用户确认后从暂停点继续。复用 run_pipeline——已成功的 step 走缓存不重算、
+    不重复扣费，且缓存命中不再触发暂停，自然越过上次的暂停点继续往后跑。"""
+    task = db.get(Task, task_id)
+    if not task:
+        return
+    task.paused_at = None
+    db.commit()
+    run_pipeline(db, task_id)
 
 
 def _run_collect_asr(db: Session, task: Task, cfg: Config, started: float):
