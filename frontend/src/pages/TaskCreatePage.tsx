@@ -131,6 +131,11 @@ export default function TaskCreatePage() {
 
   const set = (patch: Partial<TaskCreate>) => setForm((f) => ({ ...f, ...patch }))
 
+  // 配图相关设置（素材来源/画面风格/参考图/模板/比例）仅在勾选 E 配图时生效；
+  // 否则灰显并禁用交互，避免空跑误导。
+  const imageOn = form.modules.includes('E')
+  const dimImg = imageOn ? '' : 'opacity-40 pointer-events-none select-none'
+
   function toggleModule(key: string) {
     setForm((f) => {
       const has = f.modules.includes(key)
@@ -266,8 +271,8 @@ export default function TaskCreatePage() {
         </div>
 
         <div>
-          <span className="text-sm text-slate-400">素材来源</span>
-          <div className="mt-2 grid grid-cols-2 gap-2">
+          <span className="text-sm text-slate-400">素材来源 {!imageOn && <span className="text-[11px] text-amber-400/70">· 需勾选「E 智能配图」</span>}</span>
+          <div className={`mt-2 grid grid-cols-2 gap-2 ${dimImg}`}>
             <div className="px-3 py-2 rounded-lg border bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30">
               <span className="text-[13px] font-medium text-brand-300">🎨 AI 绘图</span>
               <span className="block text-[10px] text-slate-500">按文案分镜自动生成配图</span>
@@ -280,7 +285,7 @@ export default function TaskCreatePage() {
           </div>
         </div>
 
-        <div>
+        <div className={dimImg}>
           <span className="text-sm text-slate-400">画面风格</span>
           <div className="mt-2 grid grid-cols-4 gap-2">
             {IMAGE_STYLES.map((s) => {
@@ -301,7 +306,7 @@ export default function TaskCreatePage() {
 
         <div>
           <span className="text-sm text-slate-400">主角参考图（可选）</span>
-          <div className="mt-2 flex items-center gap-3">
+          <div className={`mt-2 flex items-center gap-3 ${dimImg}`}>
             <label className="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-200 text-sm cursor-pointer bg-slate-800/40 hover:bg-slate-800">
               {refUploading ? '上传中…' : '选择图片'}
               <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
@@ -328,7 +333,7 @@ export default function TaskCreatePage() {
           <p className="mt-1 text-[10px] text-slate-600">上传主角图片后，分镜配图会以这张为参考保持人物一致（取决于绘图模型支持，不支持则自动退回纯文生图）。</p>
         </div>
 
-        <div>
+        <div className={dimImg}>
           <span className="text-sm text-slate-400">草稿模板</span>
           <div className="mt-2 grid grid-cols-4 gap-2">
             {TEMPLATES.map((t) => {
@@ -347,7 +352,7 @@ export default function TaskCreatePage() {
           </div>
         </div>
 
-        <div>
+        <div className={dimImg}>
           <span className="text-sm text-slate-400">出图比例 <span className="text-[11px] text-slate-600">· 已跟随草稿模板，可手动覆盖</span></span>
           <div className="mt-2 flex gap-2">
             {ASPECTS.map((a) => {
@@ -567,12 +572,21 @@ export default function TaskCreatePage() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <label className="block">
                   <span className="text-sm text-slate-400">成本上限（元）</span>
                   <input type="number" min={0} step={0.1} className="field"
                     value={form.cost_limit}
                     onChange={(e) => { set({ cost_limit: Number(e.target.value) }); setEst(null) }} />
+                </label>
+                <label className="block">
+                  <span className="text-sm text-slate-400">超时上限（分钟）</span>
+                  <input type="number" min={1} max={60} step={1} className="field"
+                    value={Math.round((form.time_limit ?? 900) / 60)}
+                    onChange={(e) => {
+                      const m = Math.min(60, Math.max(1, Number(e.target.value) || 1))
+                      set({ time_limit: m * 60 })
+                    }} />
                 </label>
                 <div className="flex items-end gap-4 pb-1">
                   <label className="flex items-center gap-2 text-sm text-slate-300">
