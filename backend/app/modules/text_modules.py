@@ -113,6 +113,9 @@ def mechanical_split(script_text: str):
         segs = [script_text[i:i + 30] for i in range(0, len(script_text), 30)] or [script_text]
     segments = [{"text": s, "estimated_duration": max(1, round(len(s) / 5))} for s in segs]
     return {"segments": segments, "segment_count": len(segments)}
+
+
+def run_compliance(provider, model, key, script, track="character_story"):
     """模块 H：先规则匹配（按赛道词库），再 LLM 语义判定，合并结果。"""
     matched = _rule_match(script, track)
     prompt = _render(prompts.MODULE_H, script=script)

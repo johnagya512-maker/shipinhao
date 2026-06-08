@@ -103,7 +103,7 @@ export default function TaskCreatePage() {
     modules: ['A', 'B', 'E', 'F', 'G', 'H'],
     target_audience: '50+女性', track: 'character_story',
     monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16',
-    cost_limit: 1.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
+    cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     processing_mode: 'full_auto', pause_mode: 'none', pause_steps: [],
   })
   const [est, setEst] = useState<EstimateOut | null>(null)
