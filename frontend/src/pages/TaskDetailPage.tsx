@@ -103,7 +103,7 @@ export default function TaskDetailPage() {
   if (!data) return <div className="text-slate-500">加载中…</div>
 
   const { task, modules } = data
-  const canUpload = ['awaiting_audio', 'completed', 'failed'].includes(task.status)
+  const canUpload = ['awaiting_audio', 'failed'].includes(task.status)
   const canRerun = ['blocked', 'failed', 'cancelled'].includes(task.status)
   const canCancel = !['completed', 'failed', 'cancelled'].includes(task.status)
   const hasDownload = task.status === 'completed'
@@ -146,12 +146,18 @@ export default function TaskDetailPage() {
           </label>
         )}
         {hasDownload && (
-          <a href={api.downloadUrl(id)} className="btn-ghost">下载成片</a>
+          <a href={api.downloadUrl(id)} className="btn-ghost">下载剪映草稿/成片</a>
         )}
         {canCancel && (
           <button onClick={onCancel} disabled={busy} className="btn-ghost">取消任务</button>
         )}
       </div>
+
+      {hasDownload && (
+        <div className="mb-5 px-4 py-2.5 rounded-lg text-sm bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
+          ✅ 剪映草稿已生成。若已在配置页设置「剪映草稿目录」，打开剪映即可看到并编辑；否则点上方「下载剪映草稿/成片」获取。
+        </div>
+      )}
 
       {awaitingConfirm && (
         <div className="bg-brand-600/10 border border-brand-500/30 rounded-2xl p-5 mb-5">
