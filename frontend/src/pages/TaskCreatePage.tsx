@@ -116,6 +116,7 @@ export default function TaskCreatePage() {
   const [bgmFiles, setBgmFiles] = useState<string[]>([])
   const [refUploading, setRefUploading] = useState(false)
   const [refName, setRefName] = useState<string | null>(null)
+  const [refPreview, setRefPreview] = useState<string | null>(null)
 
   // 载入配置，用于"凭证未配置"提示。
   useEffect(() => { api.getConfig().then(setCfg).catch(() => {}) }, [])
@@ -317,17 +318,20 @@ export default function TaskCreatePage() {
                   setRefUploading(true); setError(null)
                   try {
                     const r = await api.uploadReference(f)
-                    set({ reference_image: r.reference_image }); setRefName(f.name)
+                    set({ reference_image: r.reference_image }); setRefName(f.name); setRefPreview(URL.createObjectURL(f))
                   } catch (err) { setError((err as ApiError).message) }
                   finally { setRefUploading(false) }
                 }} />
             </label>
+            {refPreview && (
+              <img src={refPreview} alt="参考图" className="w-12 h-12 rounded-lg object-cover border border-slate-700" />
+            )}
             {refName && (
-              <span className="text-xs text-slate-400 truncate max-w-[200px]" title={refName}>已上传：{refName}</span>
+              <span className="text-xs text-emerald-400 truncate max-w-[160px]" title={refName}>✓ {refName}</span>
             )}
             {refName && (
               <button type="button" className="text-xs text-slate-500 hover:text-slate-300"
-                onClick={() => { set({ reference_image: undefined }); setRefName(null) }}>清除</button>
+                onClick={() => { set({ reference_image: undefined }); setRefName(null); setRefPreview(null) }}>清除</button>
             )}
           </div>
           <p className="mt-1 text-[10px] text-slate-600">上传主角图片后，分镜配图会以这张为参考保持人物一致（取决于绘图模型支持，不支持则自动退回纯文生图）。</p>
