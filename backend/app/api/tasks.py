@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_auth)])
 REQUIRED = {"A", "B", "G"}
 ALLOWED_AUDIO = {"audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/x-m4a"}
 ALLOWED_IMAGE = {"image/jpeg", "image/png", "image/webp"}
-MAX_REFERENCE_BYTES = 8 * 1024 * 1024  # 主角参考图最大 8MB
+MAX_REFERENCE_BYTES = 20 * 1024 * 1024  # 主角参考图最大 20MB(前端先压缩,此为兜底)
 # 音频魔数（文件头）：用于校验真实类型，防止伪装扩展名（PRD 12.3）
 AUDIO_MAGIC = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"RIFF", b"\x00\x00\x00")
 AUDIO_MIN_SEC, AUDIO_MAX_SEC = 30, 300  # PRD 5.4 E3002

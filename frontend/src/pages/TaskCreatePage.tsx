@@ -96,6 +96,36 @@ const PAUSE_STEPS: { key: string; name: string; skipModes: string[]; needsModule
   { key: 'E', name: '批量生图', skipModes: [], needsModule: 'E' },
 ]
 
+// 上传前压缩参考图：长边限制到 1536px、JPEG 质量 0.85，避免原图过大被绘图 API 拒。
+// 参考图只用于让模型认人物特征，不需要原始分辨率。返回压缩后的 File。
+async function compressImage(file: File, maxEdge = 1536, quality = 0.85): Promise<File> {
+  // 已经很小（<1.5MB）的图直接用原图，省一次编解码。
+  if (file.size <= 1.5 * 1024 * 1024) return file
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = reject
+    r.readAsDataURL(file)
+  })
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const i = new Image()
+    i.onload = () => resolve(i)
+    i.onerror = reject
+    i.src = dataUrl
+  })
+  const scale = Math.min(1, maxEdge / Math.max(img.width, img.height))
+  const w = Math.round(img.width * scale)
+  const h = Math.round(img.height * scale)
+  const canvas = document.createElement('canvas')
+  canvas.width = w; canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return file
+  ctx.drawImage(img, 0, 0, w, h)
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+  if (!blob) return file
+  return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
+}
+
 export default function TaskCreatePage() {
   const nav = useNavigate()
   const [form, setForm] = useState<TaskCreate>({
@@ -317,7 +347,8 @@ export default function TaskCreatePage() {
                   if (!f) return
                   setRefUploading(true); setError(null)
                   try {
-                    const r = await api.uploadReference(f)
+                    const compressed = await compressImage(f)
+                    const r = await api.uploadReference(compressed)
                     set({ reference_image: r.reference_image }); setRefName(f.name); setRefPreview(URL.createObjectURL(f))
                   } catch (err) { setError((err as ApiError).message) }
                   finally { setRefUploading(false) }
