@@ -27,7 +27,12 @@ def encrypt(plaintext: str) -> bytes:
 def decrypt(token: bytes) -> str:
     if not token:
         return ""
-    return _fernet.decrypt(token).decode("utf-8")
+    try:
+        return _fernet.decrypt(token).decode("utf-8")
+    except Exception:
+        # 解密失败(换机器/重装/主密钥变更致旧密文无法解开): 返回空串而非抛错,
+        # 等价于该 Key 需重填, 避免 get_config 等接口整体 500, 前端卡加载.
+        return ""
 
 
 def mask(secret: str) -> str:
