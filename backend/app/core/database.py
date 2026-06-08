@@ -43,6 +43,7 @@ def _ensure_columns():
         ("tasks", "pause_mode", "VARCHAR(12) DEFAULT 'none'"),
         ("tasks", "pause_steps", "JSON"),
         ("tasks", "paused_at", "VARCHAR(2)"),
+        ("configs", "task_storage_dir", "VARCHAR(500)"),
         ("configs", "bgm_dir", "VARCHAR(500)"),
     ]
     insp = inspect(engine)
