@@ -62,10 +62,21 @@ function backendCommand() {
 
 function startBackend() {
   const { cmd, args, opts } = backendCommand()
+  // 后端日志同时转存到用户数据目录，桌面端关掉后仍可事后排查。
+  const logDir = path.join(userDataDir(), 'logs')
+  fs.mkdirSync(logDir, { recursive: true })
+  const logPath = path.join(logDir, 'desktop-backend.log')
+  let logStream = null
+  try { logStream = fs.createWriteStream(logPath, { flags: 'a' }) } catch { /* 忽略 */ }
+  const write = (tag, d) => {
+    const line = d.toString()
+    console.log(tag, line.trim())
+    if (logStream) { try { logStream.write(`[${new Date().toISOString()}] ${line}`) } catch { /* 忽略 */ } }
+  }
   backendProc = spawn(cmd, args, opts)
-  backendProc.stdout?.on('data', (d) => console.log('[backend]', d.toString().trim()))
-  backendProc.stderr?.on('data', (d) => console.log('[backend]', d.toString().trim()))
-  backendProc.on('exit', (code) => console.log('[backend] exited', code))
+  backendProc.stdout?.on('data', (d) => write('[backend]', d))
+  backendProc.stderr?.on('data', (d) => write('[backend]', d))
+  backendProc.on('exit', (code) => write('[backend]', `exited ${code}\n`))
 }
 
 // 轮询 /health，直到后端就绪（最多约 30s）。
@@ -119,6 +130,13 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
+  })
+  // 排查用快捷键：Ctrl+Shift+I 开/关开发者工具（窗口无菜单栏，否则没法手动打开）。
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+      mainWindow.webContents.toggleDevTools()
+      event.preventDefault()
+    }
   })
   if (isDev) {
     mainWindow.loadURL('http://127.0.0.1:5173')
