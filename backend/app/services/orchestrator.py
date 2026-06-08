@@ -248,9 +248,22 @@ def run_pipeline(db: Session, task_id: str):
                 prompts_list = [(p["prompt"], p["sub_type"], Path(p["out_path"]), p["duration"])
                                 for p in existing_p.output["prompts"]]
             else:
+                # 画面脚本（"SB"）：先把口播稿转成 N 条视觉化分镜描述，让配图有镜头变化、
+                # 避免每张图雷同。失败不阻断——build_image_prompts 会回退到 segment 截字。
+                scenes = None
+                try:
+                    sb_out = _llm_step(db, task, cfg, llm_key, "SB",
+                                       lambda: tm.run_storyboard(cfg.llm_provider, cfg.llm_model,
+                                                                 llm_key, script, n_scenes=max(1, n_images - 2),
+                                                                 rewrite_focus=tracks.get_track(task.track).get("rewrite_focus", "")),
+                                       started)
+                    scenes = sb_out.get("scenes") or None
+                except Exception as e:
+                    _save_result(db, task.id, "SB", "failed", output={"error": str(e)})
                 prompts_list = im.build_image_prompts(book_info, segments, out_dir,
                                                       image_count=n_images,
-                                                      track=task.track, image_style=task.image_style)
+                                                      track=task.track, image_style=task.image_style,
+                                                      scenes=scenes)
                 _save_result(db, task.id, "P", "success",
                              output={"prompts": [{"prompt": p, "sub_type": st,
                                                   "out_path": str(op), "duration": sd}

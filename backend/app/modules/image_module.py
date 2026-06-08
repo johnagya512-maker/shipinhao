@@ -112,6 +112,18 @@ def run_images(provider, api_key, book_info, segments, out_dir: Path,
                          aspect_ratio=aspect_ratio, reference_image=reference_image)
 
 
+_SHOT_VARIATIONS = [
+    "远景全身，人物置于环境中，交代场景氛围",
+    "中景半身，刻画人物动作与姿态",
+    "近景特写，聚焦人物神情，浅景深",
+    "过肩视角，从人物背后望向远方场景",
+    "侧面构图，强调轮廓与光影",
+    "低角度仰拍，突出人物气势",
+    "俯拍全身，展现环境与人物关系",
+    "人物与环境细节的过渡空镜，弱化正脸",
+]
+
+
 def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
                         track="character_story", image_style=None):
     """Step 3「提示词生成」：组装绘图任务列表（提示词+落盘路径），不调用绘图 API。
@@ -140,10 +152,23 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
         cta_subject = f"{subject}，引发互动的收尾画面，留白引人遐想"
 
     # 组装任务列表（保持顺序：封面 → 内容 → 结尾）
-    descs = assign_content_descriptions(segments, n_content)
+    # 优先用画面脚本（视觉化分镜）；没有则回退到 segment 截字 + 镜头轮换。
+    clean_scenes = [_sanitize_imagery(str(x)) for x in (scenes or []) if str(x).strip()]
+    if clean_scenes:
+        descs = [clean_scenes[min(i, len(clean_scenes) - 1)] for i in range(n_content)]
+        use_storyboard = True
+    else:
+        descs = assign_content_descriptions(segments, n_content)
+        use_storyboard = False
     tasks = [(_wrap(style, cover_subject), "cover", out_dir / "cover.png", 4)]
     for i, desc in enumerate(descs):
-        tasks.append((_wrap(style, f"{desc}的场景画面"), "content",
+        if use_storyboard:
+            # 画面脚本已含景别/角度/动作，直接用，仅补一句一致性约束。
+            content_subject = f"{desc}，同一主角保持外貌一致"
+        else:
+            shot = _SHOT_VARIATIONS[i % len(_SHOT_VARIATIONS)]
+            content_subject = f"{desc}，{shot}，同一主角保持外貌一致"
+        tasks.append((_wrap(style, content_subject), "content",
                       out_dir / f"content_{i}.png", 10))
     tasks.append((_wrap(style, cta_subject), "cta", out_dir / "cta.png", 6))
     return tasks

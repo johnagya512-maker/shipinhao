@@ -97,6 +97,21 @@ def run_split(provider, model, key, script_text, keyword=None, title=None, targe
     return {"segments": segments, "segment_count": len(segments)}, r
 
 
+def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus=""):
+    """Step「画面脚本」：把口播文案转成 n_scenes 条可绘制的画面描述（视觉化分镜）。
+    返回 {"scenes": [...]}, r。失败/数量不符时由调用方兜底。"""
+    n = max(1, int(n_scenes))
+    prompt = _render(prompts.MODULE_S, script=script_text, n_scenes=n,
+                     rewrite_focus=rewrite_focus or "")
+    r = call_llm(provider, model, key, prompt)
+    try:
+        data = _extract_json(r.text)
+        scenes = [str(x).strip() for x in data.get("scenes", []) if str(x).strip()]
+    except (json.JSONDecodeError, ValueError):
+        scenes = []
+    return {"scenes": scenes}, r
+
+
 def mechanical_split(script_text: str):
     """直接出片模式的机械切分：按换行/句末标点切句，不调 LLM、不计费。
     用于 processing_mode=direct——保留原文措辞，仅做口播分段。
