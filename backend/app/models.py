@@ -18,6 +18,10 @@ class Task(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(40), default="user_001")
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    # 抖音来源链接（全自动入口）。为空表示手填逐字稿模式。
+    douyin_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 采集到的来源元数据（播放量/点赞/博主等），JSON 存储。
+    source_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     transcript: Mapped[str] = mapped_column(Text)
     keyword: Mapped[str | None] = mapped_column(String(100), nullable=True)
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -27,7 +31,14 @@ class Task(Base):
     track: Mapped[str] = mapped_column(String(30), default="character_story")
     monetization_mode: Mapped[str] = mapped_column(String(20), default="revenue_share")
     image_style: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    cost_limit: Mapped[float] = mapped_column(Numeric(6, 2), default=1.0)
+    aspect_ratio: Mapped[str] = mapped_column(String(10), default="9:16")
+    rewrite_strength: Mapped[str] = mapped_column(String(10), default="medium")
+    narrative_perspective: Mapped[str] = mapped_column(String(10), default="auto")
+    voice_speed: Mapped[float] = mapped_column(Numeric(3, 2), default=1.0)
+    voice: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reference_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    bgm: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    cost_limit: Mapped[float] = mapped_column(Numeric(6, 2), default=5.0)
     time_limit: Mapped[int] = mapped_column(Integer, default=900)
     enable_subtitles: Mapped[bool] = mapped_column(Boolean, default=True)
     enable_animations: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -79,7 +90,29 @@ class Config(Base):
     llm_model: Mapped[str] = mapped_column(String(50), default="deepseek-chat")
     llm_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     image_provider: Mapped[str] = mapped_column(String(20), default="doubao")
+    image_model: Mapped[str] = mapped_column(String(80), default="doubao-seedream-4-5-251128")
     image_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # 抖音采集（TikHub 等）
+    collect_provider: Mapped[str] = mapped_column(String(20), default="tikhub")
+    collect_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # 语音转写 ASR（硅基流动 SenseVoice 等）
+    asr_provider: Mapped[str] = mapped_column(String(20), default="siliconflow")
+    asr_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # 配音 TTS（火山引擎 volcano / 硅基流动 siliconflow）
+    tts_provider: Mapped[str] = mapped_column(String(20), default="volcano")
+    tts_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    tts_voice: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # 火山 TTS 需要 appid（与 access_token 配对）
+    tts_appid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 剪映草稿输出目录（用户本地剪映的"草稿存放位置"）。设置后 G 模块
+    # 直接用 DraftFolder 写入此目录，剪映重启即可看到、可编辑。为空则退回
+    # storage 内的裸 json（仅供下载，无法直接被剪映识别）。
+    jianying_draft_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 任务存储目录（图片/音频/草稿等中间产物落盘位置）。为空则用默认（桌面端 AppData）。
+    # 用户可改到大盘，避免 C 盘占满。
+    task_storage_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 背景音乐目录：用户把 mp3 放进来，新建任务时可选作 BGM。为空则禁用 BGM。
+    bgm_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
     daily_cost_cap: Mapped[float] = mapped_column(Numeric(8, 2), default=100)
     concurrency: Mapped[int] = mapped_column(Integer, default=3)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

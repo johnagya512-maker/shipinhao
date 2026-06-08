@@ -12,6 +12,40 @@ body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
-  background: #f8fafc;
-  color: #0f172a;
+  background: #0b1220;
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+@layer components {
+  /* 统一的表单控件外观：深色底，聚焦时蓝色高亮描边。 */
+  .field {
+    @apply mt-1 w-full rounded-lg px-3 py-2 text-sm transition-shadow outline-none
+      bg-slate-800/60 border border-slate-700 text-slate-100 placeholder-slate-500
+      focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+  }
+  .field-label {
+    @apply text-sm font-medium text-slate-300;
+  }
+  /* 卡片：深色面板 + 细描边。 */
+  .card {
+    @apply bg-slate-900/70 rounded-2xl border border-slate-800 shadow-lg
+      shadow-black/20 p-6;
+  }
+  .card-title {
+    @apply text-base font-semibold text-slate-100 flex items-center gap-2;
+  }
+  /* 主按钮 / 次按钮。 */
+  .btn-primary {
+    @apply px-5 py-2.5 rounded-lg bg-brand-600 text-white text-sm font-medium
+      shadow-sm shadow-brand-600/30 transition-colors hover:bg-brand-500
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply px-5 py-2.5 rounded-lg border border-slate-700 text-slate-200
+      text-sm font-medium bg-slate-800/40 transition-colors hover:bg-slate-800
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+}
+

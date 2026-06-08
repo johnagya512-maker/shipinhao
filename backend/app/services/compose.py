@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Task, ModuleResult, Asset, Config
 from app.core.config import settings
+from app.core.paths import storage_root
 from app.modules import video_module as vm
 from app.modules import jianying
 import uuid
@@ -33,8 +34,9 @@ def _load_assets(db: Session, task_id: str):
 
 def compose_video(db: Session, task_id: str, audio_path: str,
                   enable_subtitles=True, enable_animations=True,
-                  output_mode="jianying") -> dict:
-    """产出成片。output_mode: jianying（草稿，默认）/ mp4（合成）。"""
+                  output_mode="jianying", bgm_path: str | None = None) -> dict:
+    """产出成片。output_mode: jianying（草稿，默认）/ mp4（合成）。
+    bgm_path 仅 mp4 合成时混音；剪映草稿模式由用户在剪映里加 BGM。"""
     task = db.get(Task, task_id)
     if not task:
         raise ValueError("任务不存在")
@@ -45,7 +47,7 @@ def compose_video(db: Session, task_id: str, audio_path: str,
         return _compose_jianying(db, task, task_id, image_paths, weights, segments,
                                  audio_path, enable_subtitles, enable_animations)
     return _compose_mp4(db, task, task_id, image_paths, weights, segments,
-                        audio_path, enable_subtitles, enable_animations)
+                        audio_path, enable_subtitles, enable_animations, bgm_path)
 
 
 def _finish(db, task, task_id, asset_type, file_path, mime, meta, output):
@@ -66,11 +68,18 @@ def _finish(db, task, task_id, asset_type, file_path, mime, meta, output):
 
 def _compose_jianying(db, task, task_id, image_paths, weights, segments,
                       audio_path, subs, anim) -> dict:
-    draft_dir = settings.storage_dir / task_id / "jianying"
+    draft_dir = storage_root(db) / task_id / "jianying"
+    cfg = db.get(Config, 1)
+    jianying_dir = (cfg.jianying_draft_dir or "").strip() if cfg else ""
+    # 草稿名可读化（抄竞品）：{标题}_{任务后缀}，剪映里一眼能找到。
+    title = (task.title or "").strip()
+    draft_name = f"{title}_{task_id[-6:]}" if title else task_id
+    draft_name = _safe_name(draft_name)
     try:
         r = jianying.build_draft(image_paths, weights, audio_path, segments, draft_dir,
-                                 draft_name=task_id, enable_subtitles=subs,
-                                 enable_animations=anim)
+                                 draft_name=draft_name, enable_subtitles=subs,
+                                 enable_animations=anim,
+                                 jianying_dir=jianying_dir or None)
     except Exception as e:
         task.status = "failed"
         task.error_code = "E5001"
@@ -79,17 +88,26 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
         raise
     return _finish(db, task, task_id, "jianying_draft", r["draft_path"],
                    "application/json",
-                   {"duration": r["duration"], "dropped_images": r["dropped_images"]},
+                   {"duration": r["duration"], "dropped_images": r["dropped_images"],
+                    "in_jianying": r.get("in_jianying", False)},
                    {"draft_path": r["draft_path"], "duration": r["duration"],
+                    "in_jianying": r.get("in_jianying", False),
                     "output_mode": "jianying"})
 
 
+def _safe_name(name: str) -> str:
+    """剪映草稿名去掉文件系统非法字符，限长。"""
+    import re
+    name = re.sub(r'[\\/:*?"<>|]', "", name).strip()
+    return name[:60] or "draft"
+
+
 def _compose_mp4(db, task, task_id, image_paths, weights, segments,
-                 audio_path, subs, anim) -> dict:
-    out_path = settings.storage_dir / task_id / "video" / "output.mp4"
+                 audio_path, subs, anim, bgm_path=None) -> dict:
+    out_path = storage_root(db) / task_id / "video" / "output.mp4"
     try:
         result = vm.compose(image_paths, weights, audio_path, segments, out_path,
-                            enable_subtitles=subs, enable_animations=anim)
+                            enable_subtitles=subs, enable_animations=anim, bgm_path=bgm_path)
     except Exception as e:
         task.status = "failed"
         task.error_code = "E5001"

@@ -13,6 +13,9 @@ app = FastAPI(title="视频号图书带货AI工作流系统", version="1.1")
 @app.on_event("startup")
 def _startup():
     init_db()
+    # 开发便利：把 .env 里的种子 Key 写进数据库（仅填空项），免去每次测试重输。
+    from app.core.security import seed_keys_from_env
+    seed_keys_from_env()
     if not settings.encryption_key:
         logger.warning("未设置 APP_ENCRYPTION_KEY，使用临时开发密钥，重启后已存密钥将无法解密。"
                        "生产环境请通过环境变量注入。")

@@ -9,7 +9,8 @@ export type TaskStatus =
   | 'cancelled'
 
 export interface TaskCreate {
-  transcript: string
+  douyin_url?: string | null
+  transcript?: string | null
   keyword?: string | null
   title?: string | null
   author?: string | null
@@ -18,6 +19,13 @@ export interface TaskCreate {
   track?: string
   monetization_mode?: string
   image_style?: string | null
+  aspect_ratio?: string
+  rewrite_strength?: string
+  narrative_perspective?: string
+  voice_speed?: number
+  voice?: string
+  reference_image?: string
+  bgm?: string
   cost_limit?: number
   time_limit?: number
   enable_subtitles?: boolean
@@ -98,8 +106,19 @@ export interface ConfigOut {
   llm_api_key_mask: string
   image_provider: string
   image_api_key_mask: string
+  collect_provider: string
+  collect_api_key_mask: string
+  asr_provider: string
+  asr_api_key_mask: string
+  tts_provider: string
+  tts_api_key_mask: string
+  tts_voice: string
+  tts_appid: string
   daily_cost_cap: number
   concurrency: number
+  jianying_draft_dir: string
+  task_storage_dir: string
+  bgm_dir: string
 }
 
 export interface ConfigUpdate {
@@ -108,6 +127,17 @@ export interface ConfigUpdate {
   llm_api_key?: string
   image_provider?: string
   image_api_key?: string
+  collect_provider?: string
+  collect_api_key?: string
+  asr_provider?: string
+  asr_api_key?: string
+  tts_provider?: string
+  tts_api_key?: string
+  tts_voice?: string
+  tts_appid?: string
   daily_cost_cap?: number
   concurrency?: number
+  jianying_draft_dir?: string
+  task_storage_dir?: string
+  bgm_dir?: string
 }

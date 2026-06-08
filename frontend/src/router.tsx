@@ -1,12 +1,12 @@
 // 路由表。
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createHashRouter, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import TaskListPage from './pages/TaskListPage'
 import TaskCreatePage from './pages/TaskCreatePage'
 import TaskDetailPage from './pages/TaskDetailPage'
 import ConfigPage from './pages/ConfigPage'
 
-export const router = createBrowserRouter([
+export const router = createHashRouter([
   {
     path: '/',
     element: <Layout />,

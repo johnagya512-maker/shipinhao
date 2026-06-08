@@ -5,6 +5,9 @@ import type { ConfigOut, ConfigUpdate } from '../api/types'
 
 const LLM_PROVIDERS = ['deepseek', 'openai', 'qwen', 'doubao']
 const IMAGE_PROVIDERS = ['doubao', 'openai']
+const COLLECT_PROVIDERS = ['tikhub']
+const ASR_PROVIDERS = ['siliconflow']
+const TTS_PROVIDERS = ['volcano', 'siliconflow']
 
 export default function ConfigPage() {
   const [cfg, setCfg] = useState<ConfigOut | null>(null)
@@ -12,6 +15,8 @@ export default function ConfigPage() {
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [testingTts, setTestingTts] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e: ApiError) =>
@@ -26,7 +31,10 @@ export default function ConfigPage() {
     try {
       const updated = await api.updateConfig(form)
       setCfg(updated)
-      setForm((f) => ({ ...f, llm_api_key: '', image_api_key: '' }))
+      setForm((f) => ({
+        ...f, llm_api_key: '', image_api_key: '',
+        collect_api_key: '', asr_api_key: '', tts_api_key: '',
+      }))
       setMsg({ type: 'ok', text: '已保存' })
     } catch (e) {
       setMsg({ type: 'err', text: (e as ApiError).message })
@@ -48,24 +56,55 @@ export default function ConfigPage() {
     }
   }
 
+  async function testTts() {
+    setTestingTts(true)
+    setMsg(null)
+    try {
+      const r = await api.testTts()
+      setMsg({ type: 'ok', text: `TTS 连通正常（${r.provider}），合成 ${r.audio_bytes} 字节音频` })
+    } catch (e) {
+      setMsg({ type: 'err', text: (e as ApiError).message })
+    } finally {
+      setTestingTts(false)
+    }
+  }
+
+  async function previewTts() {
+    setPreviewing(true)
+    setMsg(null)
+    try {
+      // 用表单里未保存的音色优先试听；语速固定 1.0（语速在新建任务页按任务设）。
+      const blob = await api.previewTts({ voice: form.tts_voice ?? cfg?.tts_voice ?? undefined })
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audio.onended = () => URL.revokeObjectURL(url)
+      await audio.play()
+      setMsg({ type: 'ok', text: '正在播放试听…' })
+    } catch (e) {
+      setMsg({ type: 'err', text: (e as ApiError).message })
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   if (!cfg) return <div className="text-slate-500">加载中…</div>
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="text-xl font-semibold mb-4">系统配置</h1>
+    <div className="max-w-2xl mx-auto space-y-4">
+      <h1 className="text-2xl font-bold text-slate-100">系统配置</h1>
 
       {msg && (
-        <div className={`mb-4 px-4 py-2 rounded-lg text-sm ${
-          msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+        <div className={`px-4 py-2.5 rounded-lg text-sm border ${
+          msg.type === 'ok' ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'
         }`}>{msg.text}</div>
       )}
 
-      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-        <div className="font-medium text-slate-800">文案模型（LLM）</div>
+      <div className="card space-y-4">
+        <div className="font-semibold text-slate-100">文案模型（LLM）</div>
         <div className="grid grid-cols-2 gap-4">
           <label className="block">
-            <span className="text-sm text-slate-600">供应商</span>
-            <select className="mt-1 w-full border rounded-lg px-3 py-2"
+            <span className="text-sm text-slate-400">供应商</span>
+            <select className="field"
               defaultValue={cfg.llm_provider}
               onChange={(e) => set({ llm_provider: e.target.value })}>
               {LLM_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -73,14 +112,14 @@ export default function ConfigPage() {
           </label>
           <label className="block">
             <span className="text-sm text-slate-600">模型</span>
-            <input className="mt-1 w-full border rounded-lg px-3 py-2"
+            <input className="field"
               defaultValue={cfg.llm_model}
               onChange={(e) => set({ llm_model: e.target.value })} />
           </label>
         </div>
         <label className="block">
-          <span className="text-sm text-slate-600">API Key</span>
-          <input type="password" className="mt-1 w-full border rounded-lg px-3 py-2"
+          <span className="text-sm text-slate-400">API Key</span>
+          <input type="password" className="field"
             placeholder={cfg.llm_api_key_mask || '未配置'}
             value={form.llm_api_key ?? ''}
             onChange={(e) => set({ llm_api_key: e.target.value })} />
@@ -90,26 +129,105 @@ export default function ConfigPage() {
         </label>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4 mt-4">
-        <div className="font-medium text-slate-800">配图模型（图像）</div>
+      <div className="card space-y-4">
+        <div className="font-semibold text-slate-100">配图模型（图像）</div>
         <label className="block">
-          <span className="text-sm text-slate-600">供应商</span>
-          <select className="mt-1 w-full border rounded-lg px-3 py-2"
+          <span className="text-sm text-slate-400">供应商</span>
+          <select className="field"
             defaultValue={cfg.image_provider}
             onChange={(e) => set({ image_provider: e.target.value })}>
             {IMAGE_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className="text-sm text-slate-600">API Key</span>
-          <input type="password" className="mt-1 w-full border rounded-lg px-3 py-2"
+          <span className="text-sm text-slate-400">API Key</span>
+          <input type="password" className="field"
             placeholder={cfg.image_api_key_mask || '未配置'}
             value={form.image_api_key ?? ''}
             onChange={(e) => set({ image_api_key: e.target.value })} />
         </label>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-5 grid grid-cols-2 gap-4 mt-4">
+      <div className="card space-y-4">
+        <div className="font-semibold text-slate-100">抖音采集（贴链接自动取素材，可选）</div>
+        <label className="block">
+          <span className="text-sm text-slate-400">供应商</span>
+          <select className="field"
+            defaultValue={cfg.collect_provider}
+            onChange={(e) => set({ collect_provider: e.target.value })}>
+            {COLLECT_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-sm text-slate-400">API Key</span>
+          <input type="password" className="field"
+            placeholder={cfg.collect_api_key_mask || '未配置'}
+            value={form.collect_api_key ?? ''}
+            onChange={(e) => set({ collect_api_key: e.target.value })} />
+        </label>
+      </div>
+
+      <div className="card space-y-4">
+        <div className="font-semibold text-slate-100">语音转写 ASR（视频自动转逐字稿，可选）</div>
+        <label className="block">
+          <span className="text-sm text-slate-400">供应商</span>
+          <select className="field"
+            defaultValue={cfg.asr_provider}
+            onChange={(e) => set({ asr_provider: e.target.value })}>
+            {ASR_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-sm text-slate-400">API Key</span>
+          <input type="password" className="field"
+            placeholder={cfg.asr_api_key_mask || '未配置'}
+            value={form.asr_api_key ?? ''}
+            onChange={(e) => set({ asr_api_key: e.target.value })} />
+        </label>
+      </div>
+
+      <div className="card space-y-4">
+        <div className="font-semibold text-slate-100">配音 TTS（自动配音成片，可选）</div>
+        <div className="grid grid-cols-2 gap-4">
+          <label className="block">
+            <span className="text-sm text-slate-400">供应商</span>
+            <select className="field"
+              defaultValue={cfg.tts_provider}
+              onChange={(e) => set({ tts_provider: e.target.value })}>
+              {TTS_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-sm text-slate-400">音色 voice</span>
+            <div className="flex gap-2">
+              <input className="field flex-1"
+                placeholder="留空用默认音色"
+                defaultValue={cfg.tts_voice}
+                onChange={(e) => set({ tts_voice: e.target.value })} />
+              <button type="button" onClick={previewTts} disabled={previewing}
+                className="mt-1 px-3 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800 disabled:opacity-50">
+                {previewing ? '试听中…' : '▶ 试听'}
+              </button>
+            </div>
+          </label>
+        </div>
+        <label className="block">
+          <span className="text-sm text-slate-600">API Key（火山填 access_token）</span>
+          <input type="password" className="field"
+            placeholder={cfg.tts_api_key_mask || '未配置'}
+            value={form.tts_api_key ?? ''}
+            onChange={(e) => set({ tts_api_key: e.target.value })} />
+        </label>
+        <label className="block">
+          <span className="text-sm text-slate-600">App ID（仅火山 volcano 需要）</span>
+          <input className="mt-1 w-full border rounded-lg px-3 py-2"
+            placeholder={cfg.tts_appid || '火山控制台的 appid'}
+            defaultValue={cfg.tts_appid}
+            onChange={(e) => set({ tts_appid: e.target.value })} />
+        </label>
+      </div>
+
+      <div className="card grid grid-cols-2 gap-4 mt-4">
         <label className="block">
           <span className="text-sm text-slate-600">每日成本上限（元）</span>
           <input type="number" min={0} step={1} className="mt-1 w-full border rounded-lg px-3 py-2"
@@ -124,6 +242,81 @@ export default function ConfigPage() {
         </label>
       </div>
 
+      <div className="card space-y-2 mt-4">
+        <div className="font-semibold text-slate-100">剪映草稿目录（成片自动写入，可直接打开编辑）</div>
+        <label className="block">
+          <div className="flex gap-2">
+            <input className="field flex-1"
+              placeholder={cfg.jianying_draft_dir || 'D:\\下载\\JianyingPro Drafts'}
+              value={form.jianying_draft_dir ?? cfg.jianying_draft_dir}
+              onChange={(e) => set({ jianying_draft_dir: e.target.value })} />
+            {window.desktop && (
+              <button type="button"
+                className="mt-1 px-4 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800"
+                onClick={async () => {
+                  const dir = await window.desktop!.pickFolder()
+                  if (dir) set({ jianying_draft_dir: dir })
+                }}>
+                浏览…
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-slate-500">
+            填本地剪映「草稿存放位置」（剪映专业版 → 设置可查）。填了成片直接写入，剪映重启即可见、可编辑；留空则仅生成草稿文件供下载。
+          </span>
+        </label>
+      </div>
+
+      <div className="card space-y-2 mt-4">
+        <div className="font-semibold text-slate-100">任务存储目录（图片/音频等中间产物落盘位置）</div>
+        <label className="block">
+          <div className="flex gap-2">
+            <input className="field flex-1"
+              placeholder={cfg.task_storage_dir || '留空用默认（应用数据目录）'}
+              value={form.task_storage_dir ?? cfg.task_storage_dir}
+              onChange={(e) => set({ task_storage_dir: e.target.value })} />
+            {window.desktop && (
+              <button type="button"
+                className="mt-1 px-4 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800"
+                onClick={async () => {
+                  const dir = await window.desktop!.pickFolder()
+                  if (dir) set({ task_storage_dir: dir })
+                }}>
+                浏览…
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-slate-500">
+            任务产物较占空间（每个任务几十 MB）。默认存在应用数据目录；C 盘紧张可改到大盘。改动只影响之后的新任务。
+          </span>
+        </label>
+      </div>
+
+      <div className="card space-y-2 mt-4">
+        <div className="font-semibold text-slate-100">背景音乐目录（可选，mp4 合成时混入 BGM）</div>
+        <label className="block">
+          <div className="flex gap-2">
+            <input className="field flex-1"
+              placeholder={cfg.bgm_dir || '留空则不启用 BGM'}
+              value={form.bgm_dir ?? cfg.bgm_dir}
+              onChange={(e) => set({ bgm_dir: e.target.value })} />
+            {window.desktop && (
+              <button type="button"
+                className="mt-1 px-4 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800"
+                onClick={async () => {
+                  const dir = await window.desktop!.pickFolder()
+                  if (dir) set({ bgm_dir: dir })
+                }}>
+                浏览…
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-slate-500">
+            把 mp3/wav 音乐文件放进这个目录，新建任务时就能在「高级选项」里选作背景音乐（自动降到 15% 音量衬底，仅 mp4 输出生效）。
+          </span>
+        </label>
+      </div>
+
       <div className="flex gap-3 mt-5">
         <button onClick={save} disabled={saving}
           className="px-5 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium disabled:opacity-50">
@@ -132,6 +325,10 @@ export default function ConfigPage() {
         <button onClick={test} disabled={testing}
           className="px-5 py-2 rounded-lg border border-slate-300 text-sm font-medium disabled:opacity-50">
           {testing ? '测试中…' : '测试 LLM 连通'}
+        </button>
+        <button onClick={testTts} disabled={testingTts}
+          className="px-5 py-2 rounded-lg border border-slate-300 text-sm font-medium disabled:opacity-50">
+          {testingTts ? '测试中…' : '测试 TTS 连通'}
         </button>
       </div>
     </div>

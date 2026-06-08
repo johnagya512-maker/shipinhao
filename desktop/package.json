@@ -1,0 +1,40 @@
+{
+  "name": "shipinhao-desktop",
+  "version": "1.0.0",
+  "description": "视频号图书带货 AI 工作流 - 桌面客户端",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.shipinhao.aiworkflow",
+    "productName": "视频号图书带货AI",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "frontend/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/shipinhao-backend",
+        "to": "backend"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

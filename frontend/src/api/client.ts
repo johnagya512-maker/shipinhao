@@ -4,7 +4,24 @@ import type {
   TaskListOut, TaskResultsOut,
 } from './types'
 
-const BASE = '/api/v1'
+// API 根地址：
+// - 浏览器开发：用相对路径 '/api/v1'，由 Vite 代理转发到后端。
+// - Electron 桌面端：主进程通过 preload 注入 window.__API_ORIGIN__
+//   （形如 http://127.0.0.1:8000），此处拼成绝对地址，因为 file:// 下相对路径无效。
+declare global {
+  interface Window {
+    __API_ORIGIN__?: string
+    // Electron 桌面端注入：调系统原生选文件夹对话框 + 无边框窗口控制。浏览器端为 undefined。
+    desktop?: {
+      pickFolder: () => Promise<string | null>
+      minimize: () => void
+      maximize: () => void
+      close: () => void
+    }
+  }
+}
+const ORIGIN = (typeof window !== 'undefined' && window.__API_ORIGIN__) || ''
+const BASE = `${ORIGIN}/api/v1`
 
 // 本机模式后端豁免鉴权；若设置了 access_token，从 localStorage 读取注入。
 function authHeaders(): Record<string, string> {
@@ -56,6 +73,39 @@ export const api = {
   updateConfig: (body: ConfigUpdate) =>
     request<ConfigOut>('/config', { method: 'PUT', body: JSON.stringify(body) }),
   testApi: () => request<{ ok: boolean; reply: string }>('/config/test-api', { method: 'POST' }),
+  bgmList: () => request<{ dir: string; files: string[] }>('/config/bgm-list'),
+  // 上传主角参考图，返回暂存路径，创建任务时填入 reference_image。
+  uploadReference: async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${BASE}/tasks/upload-reference`, {
+      method: 'POST', headers: { ...authHeaders() }, body: fd,
+    })
+    if (!res.ok) {
+      let detail: unknown = res.statusText
+      try { detail = (await res.json()).detail } catch { /* 非 JSON */ }
+      const { message, code } = parseDetail(detail)
+      throw new ApiError(message, res.status, code)
+    }
+    return res.json() as Promise<{ reference_image: string }>
+  },
+  testTts: () =>
+    request<{ ok: boolean; provider: string; audio_bytes: number }>('/config/test-tts', { method: 'POST' }),
+  // 试听：返回 mp3 Blob，前端用 Audio 播放。可传音色/语速覆盖配置。
+  previewTts: async (body: { voice?: string; speed?: number } = {}) => {
+    const res = await fetch(`${BASE}/config/preview-tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      let detail: unknown = res.statusText
+      try { detail = (await res.json()).detail } catch { /* 非 JSON */ }
+      const { message, code } = parseDetail(detail)
+      throw new ApiError(message, res.status, code)
+    }
+    return res.blob()
+  },
 
   // ── 任务 ──
   listTasks: (params: { status?: string; page?: number; page_size?: number } = {}) => {

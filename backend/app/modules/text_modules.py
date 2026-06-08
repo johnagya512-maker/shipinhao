@@ -30,20 +30,49 @@ def run_clean(provider, model, key, transcript, keyword=None, title=None, author
 
 
 def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性", title=None,
-                track="character_story", monetization_mode="revenue_share"):
-    """B 改写。按赛道选提示词；人物故事赛道按变现模式切换结尾引导。"""
+                track="character_story", monetization_mode="revenue_share",
+                rewrite_strength="medium", narrative_perspective="auto"):
+    """B 改写。按赛道选提示词；人物故事赛道按变现模式切换结尾引导。
+    rewrite_strength/narrative_perspective 作为附加指令注入提示词尾部。"""
     from app.modules import tracks
+    extra = _rewrite_directives(rewrite_strength, narrative_perspective)
+    tk = tracks.get_track(track)
     if track == "character_story":
         ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
                   else prompts.ENDING_REVENUE_SHARE)
         prompt = _render(prompts.MODULE_B_CHARACTER, cleaned_text=cleaned_text, title=title,
-                         rewrite_focus=tracks.get_track(track)["rewrite_focus"],
+                         rewrite_focus=tk["rewrite_focus"],
                          ending_instruction=ending)
-    else:
+    elif track == "health_book":
         prompt = _render(prompts.MODULE_B, cleaned_text=cleaned_text,
                          target_audience=target_audience, title=title)
+    else:
+        # 其它赛道走通用提示词，注入该赛道的改写风格，不再套健康书单逻辑。
+        prompt = _render(prompts.MODULE_B_GENERAL, cleaned_text=cleaned_text,
+                         target_audience=target_audience, title=title,
+                         rewrite_focus=tk["rewrite_focus"])
+    if extra:
+        prompt = f"{prompt}\n\n【额外要求】\n{extra}"
     r = call_llm(provider, model, key, prompt)
     return {"script": r.text.strip()}, r
+
+
+# 改写强度 / 叙事视角 → 注入提示词的附加指令。
+_STRENGTH_TEXT = {
+    "light": "改写力度轻：尽量保留原文措辞与结构，仅做必要的口播顺滑化。",
+    "medium": "",  # 默认，无附加约束
+    "strong": "改写力度强：大胆重组叙事、强化戏剧冲突与钩子，可显著改写措辞。",
+}
+_PERSPECTIVE_TEXT = {
+    "auto": "",
+    "first": "用第一人称（“我”）视角叙述，增强代入感。",
+    "third": "用第三人称（“他/她”）视角客观叙述。",
+}
+
+
+def _rewrite_directives(strength: str, perspective: str) -> str:
+    lines = [t for t in (_STRENGTH_TEXT.get(strength, ""), _PERSPECTIVE_TEXT.get(perspective, "")) if t]
+    return "\n".join(lines)
 
 
 def run_identify(provider, model, key, script_text, min_confidence=0.5):

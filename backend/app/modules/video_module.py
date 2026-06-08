@@ -144,10 +144,11 @@ def _render_subtitle_png(text: str, out_path: Path, font_size: int = 52) -> bool
 
 def compose(image_paths: list[str], image_weights: list[float], audio_path: str,
             segments: list[dict], out_path: Path, enable_subtitles=True,
-            enable_animations=True) -> dict:
-    """合成视频。返回 {video_path, duration, dropped_images}。"""
+            enable_animations=True, bgm_path: str | None = None) -> dict:
+    """合成视频。返回 {video_path, duration, dropped_images}。
+    bgm_path 非空且存在时，作为背景音乐低音量循环混入（人声为主，BGM 衬底）。"""
     from moviepy.editor import (ImageClip, AudioFileClip, concatenate_videoclips,
-                                CompositeVideoClip)
+                                CompositeVideoClip, CompositeAudioClip, afx)
 
     audio_total = get_audio_duration(audio_path)
     durs = reconcile_durations(image_weights, audio_total)
@@ -164,7 +165,15 @@ def compose(image_paths: list[str], image_weights: list[float], audio_path: str,
 
     video = concatenate_videoclips(clips, method="compose")
     audio = AudioFileClip(audio_path)
-    video = video.set_audio(audio).set_duration(audio_total)
+    bgm = None
+    if bgm_path and Path(bgm_path).exists():
+        # BGM 衬底：降到 15% 音量，循环/截断到与人声等长，与人声混音。
+        bgm = AudioFileClip(bgm_path).fx(afx.volumex, 0.15)
+        bgm = afx.audio_loop(bgm, duration=audio_total)
+        final_audio = CompositeAudioClip([audio, bgm])
+    else:
+        final_audio = audio
+    video = video.set_audio(final_audio).set_duration(audio_total)
 
     if enable_subtitles and segments:
         subs = align_subtitles(segments, audio_total)

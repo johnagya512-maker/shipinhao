@@ -24,15 +24,25 @@ OUTPUT_RATIO = {"A": 0.9, "B": 0.8, "C": 1.0, "F": 1.0}
 FIXED_OUTPUT = {"D": 200, "H": 150}
 
 CHARS_TO_TOKENS = 1.5  # 中文约 1.5 token/字
+CHARS_PER_SECOND = 5   # 中文口播约 5 字/秒（与 F 分段时长估算一致）
 
 
 def estimate_tokens(char_count: int) -> int:
     return int(char_count * CHARS_TO_TOKENS)
 
 
-def estimate_cost(transcript: str, modules: list[str], image_count: int,
+def estimate_image_count(transcript: str) -> int:
+    """按逐字稿长度预估配图张数（与运行时 image_module.count_for_duration 同口径）。
+    口播时长 ≈ 字数/5 秒，约 6 秒/张。"""
+    from app.modules.image_module import count_for_duration
+    return count_for_duration(len(transcript) / CHARS_PER_SECOND)
+
+
+def estimate_cost(transcript: str, modules: list[str], image_count: int | None,
                   llm_provider: str, image_provider: str) -> float:
-    """提交前预估成本（上限估计）。"""
+    """提交前预估成本（上限估计）。image_count 为 None 时按逐字稿长度动态推算。"""
+    if image_count is None:
+        image_count = estimate_image_count(transcript)
     in_tokens = estimate_tokens(len(transcript))
     unit = LLM_PRICE.get(llm_provider, 0.001)
     llm_cost = 0.0

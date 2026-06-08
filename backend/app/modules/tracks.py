@@ -29,6 +29,41 @@ IMAGE_STYLES = {
         "suffix": "，柔和暖色调，温暖亲切，简洁清晰，竖版1080x1920",
         "negative": "暗黑，恐怖，文字，水印，低质量",
     },
+    "写实彩色": {
+        "prefix": "写实摄影风格，",
+        "suffix": "，自然光影，真实质感，高清细节，电影感构图",
+        "negative": "插画感，卡通，文字，水印，低质量，变形",
+    },
+    "黑白纪实": {
+        "prefix": "黑白纪实摄影，",
+        "suffix": "，强烈明暗对比，颗粒质感，历史厚重感",
+        "negative": "彩色，现代数码感，文字，水印，过曝",
+    },
+    "皮克斯3D": {
+        "prefix": "皮克斯风格3D渲染，",
+        "suffix": "，柔和体积光，圆润造型，温暖色彩，电影级渲染",
+        "negative": "写实照片，恐怖，文字，水印，低质量",
+    },
+    "吉卜力动画": {
+        "prefix": "吉卜力动画风格，",
+        "suffix": "，手绘水彩质感，清新自然，治愈氛围，细腻背景",
+        "negative": "写实照片，3D渲染，文字，水印，低质量",
+    },
+    "极简插画": {
+        "prefix": "极简扁平插画，",
+        "suffix": "，简洁构图，柔和配色，现代设计感，留白",
+        "negative": "写实照片，复杂细节，文字，水印，杂乱",
+    },
+    "温馨绘本": {
+        "prefix": "儿童绘本插画风格，",
+        "suffix": "，柔和蜡笔质感，童趣可爱，明亮温暖，圆润线条",
+        "negative": "写实，恐怖，暗黑，文字，水印，低质量",
+    },
+    "明亮商业": {
+        "prefix": "明亮商业摄影，",
+        "suffix": "，干净背景，产品质感突出，专业打光，清晰锐利",
+        "negative": "杂乱背景，昏暗，文字，水印，低质量，变形",
+    },
 }
 
 
@@ -53,6 +88,62 @@ TRACKS = {
         "compliance_high": [],   # 空表示用 text_modules 默认医疗词库
         "compliance_warn": [],
         "image_subject": "健康生活",
+    },
+    "culture_science": {
+        "name": "文化科普",
+        "default_style": "工笔古画",
+        "rewrite_focus": "华夏文化/传统民俗通俗化讲解，知识点清晰，引发文化认同与好奇",
+        "compliance_high": ["反动", "邪教", "封建迷信宣扬"],
+        "compliance_warn": ["杜撰史实", "以偏概全"],
+        "image_subject": "传统文化场景",
+    },
+    "kids_picturebook": {
+        "name": "绘本故事",
+        "default_style": "温馨绘本",
+        "rewrite_focus": "儿童睡前故事，语言简单温柔，节奏舒缓，传递正向价值观",
+        "compliance_high": ["血腥", "暴力", "恐怖", "惊悚"],
+        "compliance_warn": ["负面情绪", "成人话题"],
+        "image_subject": "童话角色",
+    },
+    "ecommerce": {
+        "name": "电商带货",
+        "default_style": "明亮商业",
+        "rewrite_focus": "产品种草/好物推荐，痛点切入，卖点清晰，强行动号召",
+        "compliance_high": ["最", "国家级", "绝对", "100%", "根治"],
+        "compliance_warn": ["夸大功效", "虚假承诺", "诱导消费"],
+        "image_subject": "产品实拍",
+    },
+    "soul_chicken": {
+        "name": "心灵鸡汤",
+        "default_style": "极简插画",
+        "rewrite_focus": "情感治愈/励志感悟，金句共鸣，节奏舒缓，引发评论与转发",
+        "compliance_high": ["反动", "邪教"],
+        "compliance_warn": ["贩卖焦虑", "极端价值观"],
+        "image_subject": "意境画面",
+    },
+    "folk_tale": {
+        "name": "民间故事",
+        "default_style": "古风电影",
+        "rewrite_focus": "虚构传说/因果寓言，悬念叙事，因果分明，结尾引发讨论",
+        "compliance_high": ["血腥", "暴力血腥", "反动", "邪教", "封建迷信宣扬"],
+        "compliance_warn": ["宣扬迷信", "因果报应过度"],
+        "image_subject": "传说场景",
+    },
+    "food_探店": {
+        "name": "美食探店",
+        "default_style": "写实彩色",
+        "rewrite_focus": "城市烟火气，美食诱惑力描述，探店体验感，引发到店欲望",
+        "compliance_high": ["最好吃", "第一", "绝对"],
+        "compliance_warn": ["夸大", "虚假评价"],
+        "image_subject": "美食特写",
+    },
+    "general": {
+        "name": "通用故事",
+        "default_style": "写实彩色",
+        "rewrite_focus": "通用短视频口播改写，开头钩子，叙事流畅，结尾引导互动",
+        "compliance_high": ["血腥", "暴力血腥", "反动", "邪教"],
+        "compliance_warn": [],
+        "image_subject": "场景画面",
     },
 }
 

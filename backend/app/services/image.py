@@ -24,31 +24,94 @@ class ImageError(Exception):
         self.retryable = retryable
 
 
-# 竖版 9:16
+# 竖版 9:16（默认）
 WIDTH, HEIGHT = 1080, 1920
 
+# 出图比例 → 归一化目标尺寸（长边约 1920，保证清晰度）。
+ASPECT_DIMS = {
+    "9:16": (1080, 1920),
+    "3:4": (1440, 1920),
+    "1:1": (1440, 1440),
+    "16:9": (1920, 1080),
+}
+# 出图比例 → 供应商请求尺寸（面积需大于供应商最小像素要求，留余量；下游再归一化裁切）。
+ASPECT_GEN_SIZE = {
+    "9:16": "1536x2730",
+    "3:4": "1664x2218",
+    "1:1": "2048x2048",
+    "16:9": "2730x1536",
+}
 
-def _placeholder(out_path: Path, label: str, color: tuple):
+
+def _dims_for(aspect_ratio: str | None) -> tuple[int, int]:
+    return ASPECT_DIMS.get(aspect_ratio or "9:16", (WIDTH, HEIGHT))
+
+
+def _placeholder(out_path: Path, label: str, color: tuple, size: tuple[int, int] = (WIDTH, HEIGHT)):
     """生成纯色占位图（mock 模式 / 无 Key 时）。"""
-    img = Image.new("RGB", (WIDTH, HEIGHT), color)
+    img = Image.new("RGB", size, color)
     img.save(out_path, "PNG")
+
+
+_FALLBACK_COLORS = {"cover": (255, 228, 196), "content": (220, 237, 220),
+                    "cta": (255, 218, 224)}
+
+
+def placeholder_result(out_path: Path, sub_type: str, suggested_duration: int,
+                       reason: str = "fallback") -> "ImageResult":
+    """降级占位图：真实配图反复被拒时兜底，保证链路不中断。"""
+    _placeholder(out_path, sub_type, _FALLBACK_COLORS.get(sub_type, (230, 230, 230)))
+    return ImageResult(str(out_path), sub_type, suggested_duration,
+                       {"fallback": True, "reason": reason})
+
+
+def _encode_reference(path: str) -> str | None:
+    """把参考图读成豆包要求的 data URI（data:image/...;base64,xxx）。
+    文件不存在/读取失败返回 None，调用方据此退回纯文生图。"""
+    import base64
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return None
+        ext = p.suffix.lower().lstrip(".") or "png"
+        mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "png")
+        b64 = base64.b64encode(p.read_bytes()).decode()
+        return f"data:image/{mime};base64,{b64}"
+    except Exception:
+        return None
 
 
 def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    out_path: Path, suggested_duration: int,
-                   timeout: float = 60.0) -> ImageResult:
-    """生成单张配图。无 Key 或 provider=mock 时走占位图。"""
+                   model: str | None = None, timeout: float = 60.0,
+                   aspect_ratio: str = "9:16", reference_image: str | None = None) -> ImageResult:
+    """生成单张配图。无 Key 或 provider=mock 时走占位图。
+    reference_image 非空时作为角色一致性参考传给绘图模型（豆包 image 字段，base64）。"""
+    w, h = _dims_for(aspect_ratio)
     use_mock = (not api_key) or provider == "mock"
     if use_mock:
         colors = {"cover": (255, 228, 196), "content": (220, 237, 220), "cta": (255, 218, 224)}
-        _placeholder(out_path, sub_type, colors.get(sub_type, (230, 230, 230)))
+        _placeholder(out_path, sub_type, colors.get(sub_type, (230, 230, 230)), size=(w, h))
         return ImageResult(str(out_path), sub_type, suggested_duration, {"mock": True})
 
     # 真实供应商：此处仅给出统一调用骨架，具体协议按 provider 补全。
     try:
         url = _endpoint(provider)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        payload = {"prompt": prompt, "size": f"{WIDTH}x{HEIGHT}", "n": 1}
+        # 豆包（火山方舟）Seedream 文生图：必须带 model（模型 ID / 接入点 ID）。
+        # size 用明确像素，竖版 9:16 且需大于最小像素要求（边界值 3686400 实测不通过，留余量）；
+        # 下游 _normalize 再裁到 1080x1920。
+        payload = {"prompt": prompt, "size": ASPECT_GEN_SIZE.get(aspect_ratio or "9:16", "1536x2730"),
+                   "sequential_image_generation": "disabled",
+                   "response_format": "url", "stream": False, "watermark": False}
+        if model:
+            payload["model"] = model
+        # 主角参考图：豆包 Seedream 支持传 image 做角色一致性参考（图生图/图引导）。
+        # best-effort：编码失败或模型不支持则忽略此字段，退回纯文生图，不毁链路。
+        if reference_image:
+            ref_b64 = _encode_reference(reference_image)
+            if ref_b64:
+                payload["image"] = ref_b64
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
     except httpx.TimeoutException as e:
         raise ImageError(f"配图超时: {e}", retryable=True)
@@ -60,15 +123,21 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
     if resp.status_code == 429:
         raise ImageError("绘图限流", retryable=True)
     if resp.status_code >= 500:
-        raise ImageError(f"绘图服务端错误 {resp.status_code}", retryable=True)
+        raise ImageError(f"绘图服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
     if resp.status_code >= 400:
-        raise ImageError(f"配图被拒 {resp.status_code}", retryable=False)
+        body = resp.text[:300]
+        # 输出内容审核误判（如豆包 OutputImageSensitiveContentDetected）有随机性，
+        # 标记可重试，让上层 re-roll；耗尽后由编排降级为占位图，不毁整条链路。
+        if "SensitiveContent" in body or "sensitive" in body.lower():
+            raise ImageError(f"配图被内容审核拒绝(可重试): {body}", retryable=True)
+        # 其他 4xx（model 不对 / 参数不符等）透出真实报错，不可重试。
+        raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
 
     img_url = resp.json()["data"][0]["url"]
     img_bytes = httpx.get(img_url, timeout=timeout).content
     out_path.write_bytes(img_bytes)
-    # 统一缩放到竖版
-    _normalize(out_path)
+    # 统一缩放到目标比例尺寸
+    _normalize(out_path, size=(w, h))
     return ImageResult(str(out_path), sub_type, suggested_duration, {})
 
 
@@ -83,19 +152,20 @@ def _endpoint(provider: str) -> str:
     return eps[provider]
 
 
-def _normalize(path: Path):
-    """缩放并居中裁剪到 1080x1920。"""
+def _normalize(path: Path, size: tuple[int, int] = (WIDTH, HEIGHT)):
+    """缩放并居中裁剪到目标尺寸。"""
+    target_w, target_h = size
     img = Image.open(path).convert("RGB")
     src_ratio = img.width / img.height
-    dst_ratio = WIDTH / HEIGHT
+    dst_ratio = target_w / target_h
     if src_ratio > dst_ratio:
-        new_h = HEIGHT
-        new_w = int(HEIGHT * src_ratio)
+        new_h = target_h
+        new_w = int(target_h * src_ratio)
     else:
-        new_w = WIDTH
-        new_h = int(WIDTH / src_ratio)
+        new_w = target_w
+        new_h = int(target_w / src_ratio)
     img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - WIDTH) // 2
-    top = (new_h - HEIGHT) // 2
-    img = img.crop((left, top, left + WIDTH, top + HEIGHT))
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    img = img.crop((left, top, left + target_w, top + target_h))
     img.save(path, "PNG")

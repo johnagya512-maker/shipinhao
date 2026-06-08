@@ -93,24 +93,24 @@ export default function TaskDetailPage() {
   const hasDownload = task.status === 'completed'
 
   return (
-    <div className="max-w-3xl">
-      <div className="flex items-center gap-3 mb-4">
-        <Link to="/tasks" className="text-sm text-slate-500 hover:underline">← 列表</Link>
-        <h1 className="text-xl font-semibold">{task.title || task.id}</h1>
-        <span className="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600">
+    <div className="max-w-3xl mx-auto">
+      <div className="flex items-center gap-3 mb-5">
+        <Link to="/tasks" className="text-sm text-slate-500 hover:text-slate-300 hover:underline">← 列表</Link>
+        <h1 className="text-2xl font-bold text-slate-100">{task.title || task.id}</h1>
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300">
           {STATUS_LABEL[task.status]}
         </span>
       </div>
 
       {error && (
-        <div className="mb-4 px-4 py-2 rounded-lg text-sm bg-red-50 text-red-700">{error}</div>
+        <div className="mb-4 px-4 py-2.5 rounded-lg text-sm bg-red-50 text-red-700 border border-red-100">{error}</div>
       )}
 
-      <div className="bg-white rounded-xl border border-slate-200 p-5 mb-4 text-sm space-y-1">
-        <div className="flex justify-between"><span className="text-slate-500">赛道</span><span>{task.track}</span></div>
-        <div className="flex justify-between"><span className="text-slate-500">受众</span><span>{task.target_audience}</span></div>
-        <div className="flex justify-between"><span className="text-slate-500">模块</span><span>{task.modules.join(' / ')}</span></div>
-        <div className="flex justify-between"><span className="text-slate-500">累计成本</span><span>{task.total_cost.toFixed(4)} 元</span></div>
+      <div className="card mb-4 text-sm space-y-2">
+        <div className="flex justify-between"><span className="text-slate-500">赛道</span><span className="font-medium">{task.track}</span></div>
+        <div className="flex justify-between"><span className="text-slate-500">受众</span><span className="font-medium">{task.target_audience}</span></div>
+        <div className="flex justify-between"><span className="text-slate-500">模块</span><span className="font-medium">{task.modules.join(' / ')}</span></div>
+        <div className="flex justify-between"><span className="text-slate-500">累计成本</span><span className="font-medium">{task.total_cost.toFixed(4)} 元</span></div>
         {task.error_message && (
           <div className="flex justify-between text-red-600">
             <span>错误</span><span>{task.error_code}: {task.error_message}</span>
@@ -120,8 +120,8 @@ export default function TaskDetailPage() {
 
       <div className="flex flex-wrap gap-3 mb-5">
         {canUpload && (
-          <label className={`px-4 py-2 rounded-lg text-sm font-medium cursor-pointer ${
-            uploading ? 'bg-slate-200 text-slate-400' : 'bg-brand-600 text-white'
+          <label className={`px-5 py-2.5 rounded-lg text-sm font-medium cursor-pointer transition-colors ${
+            uploading ? 'bg-slate-200 text-slate-400' : 'bg-brand-600 text-white hover:bg-brand-700 shadow-sm shadow-brand-600/20'
           }`}>
             {uploading ? '上传中…' : '上传音频生成成片'}
             <input ref={fileRef} type="file" accept="audio/*" className="hidden"
@@ -129,41 +129,40 @@ export default function TaskDetailPage() {
           </label>
         )}
         {hasDownload && (
-          <a href={api.downloadUrl(id)}
-            className="px-4 py-2 rounded-lg border border-slate-300 text-sm font-medium">下载成片</a>
+          <a href={api.downloadUrl(id)} className="btn-ghost">下载成片</a>
         )}
         {canCancel && (
-          <button onClick={onCancel} disabled={busy}
-            className="px-4 py-2 rounded-lg border border-slate-300 text-sm font-medium disabled:opacity-50">取消任务</button>
+          <button onClick={onCancel} disabled={busy} className="btn-ghost">取消任务</button>
         )}
       </div>
 
       {canRerun && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5">
-          <div className="text-sm font-medium text-amber-800 mb-2">重新生成</div>
-          <textarea rows={3} className="w-full border rounded-lg px-3 py-2 text-sm"
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 mb-5">
+          <div className="text-sm font-semibold text-amber-800 mb-2">重新生成</div>
+          <textarea rows={3} className="field"
             placeholder="可修改逐字稿后重跑；留空则沿用原文"
             value={rerunText} onChange={(e) => setRerunText(e.target.value)} />
           <button onClick={onRerun} disabled={busy}
-            className="mt-2 px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-medium disabled:opacity-50">
+            className="mt-3 px-5 py-2.5 rounded-lg bg-amber-600 text-white text-sm font-medium
+              shadow-sm shadow-amber-600/20 transition-colors hover:bg-amber-700 disabled:opacity-50">
             {busy ? '提交中…' : '重新生成'}
           </button>
         </div>
       )}
 
-      <h2 className="font-medium text-slate-800 mb-2">模块产物</h2>
+      <h2 className="font-semibold text-slate-200 mb-3">模块产物</h2>
       <div className="space-y-3">
         {modules.length === 0 && <div className="text-sm text-slate-400">尚无产物，任务处理中…</div>}
         {modules.map((m) => (
-          <div key={m.module} className="bg-white rounded-xl border border-slate-200 p-4">
+          <div key={m.module} className="card !p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="font-medium text-sm">{MODULE_NAME[m.module] || m.module}</span>
-              <span className={`text-xs px-2 py-0.5 rounded ${
-                m.status === 'success' ? 'bg-green-100 text-green-700'
-                : m.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'
+              <span className="font-medium text-sm text-slate-200">{MODULE_NAME[m.module] || m.module}</span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                m.status === 'success' ? 'bg-green-500/15 text-green-400'
+                : m.status === 'failed' ? 'bg-red-500/15 text-red-400' : 'bg-slate-700 text-slate-400'
               }`}>{m.status}</span>
             </div>
-            <pre className="text-xs bg-slate-50 rounded-lg p-3 overflow-auto max-h-72 whitespace-pre-wrap break-all">
+            <pre className="text-xs bg-slate-950/60 rounded-lg p-3 overflow-auto max-h-72 whitespace-pre-wrap break-all text-slate-400">
               {JSON.stringify(m.output, null, 2)}
             </pre>
             {m.cost > 0 && <div className="text-xs text-slate-400 mt-1">成本 {m.cost.toFixed(4)} 元</div>}

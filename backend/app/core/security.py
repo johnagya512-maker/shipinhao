@@ -37,3 +37,38 @@ def mask(secret: str) -> str:
     if len(secret) <= 8:
         return "****"
     return f"{secret[:3]}****{secret[-4:]}"
+
+
+def seed_keys_from_env() -> None:
+    """开发便利：把 .env 里的 seed_*_api_key 写进数据库（仅当该项当前为空）。
+
+    解决“每次测试都要重输 Key”——把 Key 放 .env（已被 git 忽略），
+    启动时自动种子。已在 DB 里配过的项不会被覆盖。
+    """
+    from app.core.database import SessionLocal
+    from app.models import Config
+
+    pairs = [
+        (settings.seed_llm_api_key, "llm_api_key_enc"),
+        (settings.seed_image_api_key, "image_api_key_enc"),
+        (settings.seed_collect_api_key, "collect_api_key_enc"),
+        (settings.seed_asr_api_key, "asr_api_key_enc"),
+        (settings.seed_tts_api_key, "tts_api_key_enc"),
+    ]
+    if not any(v for v, _ in pairs):
+        return
+    db = SessionLocal()
+    try:
+        cfg = db.get(Config, 1)
+        if not cfg:
+            cfg = Config(id=1)
+            db.add(cfg)
+        changed = False
+        for value, field in pairs:
+            if value and not getattr(cfg, field):
+                setattr(cfg, field, encrypt(value))
+                changed = True
+        if changed:
+            db.commit()
+    finally:
+        db.close()
