@@ -125,9 +125,10 @@ _SHOT_VARIATIONS = [
 
 
 def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
-                        track="character_story", image_style=None):
+                        track="character_story", image_style=None, scenes=None):
     """Step 3「提示词生成」：组装绘图任务列表（提示词+落盘路径），不调用绘图 API。
-    返回 [(prompt, sub_type, out_path, suggested_duration), ...]，保持封面→内容→结尾顺序。"""
+    返回 [(prompt, sub_type, out_path, suggested_duration), ...]，保持封面→内容→结尾顺序。
+    scenes 非空时用画面脚本（视觉化分镜描述）作内容图主体，否则回退到 segment 截字。"""
     image_count = max(MIN_IMAGES, min(MAX_IMAGES, image_count))
     n_content = image_count - 2
     out_dir.mkdir(parents=True, exist_ok=True)
