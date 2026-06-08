@@ -37,20 +37,24 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
     from app.modules import tracks
     extra = _rewrite_directives(rewrite_strength, narrative_perspective)
     tk = tracks.get_track(track)
+    # 结尾引导按变现模式切换，所有赛道通用：创作分成=引爆互动；图书带货=带出书籍。
+    ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
+              else prompts.ENDING_REVENUE_SHARE)
     if track == "character_story":
-        ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
-                  else prompts.ENDING_REVENUE_SHARE)
         prompt = _render(prompts.MODULE_B_CHARACTER, cleaned_text=cleaned_text, title=title,
+                         target_audience=target_audience,
                          rewrite_focus=tk["rewrite_focus"],
                          ending_instruction=ending)
     elif track == "health_book":
         prompt = _render(prompts.MODULE_B, cleaned_text=cleaned_text,
-                         target_audience=target_audience, title=title)
+                         target_audience=target_audience, title=title,
+                         ending_instruction=ending)
     else:
         # 其它赛道走通用提示词，注入该赛道的改写风格，不再套健康书单逻辑。
         prompt = _render(prompts.MODULE_B_GENERAL, cleaned_text=cleaned_text,
                          target_audience=target_audience, title=title,
-                         rewrite_focus=tk["rewrite_focus"])
+                         rewrite_focus=tk["rewrite_focus"],
+                         ending_instruction=ending)
     if extra:
         prompt = f"{prompt}\n\n【额外要求】\n{extra}"
     r = call_llm(provider, model, key, prompt)
