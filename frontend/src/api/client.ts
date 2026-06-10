@@ -130,7 +130,7 @@ export const api = {
     narrative_perspective?: string; creation_mode?: string
   }) =>
     request<{ structure: ViralStructure; script: string }>('/tasks/analyze-structure', {
-      method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(180_000),
+      method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(240_000),
     }),
   // 收藏/取消收藏音色
   toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>

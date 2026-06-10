@@ -26,8 +26,9 @@ class LLMError(Exception):
 
 
 def call_llm(provider: str, model: str, api_key: str, prompt: str,
-             timeout: float = 30.0) -> LLMResult:
-    """同步调用 LLM。返回文本与 token 用量。"""
+             timeout: float = 90.0) -> LLMResult:
+    """同步调用 LLM。返回文本与 token 用量。
+    超时默认 90s：第三方中转网关（如 packy 等）响应偏慢，30s 易触发 504/超时。"""
     url = LLM_ENDPOINTS.get(provider)
     if not url:
         raise LLMError(f"未知 LLM 供应商: {provider}", retryable=False)
@@ -48,6 +49,8 @@ def call_llm(provider: str, model: str, api_key: str, prompt: str,
         raise LLMError("API Key 无效", retryable=False)
     if resp.status_code == 429:
         raise LLMError("触发限流", retryable=True)
+    if resp.status_code in (502, 503, 504):
+        raise LLMError(f"大模型网关繁忙({resp.status_code})，请稍后重试", retryable=True)
     if resp.status_code >= 500:
         raise LLMError(f"LLM 服务端错误 {resp.status_code}", retryable=True)
     if resp.status_code >= 400:

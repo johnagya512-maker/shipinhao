@@ -119,6 +119,8 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
     返回 {structure, script}。文案过短或未配 LLM 时返回明确错误。"""
     from app.core.security import decrypt
     from app.modules import text_modules as tm
+    from app.modules.retry import with_retry
+    from app.services.llm import LLMError
     text = (body.get("text") or "").strip()
     if len(text) < 20:
         raise HTTPException(status_code=400, detail="文案太短，至少 20 字才能拆解二创")
@@ -127,13 +129,15 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
     if not llm_key:
         raise HTTPException(status_code=400, detail="未配置大模型 API Key，无法生成")
     prov, model = cfg.llm_provider, cfg.llm_model
-    # creation_mode=none 时不拆结构，直接改写；否则先拆骨架再按骨架改写
+    # creation_mode=none 时不拆结构，直接改写；否则先拆骨架再按骨架改写。
+    # 接入 with_retry：第三方网关 504/超时自动重试，和正式任务一致。
     structure = {}
     try:
         if (body.get("creation_mode") or "same_topic") != "none":
-            s_out, _s = tm.run_structure(prov, model, llm_key, text)
+            (s_out, _s), _ = with_retry(
+                lambda: tm.run_structure(prov, model, llm_key, text), 2)
             structure = s_out.get("structure") or {}
-        b_out, _b = tm.run_rewrite(
+        (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
             prov, model, llm_key, text,
             target_audience=body.get("target_audience") or "50+女性",
             title=body.get("title"),
@@ -141,7 +145,9 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
             monetization_mode=body.get("monetization_mode") or "revenue_share",
             rewrite_strength=body.get("rewrite_strength") or "medium",
             narrative_perspective=body.get("narrative_perspective") or "auto",
-            structure_guide=structure or None)
+            structure_guide=structure or None), 2)
+    except LLMError as e:
+        raise HTTPException(status_code=502, detail=f"二创生成失败：{e}"[:200])
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"二创生成失败：{e}"[:200])
     return {"structure": structure, "script": b_out.get("script", "")}
