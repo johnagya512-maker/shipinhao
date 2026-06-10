@@ -425,10 +425,11 @@ def _run_collect_asr(db: Session, task: Task, cfg: Config, started: float):
     # 采集：拿元数据 + 无水印视频地址
     video_url = ""
     try:
-        cr = collect_svc.fetch_douyin(task.douyin_url, cfg.collect_provider, collect_key)
+        cr = collect_svc.fetch_video(task.douyin_url, cfg.collect_provider, collect_key)
         video_url = cr.video_url
         task.source_meta = {"title": cr.title, "author": cr.author,
                             "play_count": cr.play_count, "digg_count": cr.digg_count,
+                            "platform": cr.platform,
                             **cr.raw_meta}
         if cr.title and not task.title:
             task.title = cr.title[:200]

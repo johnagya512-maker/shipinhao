@@ -265,7 +265,7 @@ export default function TaskCreatePage() {
   }
 
   async function doEstimate() {
-    if (!hasInput()) { setError('请填写抖音链接或逐字稿'); return }
+    if (!hasInput()) { setError('请填写视频链接或逐字稿'); return }
     setEstimating(true); setError(null)
     try {
       setEst(await api.estimate(form))
@@ -284,7 +284,7 @@ export default function TaskCreatePage() {
   }
 
   async function submit() {
-    if (!hasInput()) { setError('请填写抖音链接或逐字稿'); return }
+    if (!hasInput()) { setError('请填写视频链接或逐字稿'); return }
     setSubmitting(true); setError(null)
     try {
       const task = await api.createTask(form)
@@ -300,7 +300,7 @@ export default function TaskCreatePage() {
   return (
     <div className="max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold text-slate-100 mb-1">新建任务</h1>
-      <p className="text-sm text-slate-500 mb-5">贴逐字稿或抖音链接，自动生成可在剪映里编辑的成片草稿。</p>
+      <p className="text-sm text-slate-500 mb-5">贴逐字稿或视频链接，自动生成可在剪映里编辑的成片草稿。</p>
 
       {error && (
         <div className="mb-4 px-4 py-2.5 rounded-lg text-sm bg-red-50 text-red-700 border border-red-100">{error}</div>
@@ -311,7 +311,7 @@ export default function TaskCreatePage() {
         <div className="grid grid-cols-2 gap-3">
           <div className="px-4 py-3 rounded-xl border bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30">
             <div className="text-sm font-medium text-brand-300">📝 我有素材</div>
-            <div className="text-xs text-slate-500 mt-0.5">粘贴文案或贴抖音链接，改写成片</div>
+            <div className="text-xs text-slate-500 mt-0.5">粘贴文案或贴视频链接，改写成片</div>
           </div>
           <div className="relative px-4 py-3 rounded-xl border border-dashed border-slate-700 bg-slate-800/20 cursor-not-allowed select-none">
             <span className="absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">敬请期待</span>
@@ -322,7 +322,7 @@ export default function TaskCreatePage() {
 
         {/* 「我有素材」内部：粘贴文案 / 贴链接 两个 tab */}
         <div className="flex gap-4 border-b border-slate-800 -mb-1">
-          {([['transcript', '粘贴文案'], ['douyin', '贴抖音链接']] as const).map(([m, label]) => (
+          {([['transcript', '粘贴文案'], ['douyin', '贴视频链接']] as const).map(([m, label]) => (
             <button key={m} type="button"
               onClick={() => { setInputMode(m); set(m === 'douyin' ? { transcript: '' } : { douyin_url: '' }); setEst(null) }}
               className={`pb-2 text-sm border-b-2 -mb-px transition-colors ${
@@ -333,11 +333,12 @@ export default function TaskCreatePage() {
 
         {inputMode === 'douyin' ? (
           <label className="block">
-            <span className="text-sm text-slate-400">抖音链接（需配采集/ASR Key）</span>
+            <span className="text-sm text-slate-400">视频链接（需配采集/ASR Key）</span>
             <input className="field"
-              placeholder="粘贴抖音分享口令或链接…"
+              placeholder="粘贴抖音/快手/小红书/B站/微博/TikTok 的分享口令或链接…"
               value={form.douyin_url ?? ''}
               onChange={(e) => { set({ douyin_url: e.target.value }); setEst(null) }} />
+            <span className="block text-[11px] text-slate-600 mt-1">支持：抖音 · 快手 · 小红书 · B站 · 微博 · TikTok（自动识别平台）</span>
           </label>
         ) : (
           <label className="block">
