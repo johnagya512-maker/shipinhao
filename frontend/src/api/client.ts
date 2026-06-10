@@ -50,14 +50,24 @@ function parseDetail(detail: unknown): { code?: string; message: string } {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(init?.headers || {}),
-    },
-  })
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      // 默认 120s 超时：LLM 类接口慢，但也不能无限转圈。调用方可传自己的 signal 覆盖。
+      signal: init?.signal ?? AbortSignal.timeout(120_000),
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+        ...(init?.headers || {}),
+      },
+    })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') {
+      throw new ApiError('请求超时，可能是大模型响应太慢，请重试。', 0, 'E_TIMEOUT')
+    }
+    throw new ApiError('网络请求失败，请检查后端是否在运行。', 0, 'E_NETWORK')
+  }
   if (!res.ok) {
     let detail: unknown = res.statusText
     try { detail = (await res.json()).detail } catch { /* 非 JSON 响应 */ }
@@ -120,7 +130,7 @@ export const api = {
     narrative_perspective?: string; creation_mode?: string
   }) =>
     request<{ structure: ViralStructure; script: string }>('/tasks/analyze-structure', {
-      method: 'POST', body: JSON.stringify(body),
+      method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(180_000),
     }),
   // 收藏/取消收藏音色
   toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>

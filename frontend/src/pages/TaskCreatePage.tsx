@@ -122,7 +122,10 @@ async function compressImage(file: File, maxEdge = 1536, quality = 0.85): Promis
 
 export default function TaskCreatePage() {
   const nav = useNavigate()
-  const [form, setForm] = useState<TaskCreate>({
+  // 草稿持久化：切到别的页面（如配置页）再回来，用户填的内容不应被清空。
+  // 表单实时存 localStorage，组件重建时还原；提交成功后清掉。
+  const DRAFT_KEY = 'task_create_draft'
+  const DEFAULT_FORM: TaskCreate = {
     douyin_url: '', transcript: '', keyword: '', title: '', author: '',
     modules: ['A', 'B', 'E', 'F', 'G', 'H'],
     target_audience: '50+女性', track: 'character_story',
@@ -131,7 +134,19 @@ export default function TaskCreatePage() {
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
     processing_mode: 'full_auto', pause_mode: 'key_nodes', pause_steps: [],
-  })
+  }
+  function loadDraft(): { form: TaskCreate; previewScript: string } {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (raw) {
+        const d = JSON.parse(raw)
+        return { form: { ...DEFAULT_FORM, ...(d.form || {}) }, previewScript: d.previewScript || '' }
+      }
+    } catch { /* 忽略损坏的草稿 */ }
+    return { form: DEFAULT_FORM, previewScript: '' }
+  }
+  const initial = loadDraft()
+  const [form, setForm] = useState<TaskCreate>(initial.form)
   const [est, setEst] = useState<EstimateOut | null>(null)
   const [estimating, setEstimating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -151,7 +166,7 @@ export default function TaskCreatePage() {
   const [draftTemplates, setDraftTemplates] = useState<DraftTemplate[]>([])
   // 爆款结构拆解 + 二创成品预览
   const [structure, setStructure] = useState<ViralStructure | null>(null)
-  const [previewScript, setPreviewScript] = useState('')
+  const [previewScript, setPreviewScript] = useState(initial.previewScript)
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeErr, setAnalyzeErr] = useState('')
   const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
@@ -176,6 +191,10 @@ export default function TaskCreatePage() {
   useEffect(() => { api.bgmList().then((r) => setBgmFiles(r.files)).catch(() => {}) }, [])
   // 载入草稿动画模板清单。
   useEffect(() => { api.getDraftTemplates().then((r) => setDraftTemplates(r.templates)).catch(() => {}) }, [])
+  // 实时把表单+预览文案存草稿，切页面回来不丢。
+  useEffect(() => {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, previewScript })) } catch { /* 配额满则忽略 */ }
+  }, [form, previewScript])
 
   // 检测关键凭证是否缺失（LLM 必需；配图视模块而定）。
   const missingKeys: string[] = []
@@ -257,11 +276,19 @@ export default function TaskCreatePage() {
     }
   }
 
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_KEY) } catch { /* 忽略 */ }
+    setForm(DEFAULT_FORM)
+    setPreviewScript(''); setStructure(null); setEst(null); setError(null)
+    setRefName(null); setRefPreview(null)
+  }
+
   async function submit() {
     if (!hasInput()) { setError('请填写抖音链接或逐字稿'); return }
     setSubmitting(true); setError(null)
     try {
       const task = await api.createTask(form)
+      try { localStorage.removeItem(DRAFT_KEY) } catch { /* 忽略 */ }
       nav(`/tasks/${task.id}`)
     } catch (e) {
       setError((e as ApiError).message)
@@ -329,10 +356,13 @@ export default function TaskCreatePage() {
             {inputMode === 'transcript' && (
               <button type="button" onClick={doAnalyzeStructure} disabled={analyzing}
                 className="text-[12px] px-2.5 py-1 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
-                {analyzing ? '生成中…' : '✨ 预览二创文案'}
+                {analyzing ? '生成中…约30-60秒' : '✨ 预览二创文案'}
               </button>
             )}
           </div>
+          {analyzing && (
+            <p className="mt-1 text-[11px] text-slate-500">正在拆解结构并改写，大模型生成需要点时间，请稍候，不要离开本页。</p>
+          )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             {([
               ['same_topic', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
@@ -843,6 +873,9 @@ export default function TaskCreatePage() {
           预计耗时约 {Math.round((form.time_limit ?? 900) / 60)} 分钟 · 成本上限 {form.cost_limit} 元
         </span>
         <div className="flex gap-3">
+          <button onClick={clearDraft} disabled={submitting} className="btn-ghost" title="清空本页所有填写内容">
+            清空重填
+          </button>
           <button onClick={doEstimate} disabled={estimating} className="btn-ghost">
             {estimating ? '预估中…' : '成本预估'}
           </button>
