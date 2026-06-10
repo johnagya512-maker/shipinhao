@@ -68,13 +68,16 @@ export default function VoicePicker({ voices, categories, value, favorites, onSe
               const on = v.id === value
               const fav = favSet.has(v.id)
               const playing = previewingId === v.id
+              const unavail = v.available === false   // 探活确认当前账号未授权
               return (
                 <div key={v.id} className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border ${
-                  on ? 'bg-brand-600/15 border-brand-500' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                  on ? 'bg-brand-600/15 border-brand-500' : 'bg-slate-800/40 border-slate-700/60'} ${
+                  unavail ? 'opacity-50' : ''}`}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className={`text-[13px] font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{v.name}</span>
                       <span className="text-[10px] text-slate-500 px-1.5 py-0.5 rounded bg-slate-700/50">{v.tag}</span>
+                      {unavail && <span className="text-[10px] text-amber-500/80" title="当前火山账号未授权">未授权</span>}
                     </div>
                     <div className="text-[10px] text-slate-600 font-mono truncate" title={v.id}>{v.id}</div>
                   </div>
@@ -82,7 +85,7 @@ export default function VoicePicker({ voices, categories, value, favorites, onSe
                     className={`shrink-0 px-1 ${fav ? 'text-amber-400' : 'text-slate-600 hover:text-amber-400'}`}>
                     {fav ? '★' : '☆'}
                   </button>
-                  <button onClick={() => preview(v.id)} title="试听"
+                  <button onClick={() => preview(v.id)} title={unavail ? '未授权，仍可试听验证' : '试听'}
                     className="shrink-0 px-2 py-1 rounded-md text-xs bg-slate-700/70 text-slate-200 hover:bg-slate-700">
                     {playing ? '■' : '▶'}
                   </button>

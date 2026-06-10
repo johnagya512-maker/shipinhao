@@ -150,7 +150,20 @@ export default function TaskCreatePage() {
 
   // 载入配置，用于"凭证未配置"提示。
   useEffect(() => { api.getConfig().then((c) => { setCfg(c); setFavorites(c.tts_favorites ?? []) }).catch(() => {}) }, [])
-  useEffect(() => { api.getVoices().then((r) => { setVoices(r.voices); setVoiceCats(r.categories) }).catch(() => {}) }, [])
+  useEffect(() => {
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = () => {
+      api.getVoices().then((r) => {
+        setVoices(r.voices)
+        setVoiceCats(r.categories)
+        // 后台还在探活且未超过重试上限 → 稍后重取，拿到可用性标记
+        if (r.probing && tries < 8) { tries += 1; timer = setTimeout(load, 2500) }
+      }).catch(() => {})
+    }
+    load()
+    return () => { if (timer) clearTimeout(timer) }
+  }, [])
   // 载入 BGM 列表（配置了 bgm 目录时才有内容）。
   useEffect(() => { api.bgmList().then((r) => setBgmFiles(r.files)).catch(() => {}) }, [])
 
@@ -446,17 +459,22 @@ export default function TaskCreatePage() {
             {chipVoices.map((v) => {
               const on = form.voice === v.id
               const playing = previewingId === v.id
+              const unavail = v.available === false   // 探活确认当前账号未授权
               return (
                 <div key={v.id}
                   className={`relative text-left px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
-                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'}`}
+                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'} ${
+                    unavail ? 'opacity-45' : ''}`}
+                  title={unavail ? '当前火山账号未授权此音色' : undefined}
                   onClick={() => set({ voice: v.id })}>
                   <div className="flex items-center justify-between gap-1">
                     <span className={`text-[13px] font-medium truncate ${on ? 'text-brand-300' : 'text-slate-200'}`}>{v.name}</span>
-                    <button type="button" title="试听"
-                      onClick={(e) => { e.stopPropagation(); previewVoice(v.id) }}
-                      className="shrink-0 text-slate-400 hover:text-brand-300 text-xs">{playing ? '■' : '🔊'}</button>
+                    {unavail
+                      ? <span className="shrink-0 text-[10px] text-amber-500/80" title="未授权">未授权</span>
+                      : <button type="button" title="试听"
+                          onClick={(e) => { e.stopPropagation(); previewVoice(v.id) }}
+                          className="shrink-0 text-slate-400 hover:text-brand-300 text-xs">{playing ? '■' : '🔊'}</button>}
                   </div>
                   <span className="block text-[10px] text-slate-500 truncate" title={v.tag}>{v.tag}</span>
                 </div>

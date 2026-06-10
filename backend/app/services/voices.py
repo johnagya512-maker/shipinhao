@@ -53,3 +53,63 @@ VOICE_LIBRARY = [
     {"id": "zh_male_beijingxiaoye_emo_mars_bigtts", "name": "北京小爷", "tag": "可调情绪", "category": "emotion"},
     {"id": "zh_female_jiaohuanvsheng_emo_mars_bigtts", "name": "娇憨女声", "tag": "可调情绪", "category": "emotion"},
 ]
+
+
+# ── 按账号探活：音色授权是按火山账号的，库里是候选清单，实际可用性需用当前凭证试合成 ──
+# 探活结果按「凭证指纹」缓存在内存：同一套 appid+key 只测一轮，凭证变了重测。
+# 探活在后台线程跑（逐个合成一句短文本，慢），接口先返回缓存（首次全为 None=未知）。
+import hashlib
+import threading
+import logging
+
+_logger = logging.getLogger("uvicorn")
+# {fingerprint: {voice_id: bool}}  bool=可用; 缺 key=尚未测出
+_probe_cache: dict[str, dict[str, bool]] = {}
+_probe_running: set[str] = set()
+_probe_lock = threading.Lock()
+
+
+def _fingerprint(appid: str | None, api_key: str | None) -> str:
+    raw = f"{appid or ''}:{api_key or ''}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def availability(appid: str | None, api_key: str | None) -> dict[str, bool]:
+    """返回当前凭证下已探出的音色可用性（voice_id -> bool）。未探出的不在 dict 里。"""
+    if not api_key:
+        return {}
+    return dict(_probe_cache.get(_fingerprint(appid, api_key), {}))
+
+
+def ensure_probe(provider: str, appid: str | None, api_key: str | None) -> None:
+    """确保当前凭证的探活已启动（幂等）。已有缓存或正在跑则跳过，否则起后台线程逐个探活。"""
+    if not api_key:
+        return
+    fp = _fingerprint(appid, api_key)
+    with _probe_lock:
+        if fp in _probe_cache or fp in _probe_running:
+            return
+        _probe_running.add(fp)
+
+    def _run():
+        from app.services import tts as tts_svc
+        result: dict[str, bool] = {}
+        for v in VOICE_LIBRARY:
+            try:
+                tts_svc.test_connectivity(provider, api_key, voice=v["id"],
+                                          appid=appid, timeout=20.0)
+                result[v["id"]] = True
+            except tts_svc.TTSUnavailable:
+                # 凭证整体不可用（无 key），整轮放弃，不缓存（下次可重试）
+                with _probe_lock:
+                    _probe_running.discard(fp)
+                return
+            except Exception:
+                result[v["id"]] = False
+        with _probe_lock:
+            _probe_cache[fp] = result
+            _probe_running.discard(fp)
+        n_ok = sum(1 for x in result.values() if x)
+        _logger.info("音色探活完成: %d/%d 可用 (凭证 %s)", n_ok, len(result), fp)
+
+    threading.Thread(target=_run, daemon=True).start()

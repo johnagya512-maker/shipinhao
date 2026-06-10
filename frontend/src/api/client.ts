@@ -107,9 +107,9 @@ export const api = {
     }
     return res.blob()
   },
-  // 音色库：分类 + 候选音色清单
+  // 音色库：分类 + 候选音色清单（每个带 available 探活状态）。probing=true 表示后台还在探活，稍后可重取。
   getVoices: () =>
-    request<{ categories: VoiceCategory[]; voices: VoiceItem[] }>('/config/voices'),
+    request<{ categories: VoiceCategory[]; voices: VoiceItem[]; probing?: boolean }>('/config/voices'),
   // 收藏/取消收藏音色
   toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>
     request<{ favorites: string[] }>('/config/favorites', {

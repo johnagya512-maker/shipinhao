@@ -186,6 +186,8 @@ export interface VoiceItem {
   name: string
   tag: string
   category: string
+  // 按当前火山凭证探活：true=可用 / false=未授权 / null|undefined=尚未探出
+  available?: boolean | null
 }
 
 export interface VoiceCategory {

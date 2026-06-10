@@ -56,9 +56,18 @@ def get_config(db: Session = Depends(get_db)):
 
 
 @router.get("/voices")
-def list_voices():
-    """音色库：返回分类元信息 + 候选音色清单。实际可用性取决于火山账号授权。"""
-    return {"categories": voices_svc.CATEGORIES, "voices": voices_svc.VOICE_LIBRARY}
+def list_voices(db: Session = Depends(get_db)):
+    """音色库：返回分类元信息 + 候选音色清单，每个带 available（按当前火山凭证探活）。
+    available: True=可用 / False=未授权 / None=尚未探出（首次访问后台异步探活，稍后重取即有）。
+    可用性按火山账号授权而定，库是候选清单。"""
+    cfg = _get_or_create(db)
+    key = decrypt(cfg.tts_api_key_enc) if cfg.tts_api_key_enc else ""
+    # 触发/复用当前凭证的后台探活；立即取已探出的结果合并进返回。
+    voices_svc.ensure_probe(cfg.tts_provider, cfg.tts_appid, key)
+    avail = voices_svc.availability(cfg.tts_appid, key)
+    voices = [{**v, "available": avail.get(v["id"])} for v in voices_svc.VOICE_LIBRARY]
+    return {"categories": voices_svc.CATEGORIES, "voices": voices,
+            "probing": bool(key) and not avail}
 
 
 @router.put("/favorites")
