@@ -380,6 +380,47 @@ export default function TaskCreatePage() {
               )
             })}
           </div>
+
+          {/* 改写强度 / 叙事视角：直接影响二创效果，放在预览旁边，调完即可预览看效果。
+              仅全自动模式有效（半自动/直接出片不改写）。 */}
+          {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
+            <div className="mt-2 grid grid-cols-2 gap-3">
+              <div>
+                <span className="text-[12px] text-slate-500">改写强度 <span className="text-slate-600">· 嫌改得太像原文就调「强力」</span></span>
+                <div className="mt-1 flex gap-1.5">
+                  {REWRITE_STRENGTHS.map((s) => {
+                    const on = form.rewrite_strength === s.key
+                    return (
+                      <button key={s.key} type="button" onClick={() => set({ rewrite_strength: s.key })}
+                        className={`flex-1 px-2 py-1 rounded-lg border text-center transition-colors ${
+                          on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                        }`}>
+                        <div className={`text-[12px] ${on ? 'text-brand-300' : 'text-slate-200'}`}>{s.name}</div>
+                        <div className="text-[9px] text-slate-500">{s.desc}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div>
+                <span className="text-[12px] text-slate-500">叙事视角</span>
+                <div className="mt-1 flex gap-1.5">
+                  {PERSPECTIVES.map((p) => {
+                    const on = form.narrative_perspective === p.key
+                    return (
+                      <button key={p.key} type="button" onClick={() => set({ narrative_perspective: p.key })}
+                        className={`flex-1 px-2 py-1 rounded-lg border text-center transition-colors ${
+                          on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                        }`}>
+                        <div className={`text-[12px] ${on ? 'text-brand-300' : 'text-slate-200'}`}>{p.name}</div>
+                        <div className="text-[9px] text-slate-500">{p.desc}</div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
           {analyzeErr && <p className="mt-1 text-[11px] text-red-400">{analyzeErr}</p>}
 
           {/* 预览成品：二创后的完整文案（主），结构骨架折叠为次要信息 */}
@@ -729,45 +770,7 @@ export default function TaskCreatePage() {
                 )}
               </div>
 
-              {/* 改写强度 / 叙事视角：仅全自动模式有效（半自动/直接出片不改写，整块隐藏，对齐竞品） */}
-              {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <span className="text-sm text-slate-400">改写强度</span>
-                  <div className="mt-2 flex gap-2">
-                    {REWRITE_STRENGTHS.map((s) => {
-                      const on = form.rewrite_strength === s.key
-                      return (
-                        <button key={s.key} type="button" onClick={() => set({ rewrite_strength: s.key })}
-                          className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
-                            on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-                          }`}>
-                          <div className={`text-sm ${on ? 'text-brand-300' : 'text-slate-200'}`}>{s.name}</div>
-                          <div className="text-[10px] text-slate-500">{s.desc}</div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-                <div>
-                  <span className="text-sm text-slate-400">叙事视角</span>
-                  <div className="mt-2 flex gap-2">
-                    {PERSPECTIVES.map((p) => {
-                      const on = form.narrative_perspective === p.key
-                      return (
-                        <button key={p.key} type="button" onClick={() => set({ narrative_perspective: p.key })}
-                          className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
-                            on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-                          }`}>
-                          <div className={`text-sm ${on ? 'text-brand-300' : 'text-slate-200'}`}>{p.name}</div>
-                          <div className="text-[10px] text-slate-500">{p.desc}</div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-              )}
+              {/* 改写强度 / 叙事视角已移到上方「二创方式」区，调完即可预览，所见即所得 */}
 
               <label className="block">
                 <span className="text-sm text-slate-400">配音语速：{(form.voice_speed ?? 1).toFixed(2)}×</span>
