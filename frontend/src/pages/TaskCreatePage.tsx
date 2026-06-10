@@ -149,8 +149,9 @@ export default function TaskCreatePage() {
   const [favorites, setFavorites] = useState<string[]>([])
   const [showVoicePicker, setShowVoicePicker] = useState(false)
   const [draftTemplates, setDraftTemplates] = useState<DraftTemplate[]>([])
-  // 爆款结构拆解预览
+  // 爆款结构拆解 + 二创成品预览
   const [structure, setStructure] = useState<ViralStructure | null>(null)
+  const [previewScript, setPreviewScript] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeErr, setAnalyzeErr] = useState('')
   const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
@@ -223,10 +224,20 @@ export default function TaskCreatePage() {
   async function doAnalyzeStructure() {
     const text = (form.transcript ?? '').trim()
     if (text.length < 20) { setAnalyzeErr('请先在上方粘贴文案（至少 20 字）'); return }
-    setAnalyzing(true); setAnalyzeErr(''); setStructure(null)
+    setAnalyzing(true); setAnalyzeErr(''); setStructure(null); setPreviewScript('')
     try {
-      const r = await api.analyzeStructure(text)
+      const r = await api.analyzeStructure({
+        text,
+        track: form.track,
+        target_audience: form.target_audience,
+        title: form.title ?? undefined,
+        monetization_mode: form.monetization_mode,
+        rewrite_strength: form.rewrite_strength,
+        narrative_perspective: form.narrative_perspective,
+        creation_mode: form.creation_mode,
+      })
       setStructure(r.structure)
+      setPreviewScript(r.script)
     } catch (e) {
       setAnalyzeErr((e as ApiError).message)
     } finally {
@@ -318,7 +329,7 @@ export default function TaskCreatePage() {
             {inputMode === 'transcript' && (
               <button type="button" onClick={doAnalyzeStructure} disabled={analyzing}
                 className="text-[12px] px-2.5 py-1 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
-                {analyzing ? '拆解中…' : '🔍 拆解结构预览'}
+                {analyzing ? '生成中…' : '✨ 预览二创文案'}
               </button>
             )}
           </div>
@@ -340,31 +351,36 @@ export default function TaskCreatePage() {
             })}
           </div>
           {analyzeErr && <p className="mt-1 text-[11px] text-red-400">{analyzeErr}</p>}
-          {structure && (
-            <div className="mt-2 p-3 rounded-xl bg-slate-900/60 border border-slate-700 space-y-1.5 text-[12px]">
-              {structure.why_viral && (
-                <p className="text-brand-300">💡 {structure.why_viral}</p>
+
+          {/* 预览成品：二创后的完整文案（主），结构骨架折叠为次要信息 */}
+          {previewScript && (
+            <div className="mt-2 rounded-xl bg-slate-900/60 border border-brand-500/30 p-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[12px] font-medium text-brand-300">✨ 二创文案预览</span>
+                <span className="text-[10px] text-slate-600">仅预览，正式生成以任务为准</span>
+              </div>
+              <textarea rows={10} readOnly value={previewScript}
+                className="w-full text-sm bg-slate-950/50 border border-slate-700 rounded-lg p-2.5 text-slate-200 leading-relaxed outline-none resize-y" />
+              <p className="mt-1 text-[10px] text-slate-600">{previewScript.length} 字 · 不满意可换「改写强度/视角」或重新预览，满意了点下方「开始生成」。</p>
+              {structure && (structure.why_viral || (structure.structure?.length ?? 0) > 0) && (
+                <details className="mt-2">
+                  <summary className="text-[11px] text-slate-500 cursor-pointer hover:text-slate-300">查看拆解的爆款结构 ▾</summary>
+                  <div className="mt-1.5 space-y-1 text-[11px]">
+                    {structure.why_viral && <p className="text-brand-300/80">💡 {structure.why_viral}</p>}
+                    {structure.hook && <p className="text-slate-400"><span className="text-slate-600">钩子·{structure.hook.type}：</span>{structure.hook.text}</p>}
+                    {(structure.structure?.length ?? 0) > 0 && (
+                      <p className="text-slate-400">
+                        <span className="text-slate-600">结构：</span>
+                        {structure.structure!.map((p, i) => (
+                          <span key={i} className="inline-block mr-1.5">{p.part}<span className="text-slate-600">({p.emotion}/{p.pace})</span>{i < structure.structure!.length - 1 ? ' →' : ''}</span>
+                        ))}
+                      </p>
+                    )}
+                    {structure.ending && <p className="text-slate-400"><span className="text-slate-600">结尾·{structure.ending.type}：</span>{structure.ending.text}</p>}
+                    {structure.rhythm && <p className="text-slate-500"><span className="text-slate-600">节奏：</span>{structure.rhythm}{structure.duration_hint ? ` · ${structure.duration_hint}` : ''}</p>}
+                  </div>
+                </details>
               )}
-              {structure.hook && (
-                <p className="text-slate-300"><span className="text-slate-500">开头钩子·{structure.hook.type}：</span>{structure.hook.text}</p>
-              )}
-              {(structure.structure?.length ?? 0) > 0 && (
-                <p className="text-slate-300">
-                  <span className="text-slate-500">结构：</span>
-                  {structure.structure!.map((p, i) => (
-                    <span key={i} className="inline-block mr-1.5">
-                      {p.part}<span className="text-slate-600">({p.emotion}/{p.pace})</span>{i < structure.structure!.length - 1 ? ' →' : ''}
-                    </span>
-                  ))}
-                </p>
-              )}
-              {structure.ending && (
-                <p className="text-slate-300"><span className="text-slate-500">结尾·{structure.ending.type}：</span>{structure.ending.text}</p>
-              )}
-              {structure.rhythm && (
-                <p className="text-slate-400"><span className="text-slate-500">节奏：</span>{structure.rhythm}{structure.duration_hint ? ` · ${structure.duration_hint}` : ''}</p>
-              )}
-              <p className="text-[10px] text-slate-600 pt-0.5">生成时会按这个结构骨架来组织新文案。</p>
             </div>
           )}
         </div>

@@ -112,22 +112,39 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
 
 @router.post("/tasks/analyze-structure")
 def analyze_structure(body: dict, db: Session = Depends(get_db)):
-    """拆解一段爆款文案的结构骨架，供创建任务前预览（不创建任务、不入库）。
-    入参 {text}。返回 {structure: {...}}。文案过短或未配 LLM 时返回明确错误。"""
+    """创建任务前预览二创结果（不创建任务、不入库）：
+    拆解爆款结构骨架 → 按骨架改写出成品文案，两个一起返回。
+    入参 {text, track?, target_audience?, title?, monetization_mode?,
+          rewrite_strength?, narrative_perspective?, creation_mode?}。
+    返回 {structure, script}。文案过短或未配 LLM 时返回明确错误。"""
     from app.core.security import decrypt
     from app.modules import text_modules as tm
     text = (body.get("text") or "").strip()
     if len(text) < 20:
-        raise HTTPException(status_code=400, detail="文案太短，至少 20 字才能拆解结构")
+        raise HTTPException(status_code=400, detail="文案太短，至少 20 字才能拆解二创")
     cfg = db.get(Config, 1)
     llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
     if not llm_key:
-        raise HTTPException(status_code=400, detail="未配置大模型 API Key，无法拆解结构")
+        raise HTTPException(status_code=400, detail="未配置大模型 API Key，无法生成")
+    prov, model = cfg.llm_provider, cfg.llm_model
+    # creation_mode=none 时不拆结构，直接改写；否则先拆骨架再按骨架改写
+    structure = {}
     try:
-        out, _r = tm.run_structure(cfg.llm_provider, cfg.llm_model, llm_key, text)
+        if (body.get("creation_mode") or "same_topic") != "none":
+            s_out, _s = tm.run_structure(prov, model, llm_key, text)
+            structure = s_out.get("structure") or {}
+        b_out, _b = tm.run_rewrite(
+            prov, model, llm_key, text,
+            target_audience=body.get("target_audience") or "50+女性",
+            title=body.get("title"),
+            track=body.get("track") or "character_story",
+            monetization_mode=body.get("monetization_mode") or "revenue_share",
+            rewrite_strength=body.get("rewrite_strength") or "medium",
+            narrative_perspective=body.get("narrative_perspective") or "auto",
+            structure_guide=structure or None)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"结构拆解失败：{e}"[:200])
-    return out
+        raise HTTPException(status_code=502, detail=f"二创生成失败：{e}"[:200])
+    return {"structure": structure, "script": b_out.get("script", "")}
 
 
 @router.get("/tasks", response_model=TaskListOut)

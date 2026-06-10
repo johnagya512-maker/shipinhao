@@ -113,10 +113,14 @@ export const api = {
   // 草稿动画模板清单
   getDraftTemplates: () =>
     request<{ templates: DraftTemplate[] }>('/config/draft-templates'),
-  // 拆解爆款文案结构（创建任务前预览）
-  analyzeStructure: (text: string) =>
-    request<{ structure: ViralStructure }>('/tasks/analyze-structure', {
-      method: 'POST', body: JSON.stringify({ text }),
+  // 二创预览：拆爆款结构 + 按骨架改写出成品文案（创建任务前预览）
+  analyzeStructure: (body: {
+    text: string; track?: string; target_audience?: string; title?: string
+    monetization_mode?: string; rewrite_strength?: string
+    narrative_perspective?: string; creation_mode?: string
+  }) =>
+    request<{ structure: ViralStructure; script: string }>('/tasks/analyze-structure', {
+      method: 'POST', body: JSON.stringify(body),
     }),
   // 收藏/取消收藏音色
   toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>
