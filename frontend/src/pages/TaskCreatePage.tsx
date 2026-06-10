@@ -496,11 +496,34 @@ export default function TaskCreatePage() {
           )}
         </div>
 
+        <div>
+          <span className="text-sm text-slate-400">动画模板 <span className="text-[11px] text-slate-600">· 镜头入场+转场风格，每镜头自动变化</span></span>
+          <div className="mt-2 grid grid-cols-4 gap-2">
+            {draftTemplates.map((t) => {
+              const on = t.key === 'none'
+                ? form.enable_animations === false
+                : (form.enable_animations !== false && (form.draft_template || 'guofeng') === t.key)
+              return (
+                <button key={t.key} type="button"
+                  onClick={() => set(t.key === 'none'
+                    ? { enable_animations: false, draft_template: 'none' }
+                    : { enable_animations: true, draft_template: t.key })}
+                  className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
+                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'}`}>
+                  <span className={`text-[13px] font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{t.name}</span>
+                  <span className="block text-[10px] text-slate-500 truncate" title={t.desc}>{t.desc}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         <div className="border-t border-slate-800 pt-4">
           <button type="button" onClick={() => setShowAdvanced((v) => !v)}
             className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200 transition-colors">
             <span className={`transition-transform ${showAdvanced ? 'rotate-90' : ''}`}>▶</span>
-            高级选项（模块 / 成本 / 字幕动效）
+            高级选项（模块 / 成本 / 字幕）
           </button>
 
           {showAdvanced && (
@@ -698,29 +721,7 @@ export default function TaskCreatePage() {
                     <input type="checkbox" checked={form.enable_subtitles}
                       onChange={(e) => set({ enable_subtitles: e.target.checked })} /> 字幕
                   </label>
-                  <label className="flex flex-col gap-1 text-sm text-slate-300">
-                    <span className="text-xs text-slate-400">动画模板</span>
-                    <select
-                      value={form.enable_animations === false ? 'none' : (form.draft_template || 'guofeng')}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        // 选「关闭」= 关动效；其余模板 = 开动效 + 设模板
-                        set(v === 'none'
-                          ? { enable_animations: false, draft_template: 'none' }
-                          : { enable_animations: true, draft_template: v })
-                      }}
-                      className="bg-slate-950/60 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-brand-500/60 min-w-[9rem]">
-                      {draftTemplates.map((t) => (
-                        <option key={t.key} value={t.key}>{t.name}</option>
-                      ))}
-                    </select>
-                  </label>
                 </div>
-                {form.enable_animations !== false && form.draft_template && (
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    {draftTemplates.find((t) => t.key === form.draft_template)?.desc}
-                  </p>
-                )}
               </div>
             </div>
           )}
