@@ -322,10 +322,9 @@ export default function TaskCreatePage() {
               </button>
             )}
           </div>
-          <div className="mt-2 grid grid-cols-3 gap-2">
+          <div className="mt-2 grid grid-cols-2 gap-2">
             {([
-              ['same_topic', '同题材二创', '拆原文结构 → 复刻骨架重写同题材'],
-              ['template_topic', '套爆款结构', '学这条结构 → 关键词换你的新主题'],
+              ['same_topic', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
               ['none', '直接改写', '不拆结构，按常规套路改写'],
             ] as const).map(([key, name, desc]) => {
               const on = (form.creation_mode || 'same_topic') === key
@@ -340,9 +339,6 @@ export default function TaskCreatePage() {
               )
             })}
           </div>
-          {form.creation_mode === 'template_topic' && (
-            <p className="mt-1 text-[11px] text-amber-400/80">套爆款结构：上方文案填你看中的爆款样板，下方「关键词」填你要做的新主题。</p>
-          )}
           {analyzeErr && <p className="mt-1 text-[11px] text-red-400">{analyzeErr}</p>}
           {structure && (
             <div className="mt-2 p-3 rounded-xl bg-slate-900/60 border border-slate-700 space-y-1.5 text-[12px]">

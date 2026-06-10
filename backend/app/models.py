@@ -44,7 +44,7 @@ class Task(Base):
     enable_animations: Mapped[bool] = mapped_column(Boolean, default=True)
     # 草稿动画模板：none/classic/narration/lively/cinematic/random（见 draft_templates.py）
     draft_template: Mapped[str] = mapped_column(String(20), default="classic")
-    # 二创方式：same_topic（拆原文结构重写）/ template_topic（套爆款结构换主题）/ none（不拆结构直接改写）
+    # 二创方式：same_topic（拆爆款结构骨架 → 按骨架重写）/ none（不拆结构直接改写）
     creation_mode: Mapped[str] = mapped_column(String(16), default="same_topic")
     # 处理模式：full_auto（完整跑）/ semi_auto（不改写，仅分句）/ direct（不改写、机械切分）
     processing_mode: Mapped[str] = mapped_column(String(12), default="full_auto")

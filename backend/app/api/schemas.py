@@ -29,7 +29,7 @@ class TaskCreate(BaseModel):
     enable_subtitles: bool = True
     enable_animations: bool = True
     draft_template: str = "classic"      # none|classic|narration|lively|cinematic|random
-    creation_mode: str = "same_topic"    # same_topic|template_topic|none
+    creation_mode: str = "same_topic"    # same_topic(拆结构二创) | none(不拆直接改写)
     processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
     pause_mode: str = "key_nodes"        # none | key_nodes | every_step | custom
     pause_steps: list[str] = Field(default_factory=list)  # custom 模式勾选的步骤
