@@ -99,6 +99,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         cost_limit=body.cost_limit, time_limit=body.time_limit,
         enable_subtitles=body.enable_subtitles, enable_animations=body.enable_animations,
         draft_template=body.draft_template or "classic",
+        creation_mode=body.creation_mode or "same_topic",
         processing_mode=body.processing_mode, pause_mode=body.pause_mode,
         pause_steps=body.pause_steps or None,
         status="pending",
@@ -107,6 +108,26 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
     db.commit()
     scheduler.submit(task.id, _run_pipeline_bg, task.id)
     return task
+
+
+@router.post("/tasks/analyze-structure")
+def analyze_structure(body: dict, db: Session = Depends(get_db)):
+    """拆解一段爆款文案的结构骨架，供创建任务前预览（不创建任务、不入库）。
+    入参 {text}。返回 {structure: {...}}。文案过短或未配 LLM 时返回明确错误。"""
+    from app.core.security import decrypt
+    from app.modules import text_modules as tm
+    text = (body.get("text") or "").strip()
+    if len(text) < 20:
+        raise HTTPException(status_code=400, detail="文案太短，至少 20 字才能拆解结构")
+    cfg = db.get(Config, 1)
+    llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+    if not llm_key:
+        raise HTTPException(status_code=400, detail="未配置大模型 API Key，无法拆解结构")
+    try:
+        out, _r = tm.run_structure(cfg.llm_provider, cfg.llm_model, llm_key, text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"结构拆解失败：{e}"[:200])
+    return out
 
 
 @router.get("/tasks", response_model=TaskListOut)
@@ -357,6 +378,7 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
             "target_audience": task.target_audience, "monetization_mode": task.monetization_mode,
             "enable_subtitles": task.enable_subtitles, "enable_animations": task.enable_animations,
             "draft_template": getattr(task, "draft_template", "classic"),
+            "creation_mode": getattr(task, "creation_mode", "same_topic"),
             "processing_mode": task.processing_mode, "pause_mode": task.pause_mode,
             "pause_steps": task.pause_steps, "paused_at": task.paused_at,
             "aspect_ratio": task.aspect_ratio, "reference_image": task.reference_image,

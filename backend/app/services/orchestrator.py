@@ -189,13 +189,26 @@ def run_pipeline(db: Session, task_id: str):
 
         # B 改写（仅 full_auto 跑；semi_auto/direct 直接用清洗稿，不改写）
         if task.processing_mode == "full_auto":
+            # S2 结构拆解：creation_mode != none 时，先拆出爆款结构骨架，
+            # 供 B 改写复刻其节奏。拆解失败不阻断（骨架为空即退回普通改写）。
+            structure = None
+            if getattr(task, "creation_mode", "same_topic") != "none":
+                try:
+                    s_out = _llm_step(db, task, cfg, llm_key, "S2",
+                                      lambda: tm.run_structure(cfg.llm_provider, cfg.llm_model,
+                                                               llm_key, cleaned),
+                                      started, pausable=False)
+                    structure = (s_out or {}).get("structure") or None
+                except Exception:
+                    structure = None
             b_out = _llm_step(db, task, cfg, llm_key, "B",
                               lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
                                                      cleaned, task.target_audience, task.title,
                                                      track=task.track,
                                                      monetization_mode=task.monetization_mode,
                                                      rewrite_strength=task.rewrite_strength,
-                                                     narrative_perspective=task.narrative_perspective),
+                                                     narrative_perspective=task.narrative_perspective,
+                                                     structure_guide=structure),
                               started)
             script = b_out["script"]
         else:

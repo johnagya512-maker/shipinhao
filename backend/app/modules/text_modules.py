@@ -59,11 +59,46 @@ def run_gen_title(provider, model, key, script, keyword=None):
     return title[:30], r
 
 
+def run_structure(provider, model, key, source_text):
+    """拆解爆款文案结构，返回 ({structure: {...骨架...}}, LLMResult)。
+    骨架是 why_viral/hook/structure/ending/rhythm/duration_hint 的 JSON。
+    解析失败时返回空骨架（不阻断流程，B 改写自动退回无骨架模式）。"""
+    prompt = _render(prompts.MODULE_STRUCTURE, source_text=source_text)
+    r: LLMResult = call_llm(provider, model, key, prompt)
+    try:
+        data = _extract_json(r.text)
+    except Exception:
+        data = {}
+    return {"structure": data}, r
+
+
+def _structure_to_guide(structure: dict) -> str:
+    """把结构骨架 dict 渲染成给 B 改写看的中文指导文本。空则返回空串。"""
+    if not structure:
+        return ""
+    lines = []
+    if structure.get("hook"):
+        h = structure["hook"]
+        lines.append(f"- 开头钩子：用「{h.get('type','')}」式开场（{h.get('function','')}）")
+    parts = structure.get("structure") or []
+    if parts:
+        seq = " → ".join(f"{p.get('part','')}({p.get('emotion','')}/{p.get('pace','')})" for p in parts)
+        lines.append(f"- 中段结构顺序：{seq}")
+    if structure.get("ending"):
+        e = structure["ending"]
+        lines.append(f"- 结尾方式：「{e.get('type','')}」（{e.get('function','')}）")
+    if structure.get("rhythm"):
+        lines.append(f"- 整体节奏：{structure['rhythm']}")
+    return "\n".join(lines)
+
+
 def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性", title=None,
                 track="character_story", monetization_mode="revenue_share",
-                rewrite_strength="medium", narrative_perspective="auto"):
+                rewrite_strength="medium", narrative_perspective="auto",
+                structure_guide=None):
     """B 改写。按赛道选提示词；人物故事赛道按变现模式切换结尾引导。
-    rewrite_strength/narrative_perspective 作为附加指令注入提示词尾部。"""
+    rewrite_strength/narrative_perspective 作为附加指令注入提示词尾部。
+    structure_guide（dict 骨架）非空时，要求改写严格复刻该爆款结构。"""
     from app.modules import tracks
     extra = _rewrite_directives(rewrite_strength, narrative_perspective)
     tk = tracks.get_track(track)
@@ -87,6 +122,10 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
                          ending_instruction=ending)
     if extra:
         prompt = f"{prompt}\n\n【额外要求】\n{extra}"
+    guide = _structure_to_guide(structure_guide or {})
+    if guide:
+        prompt = (f"{prompt}\n\n【爆款结构骨架——请严格按此结构组织文案，复刻它的钩子、"
+                  f"节奏与收尾方式，但内容用上面的正文】\n{guide}")
     r = call_llm(provider, model, key, prompt)
     return {"script": r.text.strip()}, r
 

@@ -32,6 +32,7 @@ export interface TaskCreate {
   enable_subtitles?: boolean
   enable_animations?: boolean
   draft_template?: string
+  creation_mode?: string
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]
@@ -202,4 +203,14 @@ export interface DraftTemplate {
   key: string
   name: string
   desc: string
+}
+
+// 爆款文案结构骨架（拆解输出）
+export interface ViralStructure {
+  why_viral?: string
+  hook?: { type?: string; text?: string; function?: string }
+  structure?: { part?: string; function?: string; emotion?: string; pace?: string }[]
+  ending?: { type?: string; text?: string; function?: string }
+  rhythm?: string
+  duration_hint?: string
 }

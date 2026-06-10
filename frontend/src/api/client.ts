@@ -2,7 +2,7 @@
 import type {
   TaskCreate, TaskOut, EstimateOut, ConfigOut, ConfigUpdate,
   TaskListOut, TaskResultsOut, Scene, GeneratedImage, QueueStats,
-  VoiceItem, VoiceCategory, DraftTemplate,
+  VoiceItem, VoiceCategory, DraftTemplate, ViralStructure,
 } from './types'
 
 // API 根地址：
@@ -113,6 +113,11 @@ export const api = {
   // 草稿动画模板清单
   getDraftTemplates: () =>
     request<{ templates: DraftTemplate[] }>('/config/draft-templates'),
+  // 拆解爆款文案结构（创建任务前预览）
+  analyzeStructure: (text: string) =>
+    request<{ structure: ViralStructure }>('/tasks/analyze-structure', {
+      method: 'POST', body: JSON.stringify({ text }),
+    }),
   // 收藏/取消收藏音色
   toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>
     request<{ favorites: string[] }>('/config/favorites', {

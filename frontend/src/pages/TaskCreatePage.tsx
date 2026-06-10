@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
-import type { TaskCreate, EstimateOut, ConfigOut, VoiceItem, VoiceCategory, DraftTemplate } from '../api/types'
+import type { TaskCreate, EstimateOut, ConfigOut, VoiceItem, VoiceCategory, DraftTemplate, ViralStructure } from '../api/types'
 import VoicePicker from '../components/VoicePicker'
 import { useVoicePreview } from '../hooks/useVoicePreview'
 
@@ -129,6 +129,7 @@ export default function TaskCreatePage() {
     monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16',
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     draft_template: 'guofeng',
+    creation_mode: 'same_topic',
     processing_mode: 'full_auto', pause_mode: 'none', pause_steps: [],
   })
   const [est, setEst] = useState<EstimateOut | null>(null)
@@ -148,6 +149,10 @@ export default function TaskCreatePage() {
   const [favorites, setFavorites] = useState<string[]>([])
   const [showVoicePicker, setShowVoicePicker] = useState(false)
   const [draftTemplates, setDraftTemplates] = useState<DraftTemplate[]>([])
+  // 爆款结构拆解预览
+  const [structure, setStructure] = useState<ViralStructure | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzeErr, setAnalyzeErr] = useState('')
   const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
 
   // 载入配置，用于"凭证未配置"提示。
@@ -213,6 +218,20 @@ export default function TaskCreatePage() {
 
   function hasInput() {
     return Boolean((form.douyin_url ?? '').trim() || (form.transcript ?? '').trim())
+  }
+
+  async function doAnalyzeStructure() {
+    const text = (form.transcript ?? '').trim()
+    if (text.length < 20) { setAnalyzeErr('请先在上方粘贴文案（至少 20 字）'); return }
+    setAnalyzing(true); setAnalyzeErr(''); setStructure(null)
+    try {
+      const r = await api.analyzeStructure(text)
+      setStructure(r.structure)
+    } catch (e) {
+      setAnalyzeErr((e as ApiError).message)
+    } finally {
+      setAnalyzing(false)
+    }
   }
 
   async function doEstimate() {
@@ -291,6 +310,68 @@ export default function TaskCreatePage() {
               onChange={(e) => { set({ transcript: e.target.value }); setEst(null) }} />
           </label>
         )}
+
+        {/* 二创方式：拆解爆款结构 → 复刻骨架重写。核心卖点。 */}
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-400">二创方式 <span className="text-[11px] text-slate-600">· 拆解爆款结构再仿写</span></span>
+            {inputMode === 'transcript' && (
+              <button type="button" onClick={doAnalyzeStructure} disabled={analyzing}
+                className="text-[12px] px-2.5 py-1 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
+                {analyzing ? '拆解中…' : '🔍 拆解结构预览'}
+              </button>
+            )}
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {([
+              ['same_topic', '同题材二创', '拆原文结构 → 复刻骨架重写同题材'],
+              ['template_topic', '套爆款结构', '学这条结构 → 关键词换你的新主题'],
+              ['none', '直接改写', '不拆结构，按常规套路改写'],
+            ] as const).map(([key, name, desc]) => {
+              const on = (form.creation_mode || 'same_topic') === key
+              return (
+                <button key={key} type="button" onClick={() => set({ creation_mode: key })}
+                  className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
+                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'}`}>
+                  <span className={`text-[13px] font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{name}</span>
+                  <span className="block text-[10px] text-slate-500 leading-tight mt-0.5">{desc}</span>
+                </button>
+              )
+            })}
+          </div>
+          {form.creation_mode === 'template_topic' && (
+            <p className="mt-1 text-[11px] text-amber-400/80">套爆款结构：上方文案填你看中的爆款样板，下方「关键词」填你要做的新主题。</p>
+          )}
+          {analyzeErr && <p className="mt-1 text-[11px] text-red-400">{analyzeErr}</p>}
+          {structure && (
+            <div className="mt-2 p-3 rounded-xl bg-slate-900/60 border border-slate-700 space-y-1.5 text-[12px]">
+              {structure.why_viral && (
+                <p className="text-brand-300">💡 {structure.why_viral}</p>
+              )}
+              {structure.hook && (
+                <p className="text-slate-300"><span className="text-slate-500">开头钩子·{structure.hook.type}：</span>{structure.hook.text}</p>
+              )}
+              {(structure.structure?.length ?? 0) > 0 && (
+                <p className="text-slate-300">
+                  <span className="text-slate-500">结构：</span>
+                  {structure.structure!.map((p, i) => (
+                    <span key={i} className="inline-block mr-1.5">
+                      {p.part}<span className="text-slate-600">({p.emotion}/{p.pace})</span>{i < structure.structure!.length - 1 ? ' →' : ''}
+                    </span>
+                  ))}
+                </p>
+              )}
+              {structure.ending && (
+                <p className="text-slate-300"><span className="text-slate-500">结尾·{structure.ending.type}：</span>{structure.ending.text}</p>
+              )}
+              {structure.rhythm && (
+                <p className="text-slate-400"><span className="text-slate-500">节奏：</span>{structure.rhythm}{structure.duration_hint ? ` · ${structure.duration_hint}` : ''}</p>
+              )}
+              <p className="text-[10px] text-slate-600 pt-0.5">生成时会按这个结构骨架来组织新文案。</p>
+            </div>
+          )}
+        </div>
 
         <div className="grid grid-cols-3 gap-4">
           <label className="block">
