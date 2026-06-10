@@ -73,22 +73,41 @@ def run_structure(provider, model, key, source_text):
 
 
 def _structure_to_guide(structure: dict) -> str:
-    """把结构骨架 dict 渲染成给 B 改写看的中文指导文本。空则返回空串。"""
+    """把结构骨架 dict 渲染成给 B 改写看的【手法级仿写指导】。空则返回空串。
+    带上 why_viral、钩子原句+手法、逐段手法+心理、结尾原句+手法，让改写能照手法复刻。"""
     if not structure:
         return ""
     lines = []
+    if structure.get("why_viral"):
+        lines.append(f"◆ 这条为什么爆：{structure['why_viral']}")
+        lines.append("  （改写时要复刻这个'爆点心理'，不只是套结构）")
     if structure.get("hook"):
         h = structure["hook"]
-        lines.append(f"- 开头钩子：用「{h.get('type','')}」式开场（{h.get('function','')}）")
+        lines.append(f"◆ 开头钩子（{h.get('type','')}）")
+        if h.get("text"):
+            lines.append(f"  范例原句：{h['text']}")
+        if h.get("technique"):
+            lines.append(f"  手法照搬：{h['technique']}")
+        lines.append("  → 用同样的手法，给新内容写一个全新钩子（不要照抄原句，照搬的是'招式'）")
     parts = structure.get("structure") or []
     if parts:
-        seq = " → ".join(f"{p.get('part','')}({p.get('emotion','')}/{p.get('pace','')})" for p in parts)
-        lines.append(f"- 中段结构顺序：{seq}")
+        lines.append("◆ 中段逐段手法（按顺序对照着写）：")
+        for i, p in enumerate(parts, 1):
+            seg = f"  {i}. 【{p.get('part','')}·{p.get('emotion','')}·{p.get('pace','')}】"
+            if p.get("technique"):
+                seg += f" 手法：{p['technique']}"
+            if p.get("psychology"):
+                seg += f"；要让观众感到：{p['psychology']}"
+            lines.append(seg)
     if structure.get("ending"):
         e = structure["ending"]
-        lines.append(f"- 结尾方式：「{e.get('type','')}」（{e.get('function','')}）")
+        lines.append(f"◆ 结尾（{e.get('type','')}）")
+        if e.get("text"):
+            lines.append(f"  范例原句：{e['text']}")
+        if e.get("technique"):
+            lines.append(f"  手法照搬：{e['technique']}")
     if structure.get("rhythm"):
-        lines.append(f"- 整体节奏：{structure['rhythm']}")
+        lines.append(f"◆ 整体节奏：{structure['rhythm']}")
     return "\n".join(lines)
 
 
@@ -124,8 +143,16 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
         prompt = f"{prompt}\n\n【额外要求】\n{extra}"
     guide = _structure_to_guide(structure_guide or {})
     if guide:
-        prompt = (f"{prompt}\n\n【爆款结构骨架——请严格按此结构组织文案，复刻它的钩子、"
-                  f"节奏与收尾方式，但内容用上面的正文】\n{guide}")
+        prompt = (f"{prompt}\n\n"
+                  f"【★核心要求：学它的爆款手法，用全新的话重写★】\n"
+                  f"下面是从原文里拆出的'爆款手法说明书'。注意：原文本身就是这套手法的范例，"
+                  f"但你绝不能照抄或微调原文——那样等于搬运。你要做的是：\n"
+                  f"1) 看懂它每一步为什么抓人（钩子招式、叙事手法、情绪节奏、收尾）；\n"
+                  f"2) 用【完全不同的措辞和句子】把同样的'爆点'重新写一遍——"
+                  f"换开头的说法、换叙述角度、换句式，但保留人物事实与数据；\n"
+                  f"3) 目标：读起来是另一个人写的稿子，却同样有这条的钩子力和节奏感。\n"
+                  f"衡量标准：和原文逐句比对，措辞重合度尽量低，但'为什么爆'的心理机制一致。\n"
+                  f"{guide}")
     r = call_llm(provider, model, key, prompt)
     return {"script": r.text.strip()}, r
 
@@ -134,7 +161,8 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
 _STRENGTH_TEXT = {
     "light": "改写力度轻：尽量保留原文措辞与结构，仅做必要的口播顺滑化。",
     "medium": "",  # 默认，无附加约束
-    "strong": "改写力度强：大胆重组叙事、强化戏剧冲突与钩子，可显著改写措辞。",
+    "strong": "改写力度强：必须大改措辞与句式，换开头说法、换叙述角度、重组句子，"
+              "强化戏剧冲突与钩子。和原文逐句比，措辞要明显不同，但保留人物、事实、数据不变。",
 }
 _PERSPECTIVE_TEXT = {
     "auto": "",
