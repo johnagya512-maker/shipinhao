@@ -42,6 +42,8 @@ class Task(Base):
     time_limit: Mapped[int] = mapped_column(Integer, default=900)
     enable_subtitles: Mapped[bool] = mapped_column(Boolean, default=True)
     enable_animations: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 草稿动画模板：none/classic/narration/lively/cinematic/random（见 draft_templates.py）
+    draft_template: Mapped[str] = mapped_column(String(20), default="classic")
     # 处理模式：full_auto（完整跑）/ semi_auto（不改写，仅分句）/ direct（不改写、机械切分）
     processing_mode: Mapped[str] = mapped_column(String(12), default="full_auto")
     # 暂停确认：none（不停）/ key_nodes（关键节点）/ every_step（每步）/ custom（自定义步骤）

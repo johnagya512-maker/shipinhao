@@ -75,11 +75,15 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
     title = (task.title or "").strip()
     draft_name = f"{title}_{task_id[-6:]}" if title else task_id
     draft_name = _safe_name(draft_name)
+    # 动画模板 + 任务派生种子（草稿可复现：同任务重生成动画序列不变）
+    template = getattr(task, "draft_template", None) or "classic"
+    seed = int(task_id[-6:], 36) if task_id else 0
     try:
         r = jianying.build_draft(image_paths, weights, audio_path, segments, draft_dir,
                                  draft_name=draft_name, enable_subtitles=subs,
                                  enable_animations=anim,
-                                 jianying_dir=jianying_dir or None)
+                                 jianying_dir=jianying_dir or None,
+                                 template=template, seed=seed)
     except Exception as e:
         task.status = "failed"
         task.error_code = "E5001"

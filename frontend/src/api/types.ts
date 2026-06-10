@@ -31,6 +31,7 @@ export interface TaskCreate {
   time_limit?: number
   enable_subtitles?: boolean
   enable_animations?: boolean
+  draft_template?: string
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]
@@ -191,6 +192,13 @@ export interface VoiceItem {
 }
 
 export interface VoiceCategory {
+  key: string
+  name: string
+  desc: string
+}
+
+// 草稿动画模板（none/classic/narration/lively/cinematic/random）
+export interface DraftTemplate {
   key: string
   name: string
   desc: string

@@ -70,6 +70,13 @@ def list_voices(db: Session = Depends(get_db)):
             "probing": bool(key) and not avail}
 
 
+@router.get("/draft-templates")
+def list_draft_templates():
+    """草稿动画模板清单：返回 [{key, name, desc}]，供创建页选择。"""
+    from app.modules import draft_templates
+    return {"templates": draft_templates.list_templates()}
+
+
 @router.put("/favorites")
 def update_favorites(body: dict, db: Session = Depends(get_db)):
     """收藏/取消收藏音色。body: {voice_id, action: 'add'|'remove'}。返回最新收藏列表。"""

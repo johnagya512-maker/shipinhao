@@ -2,7 +2,7 @@
 import type {
   TaskCreate, TaskOut, EstimateOut, ConfigOut, ConfigUpdate,
   TaskListOut, TaskResultsOut, Scene, GeneratedImage, QueueStats,
-  VoiceItem, VoiceCategory,
+  VoiceItem, VoiceCategory, DraftTemplate,
 } from './types'
 
 // API 根地址：
@@ -110,6 +110,9 @@ export const api = {
   // 音色库：分类 + 候选音色清单（每个带 available 探活状态）。probing=true 表示后台还在探活，稍后可重取。
   getVoices: () =>
     request<{ categories: VoiceCategory[]; voices: VoiceItem[]; probing?: boolean }>('/config/voices'),
+  // 草稿动画模板清单
+  getDraftTemplates: () =>
+    request<{ templates: DraftTemplate[] }>('/config/draft-templates'),
   // 收藏/取消收藏音色
   toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>
     request<{ favorites: string[] }>('/config/favorites', {

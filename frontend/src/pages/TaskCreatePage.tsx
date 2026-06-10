@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
-import type { TaskCreate, EstimateOut, ConfigOut, VoiceItem, VoiceCategory } from '../api/types'
+import type { TaskCreate, EstimateOut, ConfigOut, VoiceItem, VoiceCategory, DraftTemplate } from '../api/types'
 import VoicePicker from '../components/VoicePicker'
 import { useVoicePreview } from '../hooks/useVoicePreview'
 
@@ -128,6 +128,7 @@ export default function TaskCreatePage() {
     target_audience: '50+女性', track: 'character_story',
     monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16',
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
+    draft_template: 'narration',
     processing_mode: 'full_auto', pause_mode: 'none', pause_steps: [],
   })
   const [est, setEst] = useState<EstimateOut | null>(null)
@@ -146,6 +147,7 @@ export default function TaskCreatePage() {
   const [voiceCats, setVoiceCats] = useState<VoiceCategory[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const [showVoicePicker, setShowVoicePicker] = useState(false)
+  const [draftTemplates, setDraftTemplates] = useState<DraftTemplate[]>([])
   const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
 
   // 载入配置，用于"凭证未配置"提示。
@@ -166,6 +168,8 @@ export default function TaskCreatePage() {
   }, [])
   // 载入 BGM 列表（配置了 bgm 目录时才有内容）。
   useEffect(() => { api.bgmList().then((r) => setBgmFiles(r.files)).catch(() => {}) }, [])
+  // 载入草稿动画模板清单。
+  useEffect(() => { api.getDraftTemplates().then((r) => setDraftTemplates(r.templates)).catch(() => {}) }, [])
 
   // 检测关键凭证是否缺失（LLM 必需；配图视模块而定）。
   const missingKeys: string[] = []
@@ -694,11 +698,29 @@ export default function TaskCreatePage() {
                     <input type="checkbox" checked={form.enable_subtitles}
                       onChange={(e) => set({ enable_subtitles: e.target.checked })} /> 字幕
                   </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-300">
-                    <input type="checkbox" checked={form.enable_animations}
-                      onChange={(e) => set({ enable_animations: e.target.checked })} /> 动效
+                  <label className="flex flex-col gap-1 text-sm text-slate-300">
+                    <span className="text-xs text-slate-400">动画模板</span>
+                    <select
+                      value={form.enable_animations === false ? 'none' : (form.draft_template || 'narration')}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        // 选「关闭」= 关动效；其余模板 = 开动效 + 设模板
+                        set(v === 'none'
+                          ? { enable_animations: false, draft_template: 'none' }
+                          : { enable_animations: true, draft_template: v })
+                      }}
+                      className="bg-slate-950/60 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-brand-500/60 min-w-[9rem]">
+                      {draftTemplates.map((t) => (
+                        <option key={t.key} value={t.key}>{t.name}</option>
+                      ))}
+                    </select>
                   </label>
                 </div>
+                {form.enable_animations !== false && form.draft_template && (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {draftTemplates.find((t) => t.key === form.draft_template)?.desc}
+                  </p>
+                )}
               </div>
             </div>
           )}
