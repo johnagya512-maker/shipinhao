@@ -8,6 +8,7 @@ import type { TaskResultsOut, TaskStatus } from '../api/types'
 import StepTimeline from '../components/StepTimeline'
 import SceneGallery from '../components/SceneGallery'
 import ProductPreview from '../components/ProductPreview'
+import ScriptReview from '../components/ScriptReview'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '待处理', processing: '处理中', awaiting_confirm: '待确认', awaiting_audio: '待上传音频',
@@ -150,6 +151,8 @@ export default function TaskDetailPage() {
   const hasDownload = task.status === 'completed' && !inJianying
   const showCompletedTip = task.status === 'completed'
   const awaitingConfirm = task.status === 'awaiting_confirm'
+  // 停在文案步（B）：用聚焦的文案确认窗口，而非通用确认卡片。
+  const awaitingScript = awaitingConfirm && task.paused_at === 'B'
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -212,8 +215,8 @@ export default function TaskDetailPage() {
             )}
           </div>
 
-          {/* 待确认：继续按钮 */}
-          {awaitingConfirm && (
+          {/* 待确认：通用继续按钮（文案步 B 用右栏聚焦窗口，这里不重复显示） */}
+          {awaitingConfirm && !awaitingScript && (
             <div className="card !p-4 border border-brand-500/30">
               <div className="text-sm font-semibold text-brand-300 mb-1">已暂停 · 等待确认</div>
               {task.paused_at && <p className="text-xs text-slate-400 mb-2">停在：{STEP_LABEL[task.paused_at] || task.paused_at} 之后</p>}
@@ -259,6 +262,9 @@ export default function TaskDetailPage() {
 
         {/* ── 右栏：分页工作区 ── */}
         <main>
+          {awaitingScript && (
+            <ScriptReview taskId={id} modules={modules} onChanged={load} />
+          )}
           {showCompletedTip && (
             <div className="mb-4 px-4 py-2.5 rounded-lg text-sm bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
               {inJianying ? '✅ 剪映草稿已生成并导入草稿箱，打开剪映即可看到并编辑。'

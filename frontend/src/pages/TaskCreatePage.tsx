@@ -130,7 +130,7 @@ export default function TaskCreatePage() {
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
-    processing_mode: 'full_auto', pause_mode: 'none', pause_steps: [],
+    processing_mode: 'full_auto', pause_mode: 'key_nodes', pause_steps: [],
   })
   const [est, setEst] = useState<EstimateOut | null>(null)
   const [estimating, setEstimating] = useState(false)
