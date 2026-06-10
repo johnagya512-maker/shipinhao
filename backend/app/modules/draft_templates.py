@@ -13,6 +13,9 @@ import random
 #   intro_pool   逐镜头从中按种子选一个入场动画（枚举名）
 #   transitions  相邻镜头间的转场池（枚举名），None=不加转场
 #   subtitle     字幕样式 dict（传给 jianying 构造 TextStyle），None=默认样式
+#
+# 中间 5 套照竞品「经典组合推荐」表复刻（古风沉稳/左右节奏/故事画风/强节奏/对角动感），
+# 动画名用剪映库里意思最接近的真实枚举（竞品叫法与剪映枚举名不完全一致）。
 TEMPLATES: dict[str, dict] = {
     "none": {
         "name": "关闭",
@@ -28,35 +31,53 @@ TEMPLATES: dict[str, dict] = {
         "transitions": None,
         "subtitle": None,
     },
-    "narration": {
-        "name": "沉稳叙事",
-        "desc": "缓慢推拉 · 叠化转场 · 适合讲书解说",
-        "intro_pool": ["放大", "缩小", "轻微放大"],
+    # ── 竞品推荐组合 ──
+    "guofeng": {
+        "name": "古风沉稳",
+        "desc": "缩放+形变缩小 · 沉稳大气 · 古风/讲书",
+        "intro_pool": ["动感放大", "动感缩小"],
         "transitions": ["叠化"],
         "subtitle": {"size": 8.0, "color": (1.0, 1.0, 1.0),
                      "border": (0.0, 0.0, 0.0)},
     },
-    "lively": {
-        "name": "活泼带货",
-        "desc": "滑动+翻转 · 闪黑推近 · 适合带货种草",
-        "intro_pool": ["放大", "向上滑动", "向下滑动", "镜像翻转"],
+    "zuoyou": {
+        "name": "左右节奏",
+        "desc": "左右拉镜交替 · 横向律动 · 节奏感",
+        "intro_pool": ["向左滑动", "向右滑动"],
+        "transitions": ["叠化"],
+        "subtitle": {"size": 8.0, "color": (1.0, 1.0, 1.0),
+                     "border": (0.0, 0.0, 0.0)},
+    },
+    "gushi": {
+        "name": "故事画风",
+        "desc": "上移+右移+缩放 · 娓娓道来 · 故事感",
+        "intro_pool": ["向上滑动", "向右滑动", "动感放大"],
+        "transitions": ["叠化"],
+        "subtitle": None,
+    },
+    "qiangjiezou": {
+        "name": "强节奏感",
+        "desc": "抖入放大+翻转+旋转 · 强冲击 · 带货卡点",
+        "intro_pool": ["抖动变焦", "镜像翻转", "旋转"],
         "transitions": ["闪黑", "推近"],
         "subtitle": {"size": 9.0, "color": (1.0, 1.0, 1.0),
                      "border": (0.0, 0.0, 0.0)},
     },
-    "cinematic": {
-        "name": "电影感",
-        "desc": "翻转+旋转 · 叠化拉远 · 适合故事情感",
-        "intro_pool": ["镜像翻转", "旋转", "轻微放大"],
-        "transitions": ["叠化", "拉远"],
-        "subtitle": None,
+    "duijiao": {
+        "name": "对角动感",
+        "desc": "左下+右下甩入 · 对角线动感 · 活泼",
+        "intro_pool": ["向左下甩入", "向右下甩入"],
+        "transitions": ["闪黑"],
+        "subtitle": {"size": 9.0, "color": (1.0, 1.0, 1.0),
+                     "border": (0.0, 0.0, 0.0)},
     },
     "random": {
         "name": "随机混搭",
         "desc": "全池随机 · 每镜头不同 · 要变化就选它",
-        "intro_pool": ["放大", "缩小", "轻微放大", "向上滑动", "向下滑动",
-                       "镜像翻转", "旋转", "渐显"],
-        "transitions": ["叠化", "闪黑", "推近", "拉远", "色彩溶解"],
+        "intro_pool": ["动感放大", "动感缩小", "向左滑动", "向右滑动",
+                       "向上滑动", "抖动变焦", "镜像翻转", "旋转",
+                       "向左下甩入", "向右下甩入"],
+        "transitions": ["叠化", "闪黑", "推近", "色彩溶解"],
         "subtitle": None,
     },
 }

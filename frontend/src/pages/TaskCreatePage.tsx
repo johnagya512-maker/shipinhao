@@ -128,7 +128,7 @@ export default function TaskCreatePage() {
     target_audience: '50+女性', track: 'character_story',
     monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16',
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
-    draft_template: 'narration',
+    draft_template: 'guofeng',
     processing_mode: 'full_auto', pause_mode: 'none', pause_steps: [],
   })
   const [est, setEst] = useState<EstimateOut | null>(null)
@@ -701,7 +701,7 @@ export default function TaskCreatePage() {
                   <label className="flex flex-col gap-1 text-sm text-slate-300">
                     <span className="text-xs text-slate-400">动画模板</span>
                     <select
-                      value={form.enable_animations === false ? 'none' : (form.draft_template || 'narration')}
+                      value={form.enable_animations === false ? 'none' : (form.draft_template || 'guofeng')}
                       onChange={(e) => {
                         const v = e.target.value
                         // 选「关闭」= 关动效；其余模板 = 开动效 + 设模板
