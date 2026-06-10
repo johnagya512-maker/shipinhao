@@ -18,6 +18,7 @@ from app.services import asr as asr_svc
 from app.services import tts as tts_svc
 from app.modules import text_modules as tm
 from app.modules import image_module as im
+from app.modules import tracks
 from app.modules.retry import with_retry
 
 LLM_RETRY = 2
@@ -92,6 +93,8 @@ def _save_result(db: Session, task_id: str, module: str, status: str,
     if not mr:
         mr = ModuleResult(task_id=task_id, module=module)
         db.add(mr)
+    if mr.started_at is None:
+        mr.started_at = datetime.utcnow()
     mr.status = status
     mr.output = output
     mr.cost = cost
@@ -140,6 +143,9 @@ def run_pipeline(db: Session, task_id: str):
     task = db.get(Task, task_id)
     cfg = db.get(Config, 1)
     if not task or not cfg:
+        return
+    # 排队期间可能已被取消：轮到执行时若已是终态，直接跳过。
+    if task.status in ("cancelled", "completed", "failed"):
         return
     if cost_svc.daily_cap_reached(db):
         _fail(db, task, "E2003", "每日成本上限已达")
@@ -195,6 +201,19 @@ def run_pipeline(db: Session, task_id: str):
         else:
             script = cleaned
 
+        # 自动命名：用户没填标题时，让 LLM 读定稿文案生成一个钩子短标题，
+        # 用于剪映草稿箱/下载文件名一眼识别（如「屠呦呦·190次失败」）。
+        # 锦上添花，失败不阻断出片——异常时退回关键词。
+        if not (task.title or "").strip():
+            try:
+                gen_title, _tr = tm.run_gen_title(cfg.llm_provider, cfg.llm_model,
+                                                  llm_key, script, task.keyword)
+                task.title = (gen_title or task.keyword or "").strip() or None
+                db.commit()
+            except Exception:
+                task.title = task.title or (task.keyword or None)
+                db.commit()
+
         # H 合规闸门（强制，按赛道词库；三种处理模式都跑——保留合规兜底）
         h_out = _llm_step(db, task, cfg, llm_key, "H",
                           lambda: tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
@@ -248,26 +267,49 @@ def run_pipeline(db: Session, task_id: str):
                 prompts_list = [(p["prompt"], p["sub_type"], Path(p["out_path"]), p["duration"])
                                 for p in existing_p.output["prompts"]]
             else:
-                # 画面脚本（"SB"）：先把口播稿转成 N 条视觉化分镜描述，让配图有镜头变化、
-                # 避免每张图雷同。失败不阻断——build_image_prompts 会回退到 segment 截字。
+                # 反推人物特征（"CP"）：先于画面脚本。有参考图时用视觉模型看一次参考图，
+                # 生成稳定外貌特征文字，供 SB 把人物特征写进 has_character 分镜的 desc_prompt
+                # （文字锚定角色一致性，不再把参考图当 img2img 底图）。失败不阻断。
+                character_desc = None
+                if task.reference_image:
+                    try:
+                        from app.services.image import _encode_reference
+                        ref_uri = _encode_reference(task.reference_image)
+                        if ref_uri:
+                            cp_out = _llm_step(db, task, cfg, llm_key, "CP",
+                                               lambda: tm.run_character_profile(
+                                                   cfg.image_provider, cfg.vision_model,
+                                                   img_key, ref_uri),
+                                               started)
+                            character_desc = (cp_out.get("profile") or "").strip() or None
+                    except Exception as e:
+                        _save_result(db, task.id, "CP", "failed", output={"error": str(e)})
+
+                # 画面脚本（"SB"）：把口播稿转成 N 个分镜，每个含 cap/desc_prompt/has_character，
+                # 让配图有镜头变化、贴合文案、人物按需出场。含质检（雷同尾巴自动打回重写）。
+                # 失败不阻断——build_image_prompts 会回退到 segment 截字。
                 scenes = None
                 try:
                     sb_out = _llm_step(db, task, cfg, llm_key, "SB",
                                        lambda: tm.run_storyboard(cfg.llm_provider, cfg.llm_model,
                                                                  llm_key, script, n_scenes=max(1, n_images - 2),
-                                                                 rewrite_focus=tracks.get_track(task.track).get("rewrite_focus", "")),
+                                                                 rewrite_focus=tracks.get_track(task.track).get("rewrite_focus", ""),
+                                                                 character_desc=character_desc),
                                        started)
                     scenes = sb_out.get("scenes") or None
                 except Exception as e:
                     _save_result(db, task.id, "SB", "failed", output={"error": str(e)})
+
                 prompts_list = im.build_image_prompts(book_info, segments, out_dir,
                                                       image_count=n_images,
                                                       track=task.track, image_style=task.image_style,
-                                                      scenes=scenes)
+                                                      scenes=scenes, character_desc=character_desc)
+                # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑。
                 _save_result(db, task.id, "P", "success",
                              output={"prompts": [{"prompt": p, "sub_type": st,
                                                   "out_path": str(op), "duration": sd}
-                                                 for (p, st, op, sd) in prompts_list]})
+                                                 for (p, st, op, sd) in prompts_list],
+                                     "scenes": scenes or []})
                 _maybe_pause(db, task, "P")
 
             # Step4 批量生图（"E"）
@@ -277,8 +319,7 @@ def run_pipeline(db: Session, task_id: str):
                     lambda: im.render_images(cfg.image_provider, img_key, prompts_list,
                                              model=cfg.image_model,
                                              concurrency=cfg.concurrency,
-                                             aspect_ratio=task.aspect_ratio,
-                                             reference_image=task.reference_image),
+                                             aspect_ratio=task.aspect_ratio),
                     IMAGE_RETRY)
                 img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * len(images)
                 cost_svc.record_cost(db, task.id, "E", cfg.image_provider, img_cost)
@@ -286,7 +327,9 @@ def run_pipeline(db: Session, task_id: str):
                 db.commit()
                 _save_result(db, task.id, "E", "success",
                              output={"images": [{"path": r.path, "sub_type": r.sub_type,
-                                                 "suggested_duration": r.suggested_duration} for r in images]},
+                                                 "suggested_duration": r.suggested_duration,
+                                                 "fallback": bool((r.meta or {}).get("fallback"))}
+                                                for r in images]},
                              cost=img_cost)
                 _check_limits(db, task, started)
                 _maybe_pause(db, task, "E")

@@ -1,11 +1,11 @@
-// 任务列表页：状态筛选 + 分页 + 自动轮询进行中任务。
+// 任务列表页：状态筛选 + 分页 + 自动轮询进行中任务 + 并发状态条。
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
-import type { TaskListItem, TaskStatus } from '../api/types'
+import type { TaskListItem, TaskStatus, QueueStats } from '../api/types'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
-  pending: '待处理', processing: '处理中', awaiting_confirm: '待确认', awaiting_audio: '待上传音频',
+  pending: '排队中', processing: '处理中', awaiting_confirm: '待确认', awaiting_audio: '待上传音频',
   completed: '已完成', blocked: '已拦截', failed: '失败', cancelled: '已取消',
 }
 const STATUS_COLOR: Record<TaskStatus, string> = {
@@ -31,6 +31,7 @@ export default function TaskListPage() {
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [queue, setQueue] = useState<QueueStats | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -43,15 +44,21 @@ export default function TaskListPage() {
     }
   }, [status, page])
 
-  useEffect(() => { load() }, [load])
+  const loadQueue = useCallback(async () => {
+    try { setQueue(await api.queueStats()) } catch { /* 忽略，非关键 */ }
+  }, [])
 
-  // 有进行中任务时每 4 秒轮询刷新状态。
+  useEffect(() => { load() }, [load])
+  useEffect(() => { loadQueue() }, [loadQueue])
+
+  // 有进行中/排队任务时每 4 秒轮询刷新状态与并发条。
   useEffect(() => {
     const active = items.some((t) => t.status === 'processing' || t.status === 'pending')
+      || (queue && (queue.running_count > 0 || queue.queued_count > 0))
     if (!active) return
-    const id = setInterval(load, 4000)
+    const id = setInterval(() => { load(); loadQueue() }, 4000)
     return () => clearInterval(id)
-  }, [items, load])
+  }, [items, queue, load, loadQueue])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -61,6 +68,24 @@ export default function TaskListPage() {
         <h1 className="text-2xl font-bold text-slate-100">任务列表</h1>
         <Link to="/tasks/new" className="btn-primary">+ 新建任务</Link>
       </div>
+
+      {queue && (
+        <div className="flex items-center gap-4 mb-4 px-4 py-2.5 rounded-xl bg-slate-900/70 border border-slate-800 text-sm">
+          <span className="flex items-center gap-1.5 text-blue-400">
+            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            运行中 <b className="text-slate-100">{queue.running_count}</b>
+          </span>
+          <span className="flex items-center gap-1.5 text-amber-400">
+            <span className="w-2 h-2 rounded-full bg-amber-400" />
+            排队中 <b className="text-slate-100">{queue.queued_count}</b>
+          </span>
+          <span className="text-slate-500">并行上限 {queue.max_concurrent}</span>
+          {queue.queued_count > 0 && (
+            <span className="text-xs text-slate-500">· 超出上限的任务会自动排队，名额释放后依次执行</span>
+          )}
+          <Link to="/config" className="ml-auto text-xs text-brand-400 hover:underline">调整并行数</Link>
+        </div>
+      )}
 
       <div className="flex gap-2 mb-4">
         {FILTERS.map((f) => (
@@ -95,7 +120,8 @@ export default function TaskListPage() {
             </thead>
             <tbody>
               {items.map((t) => (
-                <tr key={t.id} className="border-t border-slate-100 hover:bg-brand-50/40 transition-colors">
+                <tr key={t.id} className={`border-t border-slate-100 hover:bg-brand-50/40 transition-colors ${
+                  t.status === 'processing' ? 'bg-blue-500/5' : ''}`}>
                   <td className="px-5 py-3.5">
                     <Link to={`/tasks/${t.id}`} className="text-brand-700 font-medium hover:underline">
                       {t.transcript_preview || t.id}
@@ -103,7 +129,8 @@ export default function TaskListPage() {
                     <div className="text-xs text-slate-400 mt-0.5">{t.track} · {t.target_audience}</div>
                   </td>
                   <td className="px-5 py-3.5">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[t.status]}`}>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[t.status]} ${
+                      t.status === 'processing' ? 'animate-pulse' : ''}`}>
                       {STATUS_LABEL[t.status]}
                     </span>
                     {t.error_code && <div className="text-xs text-red-400 mt-0.5">{t.error_code}</div>}

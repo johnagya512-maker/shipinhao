@@ -61,3 +61,46 @@ def call_llm(provider: str, model: str, api_key: str, prompt: str,
         tokens_in=usage.get("prompt_tokens", 0),
         tokens_out=usage.get("completion_tokens", 0),
     )
+
+
+def call_vision(provider: str, model: str, api_key: str, prompt: str,
+                image_data_uri: str, timeout: float = 60.0) -> LLMResult:
+    """多模态调用：看图 + 文字提示，返回文本。走 OpenAI 兼容的 content 数组格式
+    （text + image_url）。豆包视觉模型与绘图模型同在火山方舟，可复用 image_api_key。
+    image_data_uri 形如 data:image/png;base64,xxx。"""
+    url = LLM_ENDPOINTS.get(provider)
+    if not url:
+        raise LLMError(f"未知 LLM 供应商: {provider}", retryable=False)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image_data_uri}},
+        ]}],
+        "temperature": 0.3,
+    }
+    try:
+        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as e:
+        raise LLMError(f"视觉模型超时: {e}", retryable=True)
+    except httpx.RequestError as e:
+        raise LLMError(f"视觉模型请求错误: {e}", retryable=True)
+
+    if resp.status_code == 401:
+        raise LLMError("API Key 无效", retryable=False)
+    if resp.status_code == 429:
+        raise LLMError("触发限流", retryable=True)
+    if resp.status_code >= 500:
+        raise LLMError(f"视觉模型服务端错误 {resp.status_code}", retryable=True)
+    if resp.status_code >= 400:
+        raise LLMError(f"视觉模型请求被拒 {resp.status_code}: {resp.text[:200]}", retryable=False)
+
+    data = resp.json()
+    text = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    return LLMResult(
+        text=text,
+        tokens_in=usage.get("prompt_tokens", 0),
+        tokens_out=usage.get("completion_tokens", 0),
+    )

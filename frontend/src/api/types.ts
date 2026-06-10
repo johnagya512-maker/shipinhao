@@ -77,6 +77,24 @@ export interface ModuleResult {
   tokens_in?: number | null
   tokens_out?: number | null
   retry_count: number
+  duration?: number | null
+}
+
+// 分镜：口播原文 + 绘图提示词 + 是否主角出场
+export interface Scene {
+  id?: number
+  cap: string
+  desc_prompt: string
+  has_character: boolean
+}
+
+// E 产物里的单张配图
+export interface GeneratedImage {
+  path: string
+  sub_type: string
+  suggested_duration?: number
+  fallback?: boolean
+  fail_reason?: string
 }
 
 export interface TaskDetail {
@@ -97,6 +115,8 @@ export interface TaskDetail {
   pause_mode?: string
   pause_steps?: string[] | null
   paused_at?: string | null
+  aspect_ratio?: string | null
+  reference_image?: string | null
   error_code?: string | null
   error_message?: string | null
   created_at: string
@@ -122,8 +142,10 @@ export interface ConfigOut {
   tts_api_key_mask: string
   tts_voice: string
   tts_appid: string
+  tts_favorites?: string[]
   daily_cost_cap: number
   concurrency: number
+  max_concurrent_tasks: number
   jianying_draft_dir: string
   task_storage_dir: string
   bgm_dir: string
@@ -145,7 +167,29 @@ export interface ConfigUpdate {
   tts_appid?: string
   daily_cost_cap?: number
   concurrency?: number
+  max_concurrent_tasks?: number
   jianying_draft_dir?: string
   task_storage_dir?: string
   bgm_dir?: string
+}
+
+export interface QueueStats {
+  running: string[]
+  queued: string[]
+  running_count: number
+  queued_count: number
+  max_concurrent: number
+}
+
+export interface VoiceItem {
+  id: string
+  name: string
+  tag: string
+  category: string
+}
+
+export interface VoiceCategory {
+  key: string
+  name: string
+  desc: string
 }

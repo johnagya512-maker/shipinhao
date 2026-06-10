@@ -235,11 +235,23 @@ export default function ConfigPage() {
             onChange={(e) => set({ daily_cost_cap: Number(e.target.value) })} />
         </label>
         <label className="block">
-          <span className="text-sm text-slate-600">并发数（1-10）</span>
+          <span className="text-sm text-slate-600">最大并行任务数（1-10）</span>
+          <input type="number" min={1} max={10} className="mt-1 w-full border rounded-lg px-3 py-2"
+            defaultValue={cfg.max_concurrent_tasks}
+            onChange={(e) => set({ max_concurrent_tasks: Number(e.target.value) })} />
+          <span className="text-xs text-slate-500 mt-1 block">同时执行几个任务，超出的自动排队。改后立即生效。</span>
+        </label>
+        <label className="block">
+          <span className="text-sm text-slate-600">单任务配图并发（1-10）</span>
           <input type="number" min={1} max={10} className="mt-1 w-full border rounded-lg px-3 py-2"
             defaultValue={cfg.concurrency}
             onChange={(e) => set({ concurrency: Number(e.target.value) })} />
+          <span className="text-xs text-slate-500 mt-1 block">一个任务内同时生成几张图。</span>
         </label>
+        <div className="col-span-2 text-xs text-amber-500/90 bg-amber-500/5 rounded-lg px-3 py-2">
+          ⚠ 同时发出的图片请求 ≈ 并行任务数 × 配图并发。两者都设大容易触发绘图平台限流（429），
+          导致更多失败。建议两项乘积控制在 10 以内（如 3 × 3）。
+        </div>
       </div>
 
       <div className="card space-y-2 mt-4">

@@ -1,8 +1,10 @@
 // 任务创建页：逐字稿输入 + 赛道/受众/模块/变现模式选择 + 成本预估 + 提交。
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { api, ApiError } from '../api/client'
-import type { TaskCreate, EstimateOut, ConfigOut } from '../api/types'
+import type { TaskCreate, EstimateOut, ConfigOut, VoiceItem, VoiceCategory } from '../api/types'
+import VoicePicker from '../components/VoicePicker'
+import { useVoicePreview } from '../hooks/useVoicePreview'
 
 const TRACKS = [
   { key: 'character_story', name: '人物故事', desc: '历史人物 · 戏剧叙事 · 强悬念' },
@@ -57,16 +59,8 @@ const MONETIZATIONS = [
   { key: 'revenue_share', name: '创作分成', desc: '结尾引导互动' },
   { key: 'book_sales', name: '图书带货', desc: '结尾带出书籍' },
 ]
-// 豆包(火山引擎)大模型音色。voice 为空=用配置页默认音色。
-// 注意：实际可用音色取决于火山账号授权，选后可点「试听」验证。
-const VOICES = [
-  { key: '', name: '默认音色', desc: '用配置页设定' },
-  { key: 'zh_male_M392_conversation_wvae_bigtts', name: '沉稳男声', desc: '叙事/讲书' },
-  { key: 'zh_female_wanwanxiaohe_moon_bigtts', name: '温柔女声', desc: '亲切治愈' },
-  { key: 'zh_female_qingxinnvsheng_mars_bigtts', name: '清新女声', desc: '轻快明亮' },
-  { key: 'zh_male_jingqiangkanye_moon_bigtts', name: '京腔侃爷', desc: '幽默接地气' },
-  { key: 'zh_female_shuangkuaisisi_moon_bigtts', name: '爽快思思', desc: '活泼带货' },
-]
+// 音色库从后端拉取（GET /config/voices）。voice 为空=用配置页默认音色。
+// 实际可用性取决于火山账号授权，可点「试听」验证。
 // 可选模块（A 清洗 / B 改写 / G 合成为必选，后端强制）。
 const OPTIONAL_MODULES = [
   { key: 'D', name: 'D 图书识别' },
@@ -147,9 +141,16 @@ export default function TaskCreatePage() {
   const [refUploading, setRefUploading] = useState(false)
   const [refName, setRefName] = useState<string | null>(null)
   const [refPreview, setRefPreview] = useState<string | null>(null)
+  // 音色库 + 收藏 + 选择器弹窗
+  const [voices, setVoices] = useState<VoiceItem[]>([])
+  const [voiceCats, setVoiceCats] = useState<VoiceCategory[]>([])
+  const [favorites, setFavorites] = useState<string[]>([])
+  const [showVoicePicker, setShowVoicePicker] = useState(false)
+  const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
 
   // 载入配置，用于"凭证未配置"提示。
-  useEffect(() => { api.getConfig().then(setCfg).catch(() => {}) }, [])
+  useEffect(() => { api.getConfig().then((c) => { setCfg(c); setFavorites(c.tts_favorites ?? []) }).catch(() => {}) }, [])
+  useEffect(() => { api.getVoices().then((r) => { setVoices(r.voices); setVoiceCats(r.categories) }).catch(() => {}) }, [])
   // 载入 BGM 列表（配置了 bgm 目录时才有内容）。
   useEffect(() => { api.bgmList().then((r) => setBgmFiles(r.files)).catch(() => {}) }, [])
 
@@ -161,6 +162,24 @@ export default function TaskCreatePage() {
   }
 
   const set = (patch: Partial<TaskCreate>) => setForm((f) => ({ ...f, ...patch }))
+
+  // 收藏/取消收藏音色（写后端 + 本地同步）
+  async function toggleFav(voiceId: string) {
+    const has = favorites.includes(voiceId)
+    setFavorites((f) => has ? f.filter((v) => v !== voiceId) : [...f, voiceId])  // 乐观更新
+    try {
+      const r = await api.toggleFavorite(voiceId, has ? 'remove' : 'add')
+      setFavorites(r.favorites)
+    } catch { /* 失败回滚到后端真实值 */ api.getConfig().then((c) => setFavorites(c.tts_favorites ?? [])).catch(() => {}) }
+  }
+
+  const voiceById = useMemo(() => new Map(voices.map((v) => [v.id, v])), [voices])
+  // 创建页 chips：收藏的音色 + 当前选中的（即使没收藏也显示），去重
+  const chipVoices = useMemo(() => {
+    const ids = [...favorites]
+    if (form.voice && !ids.includes(form.voice)) ids.push(form.voice)
+    return ids.map((id) => voiceById.get(id)).filter(Boolean) as VoiceItem[]
+  }, [favorites, form.voice, voiceById])
 
   // 配图相关设置（素材来源/画面风格/参考图/模板/比例）仅在勾选 E 配图时生效；
   // 否则灰显并禁用交互，避免空跑误导。
@@ -415,21 +434,44 @@ export default function TaskCreatePage() {
             <span className="pb-2 text-sm text-slate-600 cursor-not-allowed">MiniMax · 敬请期待</span>
           </div>
           <div className="mt-2 grid grid-cols-3 gap-2">
-            {VOICES.map((v) => {
-              const on = (form.voice ?? '') === v.key
+            {/* 默认音色 */}
+            <button type="button" onClick={() => set({ voice: '' })}
+              className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
+                !form.voice ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
+                            : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'}`}>
+              <span className={`text-[13px] font-medium ${!form.voice ? 'text-brand-300' : 'text-slate-200'}`}>默认音色</span>
+              <span className="block text-[10px] text-slate-500 truncate">用配置页设定</span>
+            </button>
+            {/* 收藏 + 当前选中的音色，每个可点主体选用、点 🔊 试听 */}
+            {chipVoices.map((v) => {
+              const on = form.voice === v.id
+              const playing = previewingId === v.id
               return (
-                <button key={v.key} type="button" onClick={() => set({ voice: v.key })}
-                  className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
+                <div key={v.id}
+                  className={`relative text-left px-2.5 py-1.5 rounded-lg border transition-colors cursor-pointer ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
-                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-                  }`}>
-                  <span className={`text-[13px] font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{v.name}</span>
-                  <span className="block text-[10px] text-slate-500 truncate" title={v.desc}>{v.desc}</span>
-                </button>
+                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'}`}
+                  onClick={() => set({ voice: v.id })}>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={`text-[13px] font-medium truncate ${on ? 'text-brand-300' : 'text-slate-200'}`}>{v.name}</span>
+                    <button type="button" title="试听"
+                      onClick={(e) => { e.stopPropagation(); previewVoice(v.id) }}
+                      className="shrink-0 text-slate-400 hover:text-brand-300 text-xs">{playing ? '■' : '🔊'}</button>
+                  </div>
+                  <span className="block text-[10px] text-slate-500 truncate" title={v.tag}>{v.tag}</span>
+                </div>
               )
             })}
+            {/* 更多音色 → 弹窗 */}
+            <button type="button" onClick={() => setShowVoicePicker(true)}
+              className="text-center px-2.5 py-1.5 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-slate-200 hover:border-slate-500 text-[13px]">
+              更多音色…
+            </button>
           </div>
-          <p className="mt-1 text-[10px] text-slate-600">音色可用性取决于火山账号授权；可在系统配置页「试听」验证。</p>
+          <p className="mt-1 text-[10px] text-slate-600">点 🔊 试听 · ★ 收藏常用音色 · 可用性取决于火山账号授权。</p>
+          {previewError && (
+            <p className="mt-1 text-[11px] text-red-400">试听失败：{previewError}</p>
+          )}
         </div>
 
         <div className="border-t border-slate-800 pt-4">
@@ -475,7 +517,7 @@ export default function TaskCreatePage() {
                   })}
                 </div>
                 {form.processing_mode !== 'full_auto' && (
-                  <p className="mt-1.5 text-[11px] text-amber-400/80">半自动/直接出片不做 AI 改写，「改写强度 / 叙事视角 / 带货模式」不生效。</p>
+                  <p className="mt-1.5 text-[11px] text-slate-500">此模式不做 AI 改写，「改写强度 / 叙事视角 / 带货模式」不可调，已隐藏。</p>
                 )}
               </div>
 
@@ -519,6 +561,8 @@ export default function TaskCreatePage() {
                 )}
               </div>
 
+              {/* 改写强度 / 叙事视角：仅全自动模式有效（半自动/直接出片不改写，整块隐藏，对齐竞品） */}
+              {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <span className="text-sm text-slate-400">改写强度</span>
@@ -555,6 +599,7 @@ export default function TaskCreatePage() {
                   </div>
                 </div>
               </div>
+              )}
 
               <label className="block">
                 <span className="text-sm text-slate-400">配音语速：{(form.voice_speed ?? 1).toFixed(2)}×</span>
@@ -564,6 +609,8 @@ export default function TaskCreatePage() {
                 <div className="flex justify-between text-[10px] text-slate-600"><span>0.5× 慢</span><span>1× 正常</span><span>2× 快</span></div>
               </label>
 
+              {/* 带货模式：仅全自动模式有效（改写时才决定带货段落，整块隐藏，对齐竞品） */}
+              {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
               <div>
                 <span className="text-sm text-slate-400">带货模式</span>
                 <div className="mt-2 flex gap-2">
@@ -581,6 +628,7 @@ export default function TaskCreatePage() {
                   })}
                 </div>
               </div>
+              )}
 
               <div>
                 <span className="text-sm text-slate-400">背景音乐 BGM（仅 mp4 合成时混入，剪映草稿可在剪映里加）</span>
@@ -669,6 +717,16 @@ export default function TaskCreatePage() {
           </button>
         </div>
       </div>
+
+      {showVoicePicker && (
+        <VoicePicker
+          voices={voices} categories={voiceCats}
+          value={form.voice ?? ''} favorites={favorites}
+          onSelect={(id) => set({ voice: id })}
+          onToggleFav={toggleFav}
+          onClose={() => setShowVoicePicker(false)}
+        />
+      )}
     </div>
   )
 }

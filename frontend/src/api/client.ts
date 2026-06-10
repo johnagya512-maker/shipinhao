@@ -1,7 +1,8 @@
 // 后端 API 客户端。统一处理 baseURL、鉴权、错误码解析。
 import type {
   TaskCreate, TaskOut, EstimateOut, ConfigOut, ConfigUpdate,
-  TaskListOut, TaskResultsOut,
+  TaskListOut, TaskResultsOut, Scene, GeneratedImage, QueueStats,
+  VoiceItem, VoiceCategory,
 } from './types'
 
 // API 根地址：
@@ -106,6 +107,14 @@ export const api = {
     }
     return res.blob()
   },
+  // 音色库：分类 + 候选音色清单
+  getVoices: () =>
+    request<{ categories: VoiceCategory[]; voices: VoiceItem[] }>('/config/voices'),
+  // 收藏/取消收藏音色
+  toggleFavorite: (voiceId: string, action: 'add' | 'remove') =>
+    request<{ favorites: string[] }>('/config/favorites', {
+      method: 'PUT', body: JSON.stringify({ voice_id: voiceId, action }),
+    }),
 
   // ── 任务 ──
   listTasks: (params: { status?: string; page?: number; page_size?: number } = {}) => {
@@ -116,6 +125,8 @@ export const api = {
     const qs = q.toString()
     return request<TaskListOut>(`/tasks${qs ? `?${qs}` : ''}`)
   },
+  // 调度器并发状态：运行中/排队中数量与上限
+  queueStats: () => request<QueueStats>('/tasks-queue/stats'),
   createTask: (body: TaskCreate) =>
     request<TaskOut>('/tasks', { method: 'POST', body: JSON.stringify(body) }),
   estimate: (body: TaskCreate) =>
@@ -128,6 +139,29 @@ export const api = {
     }),
   cancel: (id: string) => request<TaskOut>(`/tasks/${id}/cancel`, { method: 'POST' }),
   resume: (id: string) => request<TaskOut>(`/tasks/${id}/resume`, { method: 'POST' }),
+
+  // ── 逐句编辑 / 单图重试 / 单步重跑（对齐竞品「随停随跑、每步可改」）──
+  // 保存编辑后的分镜（cap/desc_prompt/has_character），写回 SB+P 产物，不触发生图。
+  saveScenes: (id: string, scenes: Scene[]) =>
+    request<TaskOut>(`/tasks/${id}/scenes`, {
+      method: 'PATCH', body: JSON.stringify({ scenes }),
+    }),
+  // 单张图重试：只重生成第 index 张，可带新提示词。失败返回原因；
+  // 若被审核拦截会自动改写提示词重试，rewritten=true 时 new_prompt 是改写后的词。
+  retryImage: (id: string, index: number, prompt?: string) =>
+    request<{ index: number; image: GeneratedImage; failed: boolean; reason?: string | null
+      rewritten?: boolean; new_prompt?: string | null }>(
+      `/tasks/${id}/images/${index}/retry`, {
+        method: 'POST', body: JSON.stringify({ prompt: prompt ?? null }),
+      }),
+  // 单步重跑：清掉该步及下游产物，从该步重算（上游走缓存）。
+  rerunStep: (id: string, module: string) =>
+    request<TaskOut>(`/tasks/${id}/step/${module}/rerun`, { method: 'POST' }),
+  // 任务配图预览地址（按文件名取该任务 images 目录里的图）。
+  imageUrl: (id: string, path: string) => {
+    const name = path.split(/[\\/]/).pop() || ''
+    return `${BASE}/tasks/${id}/image?name=${encodeURIComponent(name)}`
+  },
 
   // 上传音频用 FormData，不能带 JSON Content-Type，单独处理。
   uploadAudio: async (id: string, file: File, outputMode: 'jianying' | 'mp4' = 'jianying') => {
@@ -144,6 +178,17 @@ export const api = {
     }
     return res.json() as Promise<TaskOut>
   },
+  // 用最新的图重新合成视频，复用上次上传的音频，无需重传
+  recompose: (id: string, outputMode: 'jianying' | 'mp4' = 'jianying') =>
+    request<TaskOut>(`/tasks/${id}/recompose?output_mode=${outputMode}`, { method: 'POST' }),
+  // 手动修改任务标题（用作草稿名/下载文件名）
+  updateTitle: (id: string, title: string) =>
+    request<TaskOut>(`/tasks/${id}/title`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  // 直接编辑某步文本产物（不调 AI、不扣费、不触发下游）
+  updateModuleOutput: (id: string, module: string, fields: Record<string, unknown>) =>
+    request<TaskOut>(`/tasks/${id}/modules/${module}/output`, {
+      method: 'PATCH', body: JSON.stringify({ fields }),
+    }),
 
   downloadUrl: (id: string) => `${BASE}/tasks/${id}/download`,
 }

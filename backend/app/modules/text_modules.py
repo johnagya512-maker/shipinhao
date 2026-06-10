@@ -22,11 +22,41 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+def run_safe_rewrite(provider, model, key, prompt_text, attempt=1):
+    """单句安全改写：把被绘图审核拦截的 desc_prompt 改写成含蓄安全版本。
+    attempt 越大改写越激进（第2/3次彻底抛弃原画面、只保留情绪氛围）。
+    返回 (新提示词 str, LLMResult)。失败时返回原文。"""
+    if attempt >= 3:
+        escalate = ("\n【这是第三次改写，前两次仍被拒】请彻底放弃原画面的具体物件，"
+                    "只画一个纯安全的空镜/意境画面（如书桌、窗景、自然风光、光影），"
+                    "保留与口播相符的情绪氛围即可，绝不能再出现任何地图/政治/暴力元素。\n")
+    elif attempt == 2:
+        escalate = ("\n【这是第二次改写，上一版仍被拒】请更大胆地删改，把所有可能敏感的"
+                    "具体物件（尤其地图、标记、武器、人物姓名）整个替换成安全的环境/物件画面。\n")
+    else:
+        escalate = ""
+    rendered = _render(prompts.SAFE_PROMPT_REWRITE, prompt=prompt_text, escalate=escalate)
+    r: LLMResult = call_llm(provider, model, key, rendered)
+    new_prompt = r.text.strip().strip('"').strip("「」").strip()
+    return (new_prompt or prompt_text), r
+
+
 def run_clean(provider, model, key, transcript, keyword=None, title=None, author=None):
     prompt = _render(prompts.MODULE_A, transcript=transcript, keyword=keyword,
                      title=title, author=author)
     r: LLMResult = call_llm(provider, model, key, prompt)
     return {"cleaned_text": r.text.strip()}, r
+
+
+def run_gen_title(provider, model, key, script, keyword=None):
+    """生成简短钩子标题，用于自动命名剪映草稿/下载文件。
+    返回 (标题 str, LLMResult)。截稿过长部分，标题净化去引号/换行/超长。"""
+    snippet = (script or "")[:800]  # 标题只需开头大意，省 token
+    prompt = _render(prompts.VIDEO_TITLE, script=snippet, keyword=keyword or "")
+    r: LLMResult = call_llm(provider, model, key, prompt)
+    title = r.text.strip().splitlines()[0] if r.text.strip() else ""
+    title = title.strip().strip('"').strip("「」《》").strip()
+    return title[:30], r
 
 
 def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性", title=None,
@@ -97,19 +127,104 @@ def run_split(provider, model, key, script_text, keyword=None, title=None, targe
     return {"segments": segments, "segment_count": len(segments)}, r
 
 
-def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus=""):
-    """Step「画面脚本」：把口播文案转成 n_scenes 条可绘制的画面描述（视觉化分镜）。
-    返回 {"scenes": [...]}, r。失败/数量不符时由调用方兜底。"""
+def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus="",
+                   character_desc=None):
+    """Step「画面脚本」：把口播文案拆成 n_scenes 个分镜，每个分镜含：
+      cap=对应口播原文, desc_prompt=完整绘图提示词, has_character=是否主角出场。
+    character_desc 非空时，要求人物出场的分镜把该特征写进 desc_prompt（角色一致性）。
+    生成后做质检：检测批次内 desc_prompt 末尾模板化雷同，命中则让 LLM 整批重写一次。
+    返回 {"scenes": [...], "diagnostic": {...}}, r。
+    失败/数量不符时由调用方兜底。兼容老格式（纯字符串/desc 字段）。"""
     n = max(1, int(n_scenes))
+    if character_desc:
+        char_clause = (f"主角形象统一为：{character_desc}。"
+                       "在 has_character=true 的分镜里，把这个主角特征自然融进 desc_prompt，"
+                       "保证是同一个人；不同分镜只变姿态/角度/环境/景别。")
+    else:
+        char_clause = "若有主角贯穿，保持其外貌在各分镜一致（同一发型/脸型/服饰风格），只变姿态角度环境。"
+
     prompt = _render(prompts.MODULE_S, script=script_text, n_scenes=n,
-                     rewrite_focus=rewrite_focus or "")
+                     rewrite_focus=rewrite_focus or "", char_clause=char_clause)
     r = call_llm(provider, model, key, prompt)
     try:
         data = _extract_json(r.text)
-        scenes = [str(x).strip() for x in data.get("scenes", []) if str(x).strip()]
+        scenes = _parse_scenes(data.get("scenes", []))
     except (json.JSONDecodeError, ValueError):
         scenes = []
-    return {"scenes": scenes}, r
+
+    diagnostic = {"attempts": [], "fell_back": False}
+    # 质检：批次内 desc_prompt 末尾模板化雷同 = LLM 偷懒，画面会同质化，打回重写一次。
+    reason = _detect_template_tail(scenes)
+    if reason and scenes:
+        diagnostic["attempts"].append({"kind": "validator_reject", "reason": reason})
+        try:
+            rewrite_prompt = _render(prompts.MODULE_S_REWRITE, reason=reason,
+                                     char_clause=char_clause,
+                                     scenes_json=json.dumps(scenes, ensure_ascii=False))
+            r2 = call_llm(provider, model, key, rewrite_prompt)
+            data2 = _extract_json(r2.text)
+            rewritten = _parse_scenes(data2.get("scenes", []))
+            if rewritten and not _detect_template_tail(rewritten):
+                scenes = rewritten
+            else:
+                diagnostic["fell_back"] = True
+            # 重写这次的 token 也计入（累加到返回的 LLMResult）
+            r = LLMResult(text=r.text, tokens_in=r.tokens_in + r2.tokens_in,
+                          tokens_out=r.tokens_out + r2.tokens_out)
+        except (json.JSONDecodeError, ValueError, Exception):
+            diagnostic["fell_back"] = True
+
+    return {"scenes": scenes, "diagnostic": diagnostic}, r
+
+
+def _parse_scenes(raw) -> list[dict]:
+    """把 scenes 原始输出归一成 [{"id", "cap", "desc_prompt", "has_character"}]。
+    兼容历史格式：dict 里旧字段名 desc → desc_prompt；纯字符串 → desc_prompt，默认有人物。"""
+    out = []
+    for i, x in enumerate(raw):
+        if isinstance(x, dict):
+            dp = str(x.get("desc_prompt") or x.get("desc") or "").strip()
+            if not dp:
+                continue
+            out.append({
+                "id": i + 1,
+                "cap": str(x.get("cap", "")).strip(),
+                "desc_prompt": dp,
+                "has_character": bool(x.get("has_character", True)),
+            })
+        else:
+            s = str(x).strip()
+            if s:
+                out.append({"id": i + 1, "cap": "", "desc_prompt": s, "has_character": True})
+    return out
+
+
+def _detect_template_tail(scenes, min_batch=4, tail_len=12) -> str | None:
+    """质检：检测批次内多数 desc_prompt 末尾相同（模板化尾巴），返回打回原因，否则 None。
+    竞品 step3-diagnostic 同思路——LLM 偷懒会给每句套同一个机械结尾，导致画面同质化。"""
+    prompts_list = [s.get("desc_prompt", "") for s in scenes if s.get("desc_prompt")]
+    if len(prompts_list) < min_batch:
+        return None
+    from collections import Counter
+    tails = Counter(p[-tail_len:] for p in prompts_list if len(p) >= tail_len)
+    if not tails:
+        return None
+    tail, cnt = tails.most_common(1)[0]
+    # 超过半数句子末尾雷同 → 判定模板化
+    if cnt >= max(min_batch, len(prompts_list) // 2 + 1):
+        return (f"批次内 {cnt}/{len(prompts_list)} 条 desc_prompt 末尾相同 “…{tail}”，"
+                "明显是模板化尾巴，会导致画面同质化、缺乏视觉变化。")
+    return None
+
+
+def run_character_profile(provider, model, key, image_data_uri):
+    """反推主角参考图特征：用视觉模型看一次参考图，生成一段稳定外貌特征文字，
+    用于后续「需要人物出场」的画面文字锚定角色一致性。返回 {"profile": str}, r。
+    失败由调用方兜底（回退到通用一致性短语）。"""
+    from app.services.llm import call_vision
+    r = call_vision(provider, model, key, prompts.CHARACTER_PROFILE, image_data_uri)
+    profile = r.text.strip().strip('"').strip()
+    return {"profile": profile}, r
 
 
 def mechanical_split(script_text: str):

@@ -1,11 +1,24 @@
 """数据库连接与会话。"""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from app.core.config import settings
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+_is_sqlite = settings.database_url.startswith("sqlite")
+connect_args = {"check_same_thread": False} if _is_sqlite else {}
 engine = create_engine(settings.database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+if _is_sqlite:
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        """多任务并行时 SQLite 默认整库锁会导致 database is locked。
+        WAL 让读写不互斥；busy_timeout 把瞬时锁冲突改为短暂等待而非立即报错。"""
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.close()
 
 
 class Base(DeclarativeBase):
@@ -45,6 +58,9 @@ def _ensure_columns():
         ("tasks", "paused_at", "VARCHAR(2)"),
         ("configs", "task_storage_dir", "VARCHAR(500)"),
         ("configs", "bgm_dir", "VARCHAR(500)"),
+        ("configs", "vision_model", "VARCHAR(80) DEFAULT 'doubao-seed-1-6-250615'"),
+        ("configs", "max_concurrent_tasks", "INTEGER DEFAULT 3"),
+        ("configs", "tts_favorites", "JSON"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

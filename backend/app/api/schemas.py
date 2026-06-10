@@ -38,6 +38,30 @@ class RerunRequest(BaseModel):
     transcript: str | None = None  # 改后的逐字稿；为空则沿用原文重跑
 
 
+class SceneItem(BaseModel):
+    """单个分镜：口播原文 + 绘图提示词 + 是否主角出场。"""
+    id: int | None = None
+    cap: str = ""
+    desc_prompt: str
+    has_character: bool = True
+
+
+class ScenesPatch(BaseModel):
+    """逐句编辑保存：覆盖 SB/P 产物里的分镜列表。"""
+    scenes: list[SceneItem]
+
+
+class ImageRetryRequest(BaseModel):
+    """单张图重试：可带新的提示词；为空则用该分镜当前提示词重生成。"""
+    prompt: str | None = None
+
+
+class StepRerunRequest(BaseModel):
+    """单步重跑：清掉该模块及其下游产物后从该步重新执行。"""
+    pass
+
+
+
 class TaskOut(BaseModel):
     id: str
     status: str
@@ -76,6 +100,7 @@ class ConfigUpdate(BaseModel):
     image_provider: str | None = None
     image_model: str | None = None
     image_api_key: str | None = None
+    vision_model: str | None = None
     collect_provider: str | None = None
     collect_api_key: str | None = None
     asr_provider: str | None = None
@@ -86,6 +111,7 @@ class ConfigUpdate(BaseModel):
     tts_appid: str | None = None
     daily_cost_cap: float | None = Field(default=None, ge=0)
     concurrency: int | None = Field(default=None, ge=1, le=10)
+    max_concurrent_tasks: int | None = Field(default=None, ge=1, le=10)
     jianying_draft_dir: str | None = None
     task_storage_dir: str | None = None
     bgm_dir: str | None = None
@@ -98,6 +124,7 @@ class ConfigOut(BaseModel):
     image_provider: str
     image_model: str
     image_api_key_mask: str
+    vision_model: str
     collect_provider: str
     collect_api_key_mask: str
     asr_provider: str
@@ -106,8 +133,10 @@ class ConfigOut(BaseModel):
     tts_api_key_mask: str
     tts_voice: str
     tts_appid: str
+    tts_favorites: list[str] = []
     daily_cost_cap: float
     concurrency: int
+    max_concurrent_tasks: int
     jianying_draft_dir: str
     task_storage_dir: str
     bgm_dir: str

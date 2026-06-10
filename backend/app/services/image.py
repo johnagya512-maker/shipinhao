@@ -65,6 +65,22 @@ def placeholder_result(out_path: Path, sub_type: str, suggested_duration: int,
                        {"fallback": True, "reason": reason})
 
 
+def is_placeholder_image(path: str) -> bool:
+    """判断一张图是否是失败占位图（纯色块）。
+    历史任务的 E 产物没存 fallback 标记，靠看图本身兜底识别：
+    占位图由 Image.new 画的单一纯色，每个通道 max==min；真实图必有色彩变化。
+    读不到文件视为占位（让其可被重试）。"""
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return True
+        img = Image.open(p).convert("RGB")
+        ex = img.getextrema()  # ((rmin,rmax),(gmin,gmax),(bmin,bmax))
+        return all(lo == hi for lo, hi in ex)
+    except Exception:
+        return False
+
+
 def _encode_reference(path: str) -> str | None:
     """把参考图读成豆包要求的 data URI（data:image/...;base64,xxx）。
     文件不存在/读取失败返回 None，调用方据此退回纯文生图。"""
@@ -84,9 +100,10 @@ def _encode_reference(path: str) -> str | None:
 def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    out_path: Path, suggested_duration: int,
                    model: str | None = None, timeout: float = 60.0,
-                   aspect_ratio: str = "9:16", reference_image: str | None = None) -> ImageResult:
+                   aspect_ratio: str = "9:16") -> ImageResult:
     """生成单张配图。无 Key 或 provider=mock 时走占位图。
-    reference_image 非空时作为角色一致性参考传给绘图模型（豆包 image 字段，base64）。"""
+    纯文生图：角色一致性靠提示词里的人物特征文字锚定（见 image_module.build_image_prompts），
+    不再把参考图当 img2img 底图，让每张画面紧贴文案、镜头自由。"""
     w, h = _dims_for(aspect_ratio)
     use_mock = (not api_key) or provider == "mock"
     if use_mock:
@@ -106,12 +123,6 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    "response_format": "url", "stream": False, "watermark": False}
         if model:
             payload["model"] = model
-        # 主角参考图：豆包 Seedream 支持传 image 做角色一致性参考（图生图/图引导）。
-        # best-effort：编码失败或模型不支持则忽略此字段，退回纯文生图，不毁链路。
-        if reference_image:
-            ref_b64 = _encode_reference(reference_image)
-            if ref_b64:
-                payload["image"] = ref_b64
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
     except httpx.TimeoutException as e:
         raise ImageError(f"配图超时: {e}", retryable=True)

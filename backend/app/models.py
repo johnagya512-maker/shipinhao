@@ -100,6 +100,9 @@ class Config(Base):
     image_provider: Mapped[str] = mapped_column(String(20), default="doubao")
     image_model: Mapped[str] = mapped_column(String(80), default="doubao-seedream-4-5-251128")
     image_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # 视觉模型（多模态 LLM）：反推主角参考图的人物特征文字。豆包视觉模型与绘图模型
+    # 同在火山方舟，复用 image_provider + image_api_key，仅模型 id 不同。
+    vision_model: Mapped[str] = mapped_column(String(80), default="doubao-seed-1-6-250615")
     # 抖音采集（TikHub 等）
     collect_provider: Mapped[str] = mapped_column(String(20), default="tikhub")
     collect_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
@@ -110,6 +113,8 @@ class Config(Base):
     tts_provider: Mapped[str] = mapped_column(String(20), default="volcano")
     tts_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     tts_voice: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # 收藏的音色 ID 列表（创建任务页优先展示）
+    tts_favorites: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # 火山 TTS 需要 appid（与 access_token 配对）
     tts_appid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 剪映草稿输出目录（用户本地剪映的"草稿存放位置"）。设置后 G 模块
@@ -123,6 +128,8 @@ class Config(Base):
     bgm_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
     daily_cost_cap: Mapped[float] = mapped_column(Numeric(8, 2), default=100)
     concurrency: Mapped[int] = mapped_column(Integer, default=3)
+    # 任务级并发：同时执行的任务数上限（与 concurrency 的图片级并发相乘 ≈ 总图片请求量）。
+    max_concurrent_tasks: Mapped[int] = mapped_column(Integer, default=3)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 

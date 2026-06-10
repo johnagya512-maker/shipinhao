@@ -9,6 +9,7 @@ from app.api.schemas import ConfigUpdate, ConfigOut
 from app.models import Config
 from app.services.llm import call_llm, LLMError
 from app.services import tts as tts_svc
+from app.services import voices as voices_svc
 
 router = APIRouter(prefix="/api/v1/config", dependencies=[Depends(require_auth)])
 
@@ -30,6 +31,7 @@ def _to_out(cfg: Config) -> ConfigOut:
         image_provider=cfg.image_provider,
         image_model=cfg.image_model,
         image_api_key_mask=mask(decrypt(cfg.image_api_key_enc)) if cfg.image_api_key_enc else "",
+        vision_model=cfg.vision_model,
         collect_provider=cfg.collect_provider,
         collect_api_key_mask=mask(decrypt(cfg.collect_api_key_enc)) if cfg.collect_api_key_enc else "",
         asr_provider=cfg.asr_provider,
@@ -38,8 +40,10 @@ def _to_out(cfg: Config) -> ConfigOut:
         tts_api_key_mask=mask(decrypt(cfg.tts_api_key_enc)) if cfg.tts_api_key_enc else "",
         tts_voice=cfg.tts_voice or "",
         tts_appid=cfg.tts_appid or "",
+        tts_favorites=getattr(cfg, "tts_favorites", None) or [],
         daily_cost_cap=float(cfg.daily_cost_cap),
         concurrency=cfg.concurrency,
+        max_concurrent_tasks=getattr(cfg, "max_concurrent_tasks", 3) or 3,
         jianying_draft_dir=cfg.jianying_draft_dir or "",
         task_storage_dir=cfg.task_storage_dir or "",
         bgm_dir=cfg.bgm_dir or "",
@@ -49,6 +53,31 @@ def _to_out(cfg: Config) -> ConfigOut:
 @router.get("", response_model=ConfigOut)
 def get_config(db: Session = Depends(get_db)):
     return _to_out(_get_or_create(db))
+
+
+@router.get("/voices")
+def list_voices():
+    """音色库：返回分类元信息 + 候选音色清单。实际可用性取决于火山账号授权。"""
+    return {"categories": voices_svc.CATEGORIES, "voices": voices_svc.VOICE_LIBRARY}
+
+
+@router.put("/favorites")
+def update_favorites(body: dict, db: Session = Depends(get_db)):
+    """收藏/取消收藏音色。body: {voice_id, action: 'add'|'remove'}。返回最新收藏列表。"""
+    voice_id = (body or {}).get("voice_id")
+    action = (body or {}).get("action")
+    if not voice_id or action not in ("add", "remove"):
+        raise HTTPException(400, detail="参数错误：需要 voice_id 和 action(add/remove)")
+    cfg = _get_or_create(db)
+    favs = list(getattr(cfg, "tts_favorites", None) or [])
+    if action == "add":
+        if voice_id not in favs:
+            favs.append(voice_id)
+    else:
+        favs = [v for v in favs if v != voice_id]
+    cfg.tts_favorites = favs
+    db.commit()
+    return {"favorites": favs}
 
 
 @router.put("", response_model=ConfigOut)
@@ -66,6 +95,8 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
         cfg.image_model = body.image_model
     if body.image_api_key:
         cfg.image_api_key_enc = encrypt(body.image_api_key)
+    if body.vision_model is not None:
+        cfg.vision_model = body.vision_model
     if body.collect_provider is not None:
         cfg.collect_provider = body.collect_provider
     if body.collect_api_key:
@@ -86,6 +117,10 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
         cfg.daily_cost_cap = body.daily_cost_cap
     if body.concurrency is not None:
         cfg.concurrency = body.concurrency
+    if body.max_concurrent_tasks is not None:
+        cfg.max_concurrent_tasks = body.max_concurrent_tasks
+        from app.services.scheduler import scheduler
+        scheduler.set_max(body.max_concurrent_tasks)  # 立即生效，不用重启
     if body.jianying_draft_dir is not None:
         cfg.jianying_draft_dir = body.jianying_draft_dir.strip() or None
     if body.task_storage_dir is not None:
@@ -130,9 +165,10 @@ def test_api(db: Session = Depends(get_db)):
 def test_tts(db: Session = Depends(get_db)):
     """测试 TTS 配置连通性：用当前 TTS Key 合成一句短文本验证。"""
     cfg = _get_or_create(db)
-    if not cfg.tts_api_key_enc:
-        raise HTTPException(400, detail="E6200: 未配置 TTS API Key")
-    key = decrypt(cfg.tts_api_key_enc)
+    key = decrypt(cfg.tts_api_key_enc) if cfg.tts_api_key_enc else ""
+    if not key:
+        # 密文字段可能非空但解密为空（换机器/重装/主密钥变更致旧密文失效）→ 需重填
+        raise HTTPException(400, detail="E6200: 未配置或密钥已失效，请到配置页重新填写 TTS Access Token")
     try:
         size = tts_svc.test_connectivity(cfg.tts_provider, key,
                                          voice=cfg.tts_voice, appid=cfg.tts_appid)
@@ -149,9 +185,10 @@ def preview_tts(body: dict | None = None, db: Session = Depends(get_db)):
     body 可选 {voice, speed}，缺省用配置中的音色与正常语速。"""
     from fastapi import Response
     cfg = _get_or_create(db)
-    if not cfg.tts_api_key_enc:
-        raise HTTPException(400, detail="E6200: 未配置 TTS API Key")
-    key = decrypt(cfg.tts_api_key_enc)
+    key = decrypt(cfg.tts_api_key_enc) if cfg.tts_api_key_enc else ""
+    if not key:
+        # 密文字段可能非空但解密为空（换机器/重装/主密钥变更致旧密文失效）→ 需重填
+        raise HTTPException(400, detail="E6200: 未配置或密钥已失效，请到配置页重新填写 TTS Access Token")
     body = body or {}
     voice = body.get("voice") or cfg.tts_voice
     speed = body.get("speed", 1.0)
