@@ -126,6 +126,8 @@ async function compressImage(file: File, maxEdge = 1536, quality = 0.85): Promis
   return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' })
 }
 
+type ParseMeta = { title: string; author: string; platform: string }
+
 export default function TaskCreatePage() {
   const nav = useNavigate()
   // 草稿持久化：切到别的页面（如配置页）再回来，用户填的内容不应被清空。
@@ -141,15 +143,20 @@ export default function TaskCreatePage() {
     creation_mode: 'same_topic',
     processing_mode: 'full_auto', pause_mode: 'key_nodes', pause_steps: [],
   }
-  function loadDraft(): { form: TaskCreate; previewScript: string } {
+  function loadDraft(): { form: TaskCreate; previewScript: string; inputMode: 'transcript' | 'douyin'; parseMeta: ParseMeta | null } {
     try {
       const raw = localStorage.getItem(DRAFT_KEY)
       if (raw) {
         const d = JSON.parse(raw)
-        return { form: { ...DEFAULT_FORM, ...(d.form || {}) }, previewScript: d.previewScript || '' }
+        return {
+          form: { ...DEFAULT_FORM, ...(d.form || {}) },
+          previewScript: d.previewScript || '',
+          inputMode: d.inputMode === 'douyin' ? 'douyin' : 'transcript',
+          parseMeta: d.parseMeta || null,
+        }
       }
     } catch { /* 忽略损坏的草稿 */ }
-    return { form: DEFAULT_FORM, previewScript: '' }
+    return { form: DEFAULT_FORM, previewScript: '', inputMode: 'transcript', parseMeta: null }
   }
   const initial = loadDraft()
   const [form, setForm] = useState<TaskCreate>(initial.form)
@@ -159,7 +166,7 @@ export default function TaskCreatePage() {
   const [error, setError] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [cfg, setCfg] = useState<ConfigOut | null>(null)
-  const [inputMode, setInputMode] = useState<'transcript' | 'douyin'>('transcript')
+  const [inputMode, setInputMode] = useState<'transcript' | 'douyin'>(initial.inputMode)
   const [bgmFiles, setBgmFiles] = useState<string[]>([])
   const [refUploading, setRefUploading] = useState(false)
   const [refName, setRefName] = useState<string | null>(null)
@@ -178,7 +185,7 @@ export default function TaskCreatePage() {
   // 链接解析出逐字稿（采集+ASR）
   const [parsing, setParsing] = useState(false)
   const [parseErr, setParseErr] = useState('')
-  const [parseMeta, setParseMeta] = useState<{ title: string; author: string; platform: string } | null>(null)
+  const [parseMeta, setParseMeta] = useState<ParseMeta | null>(initial.parseMeta)
   const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
 
   // 载入配置，用于"凭证未配置"提示。
@@ -201,10 +208,10 @@ export default function TaskCreatePage() {
   useEffect(() => { api.bgmList().then((r) => setBgmFiles(r.files)).catch(() => {}) }, [])
   // 载入草稿动画模板清单。
   useEffect(() => { api.getDraftTemplates().then((r) => setDraftTemplates(r.templates)).catch(() => {}) }, [])
-  // 实时把表单+预览文案存草稿，切页面回来不丢。
+  // 实时把表单+预览文案+输入模式+解析元信息存草稿，切页面回来不丢（含解析出文案后停留的 tab 与“已解析”提示）。
   useEffect(() => {
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, previewScript })) } catch { /* 配额满则忽略 */ }
-  }, [form, previewScript])
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ form, previewScript, inputMode, parseMeta })) } catch { /* 配额满则忽略 */ }
+  }, [form, previewScript, inputMode, parseMeta])
 
   // 检测关键凭证是否缺失（LLM 必需；配图视模块而定）。
   const missingKeys: string[] = []
