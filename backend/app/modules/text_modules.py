@@ -59,6 +59,29 @@ def run_gen_title(provider, model, key, script, keyword=None):
     return title[:30], r
 
 
+def run_gen_title_tags(provider, model, key, script, keyword=None):
+    """生成发布用的【长标题】+【热门话题标签】，供成品一并输出（与短标题互补）。
+    返回 ((long_title str, hashtags list[str]), LLMResult)。
+    锦上添花，解析失败时返回 ('', [])，不阻断出片。"""
+    snippet = (script or "")[:1000]
+    prompt = _render(prompts.TITLE_TAGS, script=snippet, keyword=keyword or "")
+    r: LLMResult = call_llm(provider, model, key, prompt)
+    long_title, tags = "", []
+    try:
+        data = _extract_json(r.text)
+        long_title = str(data.get("long_title") or "").strip().strip('"').strip("「」《》").strip()[:60]
+        raw_tags = data.get("hashtags") or data.get("tags") or []
+        if isinstance(raw_tags, list):
+            for t in raw_tags:
+                t = str(t).strip().lstrip("#").strip()
+                if t and t not in tags:
+                    tags.append(t[:12])
+            tags = tags[:6]
+    except Exception:
+        pass
+    return (long_title, tags), r
+
+
 def run_structure(provider, model, key, source_text):
     """拆解爆款文案结构，返回 ({structure: {...骨架...}}, LLMResult)。
     骨架是 why_viral/hook/structure/ending/rhythm/duration_hint 的 JSON。

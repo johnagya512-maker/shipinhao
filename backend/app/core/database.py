@@ -58,6 +58,8 @@ def _ensure_columns():
         ("tasks", "paused_at", "VARCHAR(2)"),
         ("tasks", "draft_template", "VARCHAR(20) DEFAULT 'classic'"),
         ("tasks", "creation_mode", "VARCHAR(16) DEFAULT 'same_topic'"),
+        ("tasks", "long_title", "VARCHAR(200)"),
+        ("tasks", "hashtags", "JSON"),
         ("configs", "task_storage_dir", "VARCHAR(500)"),
         ("configs", "bgm_dir", "VARCHAR(500)"),
         ("configs", "vision_model", "VARCHAR(80) DEFAULT 'doubao-seed-1-6-250615'"),

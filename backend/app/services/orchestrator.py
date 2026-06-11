@@ -227,6 +227,19 @@ def run_pipeline(db: Session, task_id: str):
                 task.title = task.title or (task.keyword or None)
                 db.commit()
 
+        # 成品物料：长标题 + 热门话题标签（发布时直接可用）。锦上添花，失败不阻断。
+        if not (task.long_title or "").strip() or not task.hashtags:
+            try:
+                (long_title, tags), _tt = tm.run_gen_title_tags(
+                    cfg.llm_provider, cfg.llm_model, llm_key, script, task.keyword)
+                if long_title and not (task.long_title or "").strip():
+                    task.long_title = long_title
+                if tags and not task.hashtags:
+                    task.hashtags = tags
+                db.commit()
+            except Exception:
+                db.rollback()
+
         # H 合规闸门（强制，按赛道词库；三种处理模式都跑——保留合规兜底）
         h_out = _llm_step(db, task, cfg, llm_key, "H",
                           lambda: tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,

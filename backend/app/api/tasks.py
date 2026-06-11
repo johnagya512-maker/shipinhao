@@ -454,6 +454,8 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
             "processing_mode": task.processing_mode, "pause_mode": task.pause_mode,
             "pause_steps": task.pause_steps, "paused_at": task.paused_at,
             "aspect_ratio": task.aspect_ratio, "reference_image": task.reference_image,
+            "long_title": getattr(task, "long_title", None),
+            "hashtags": getattr(task, "hashtags", None),
             "error_code": task.error_code, "error_message": task.error_message,
             "created_at": task.created_at, "updated_at": task.updated_at,
         },

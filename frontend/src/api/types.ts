@@ -105,6 +105,8 @@ export interface TaskDetail {
   total_cost: number
   transcript: string
   title?: string | null
+  long_title?: string | null
+  hashtags?: string[] | null
   author?: string | null
   keyword?: string | null
   track: string

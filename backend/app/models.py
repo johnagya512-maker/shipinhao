@@ -25,6 +25,9 @@ class Task(Base):
     transcript: Mapped[str] = mapped_column(Text)
     keyword: Mapped[str | None] = mapped_column(String(100), nullable=True)
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 长标题（发布说明文案首行用，比 title 更完整）+ 热门话题标签（JSON 数组，不含 #）
+    long_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    hashtags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     author: Mapped[str | None] = mapped_column(String(100), nullable=True)
     modules: Mapped[list] = mapped_column(JSON, default=list)
     target_audience: Mapped[str] = mapped_column(String(30), default="50+女性")
