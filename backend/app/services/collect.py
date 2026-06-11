@@ -106,11 +106,12 @@ def _endpoint_for(platform: str) -> tuple[str, str]:
 
 
 def fetch_video(url_or_share: str, provider: str, api_key: str | None,
-                timeout: float = 20.0) -> CollectResult:
+                timeout: float = 20.0, proxy: str | None = None) -> CollectResult:
     """采集任意支持平台的视频元数据。按链接自动识别平台并路由。
 
     api_key 为空 → 抛 CollectUnavailable，编排降级为手填模式。
     provider 目前支持 tikhub；其他值视为未实现。
+    proxy：出站代理地址（如 http://127.0.0.1:7890），境外采集接口直连不通时用。
     """
     if not api_key:
         raise CollectUnavailable("未配置采集 API Key")
@@ -126,11 +127,27 @@ def fetch_video(url_or_share: str, provider: str, api_key: str | None,
     endpoint, param_name = _endpoint_for(platform)
     headers = {"Authorization": f"Bearer {api_key}"}
     # 多数"按链接"接口收原始分享口令也能解析，故传完整 url_or_share（含口令文本）。
-    try:
-        resp = httpx.get(endpoint, params={param_name: url_or_share.strip() or url},
-                         headers=headers, timeout=timeout)
-    except httpx.RequestError as e:
-        raise CollectError(f"E6003: 采集请求失败: {e}")
+    params = {param_name: url_or_share.strip() or url}
+    client_kw = {"timeout": timeout, "follow_redirects": True}
+    if proxy:
+        client_kw["proxy"] = proxy
+    # 偶发连接被重置（WinError 10054）/超时多为网络抖动，自动退避重试，不一次就报错。
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = httpx.get(endpoint, params=params, headers=headers, **client_kw)
+            break
+        except httpx.RequestError as e:
+            last_err = e
+            if attempt < 2:
+                import time
+                time.sleep(1.5 * (attempt + 1))  # 1.5s、3s 退避
+                continue
+            raise CollectError(
+                f"E6003: 采集请求失败（已重试{attempt + 1}次）: {e}。"
+                f"多为网络波动或防火墙拦截，请检查网络后重试。")
+    else:
+        raise CollectError(f"E6003: 采集请求失败: {last_err}")
 
     if resp.status_code == 401:
         raise CollectError("E6004: 采集 API Key 无效")
@@ -164,6 +181,40 @@ def _first(d: dict, *paths, default=None):
         if ok and cur not in (None, "", [], {}):
             return cur
     return default
+
+
+def _douyin_play_url(aweme: dict) -> str:
+    """抖音专用：从 aweme_detail.video 精确取可下载的播放直链。
+
+    TikHub 返回的 video.play_addr.url_list 里通常有多个地址：
+    - zjcdn.com 的 CDN 直链：带防盗链，第三方裸下载常被掐断；
+    - www.douyin.com/aweme/v1/play/?video_id=... 官方播放入口：更通畅，优先用它。
+    取不到 video.* 时返回空串，交由通用深搜兜底。
+    """
+    video = aweme.get("video") if isinstance(aweme, dict) else None
+    if not isinstance(video, dict):
+        return ""
+    # 收集各码率字段下的所有候选地址，保持顺序去重。
+    cands: list[str] = []
+    for field in ("play_addr", "play_addr_h264", "download_addr", "play_addr_265", "bit_rate"):
+        node = video.get(field)
+        if isinstance(node, dict):
+            for u in (node.get("url_list") or []):
+                if isinstance(u, str) and u.startswith("http") and u not in cands:
+                    cands.append(u)
+        elif isinstance(node, list):  # bit_rate 是数组，元素里再套 play_addr
+            for br in node:
+                pa = (br or {}).get("play_addr") if isinstance(br, dict) else None
+                for u in ((pa or {}).get("url_list") or []):
+                    if isinstance(u, str) and u.startswith("http") and u not in cands:
+                        cands.append(u)
+    if not cands:
+        return ""
+    # 优先抖音官方播放入口（最通畅），否则退而取第一个候选。
+    for u in cands:
+        if "douyin.com/aweme/v1/play" in u:
+            return u
+    return cands[0]
 
 
 def _deep_find_video_url(node, depth=0):
@@ -213,7 +264,7 @@ def _parse_response(data: dict) -> CollectResult:
     play_count = int(_first(stats, "play_count", "play", "view_count", "playCount", default=0) or 0)
     digg_count = int(_first(stats, "digg_count", "like_count", "digg", "likeCount", default=0) or 0)
 
-    video_url = _deep_find_video_url(aweme) or _deep_find_video_url(data)
+    video_url = _douyin_play_url(aweme) or _deep_find_video_url(aweme) or _deep_find_video_url(data)
 
     return CollectResult(
         title=title,

@@ -59,6 +59,12 @@ const MONETIZATIONS = [
   { key: 'revenue_share', name: '创作分成', desc: '结尾引导互动' },
   { key: 'book_sales', name: '图书带货', desc: '结尾带出书籍' },
 ]
+// 平台 key → 中文名（解析结果展示用）
+const PLATFORM_LABELS: Record<string, string> = {
+  douyin: '抖音', tiktok: 'TikTok', kuaishou: '快手', xiaohongshu: '小红书',
+  bilibili: 'B站', weibo: '微博', wechat: '视频号',
+}
+const PLATFORM_NAME = (k: string) => PLATFORM_LABELS[k] || k || '视频'
 // 音色库从后端拉取（GET /config/voices）。voice 为空=用配置页默认音色。
 // 实际可用性取决于火山账号授权，可点「试听」验证。
 // 可选模块（A 清洗 / B 改写 / G 合成为必选，后端强制）。
@@ -169,6 +175,10 @@ export default function TaskCreatePage() {
   const [previewScript, setPreviewScript] = useState(initial.previewScript)
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeErr, setAnalyzeErr] = useState('')
+  // 链接解析出逐字稿（采集+ASR）
+  const [parsing, setParsing] = useState(false)
+  const [parseErr, setParseErr] = useState('')
+  const [parseMeta, setParseMeta] = useState<{ title: string; author: string; platform: string } | null>(null)
   const { previewingId, error: previewError, preview: previewVoice } = useVoicePreview()
 
   // 载入配置，用于"凭证未配置"提示。
@@ -240,6 +250,27 @@ export default function TaskCreatePage() {
     return Boolean((form.douyin_url ?? '').trim() || (form.transcript ?? '').trim())
   }
 
+  // 解析视频链接 → 出逐字稿。成功后把文案填进 transcript 并切到「粘贴文案」tab，
+  // 用户即可看到/微调文案、点二创预览，再开始生成。
+  async function doParseTranscript() {
+    const url = (form.douyin_url ?? '').trim()
+    if (!url) { setParseErr('请先粘贴视频分享链接或口令'); return }
+    setParsing(true); setParseErr(''); setParseMeta(null)
+    try {
+      const r = await api.parseTranscript(url)
+      set({ transcript: r.transcript })
+      setParseMeta({ title: r.title, author: r.author, platform: r.platform })
+      if (r.title && !(form.title ?? '').trim()) set({ title: r.title })
+      if (r.author && !(form.author ?? '').trim()) set({ author: r.author })
+      // 不切 tab：文案直接显示在下方结果框，用户在链接 tab 即可看到/微调，再点二创预览或开始生成。
+      setEst(null)
+    } catch (e) {
+      setParseErr((e as ApiError).message)
+    } finally {
+      setParsing(false)
+    }
+  }
+
   async function doAnalyzeStructure() {
     const text = (form.transcript ?? '').trim()
     if (text.length < 20) { setAnalyzeErr('请先在上方粘贴文案（至少 20 字）'); return }
@@ -281,6 +312,7 @@ export default function TaskCreatePage() {
     setForm(DEFAULT_FORM)
     setPreviewScript(''); setStructure(null); setEst(null); setError(null)
     setRefName(null); setRefPreview(null)
+    setParseErr(''); setParseMeta(null)
   }
 
   async function submit() {
@@ -332,14 +364,47 @@ export default function TaskCreatePage() {
         </div>
 
         {inputMode === 'douyin' ? (
-          <label className="block">
-            <span className="text-sm text-slate-400">视频链接（需配采集/ASR Key）</span>
-            <input className="field"
-              placeholder="粘贴抖音/快手/小红书/B站/微博/视频号/TikTok 的分享口令或链接…"
-              value={form.douyin_url ?? ''}
-              onChange={(e) => { set({ douyin_url: e.target.value }); setEst(null) }} />
-            <span className="block text-[11px] text-slate-600 mt-1">支持：抖音 · 快手 · 小红书 · B站 · 微博 · 视频号 · TikTok（自动识别平台）</span>
-          </label>
+          <div className="space-y-2">
+            <label className="block">
+              <span className="text-sm text-slate-400">视频链接（需配采集/ASR Key）</span>
+              <input className="field"
+                placeholder="粘贴抖音/快手/小红书/B站/微博/视频号/TikTok 的分享口令或链接…"
+                value={form.douyin_url ?? ''}
+                onChange={(e) => { set({ douyin_url: e.target.value }); setEst(null); setParseErr(''); setParseMeta(null) }} />
+              <span className="block text-[11px] text-slate-600 mt-1">支持：抖音 · 快手 · 小红书 · B站 · 微博 · 视频号 · TikTok（自动识别平台）</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={doParseTranscript} disabled={parsing || !(form.douyin_url ?? '').trim()}
+                className="text-[13px] px-3 py-1.5 rounded-lg border border-brand-500/50 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
+                {parsing ? '解析中…下载视频+转写，约30-90秒' : '🔍 解析出文案'}
+              </button>
+              {parseMeta && (
+                <span className="text-[11px] text-emerald-400 truncate">
+                  ✓ 已解析（{PLATFORM_NAME(parseMeta.platform)}{parseMeta.author ? ` · ${parseMeta.author}` : ''}），文案已填入下方
+                </span>
+              )}
+            </div>
+            {parsing && (
+              <p className="text-[11px] text-slate-500">正在采集无水印视频并语音转写，请稍候，不要离开本页。</p>
+            )}
+            {parseErr && <p className="text-[11px] text-red-400">{parseErr}</p>}
+            <p className="text-[11px] text-slate-600">
+              提示：分享文案里要包含真实链接（如 v.douyin.com/xxx）才能解析。解析完文案会填到「粘贴文案」里，可微调后再二创。
+            </p>
+            {/* 解析结果框：当场展示转写出的逐字稿，可直接编辑（与下方文案/二创预览共用 form.transcript）。 */}
+            {(form.transcript ?? '').trim() && (
+              <div className="mt-1 rounded-xl bg-slate-900/60 border border-emerald-500/30 p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[12px] font-medium text-emerald-300">📄 解析出的文案</span>
+                  <span className="text-[10px] text-slate-600">可直接编辑微调</span>
+                </div>
+                <textarea rows={10} value={form.transcript ?? ''}
+                  onChange={(e) => { set({ transcript: e.target.value }); setEst(null) }}
+                  className="w-full text-sm bg-slate-950/50 border border-slate-700 rounded-lg p-2.5 text-slate-200 leading-relaxed outline-none resize-y font-mono focus:border-brand-500" />
+                <p className="mt-1 text-[10px] text-slate-600">{(form.transcript ?? '').length} 字 · 满意后可点上方「二创方式」预览，或直接「开始生成」。</p>
+              </div>
+            )}
+          </div>
         ) : (
           <label className="block">
             <span className="text-sm text-slate-400">逐字稿</span>
@@ -354,12 +419,12 @@ export default function TaskCreatePage() {
         <div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-400">二创方式 <span className="text-[11px] text-slate-600">· 拆解爆款结构再仿写</span></span>
-            {inputMode === 'transcript' && (
+            {inputMode === 'transcript' || (form.transcript ?? '').trim() ? (
               <button type="button" onClick={doAnalyzeStructure} disabled={analyzing}
                 className="text-[12px] px-2.5 py-1 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
                 {analyzing ? '生成中…约30-60秒' : '✨ 预览二创文案'}
               </button>
-            )}
+            ) : null}
           </div>
           {analyzing && (
             <p className="mt-1 text-[11px] text-slate-500">正在拆解结构并改写，大模型生成需要点时间，请稍候，不要离开本页。</p>

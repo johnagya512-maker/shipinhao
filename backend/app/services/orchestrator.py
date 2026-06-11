@@ -421,11 +421,12 @@ def _run_collect_asr(db: Session, task: Task, cfg: Config, started: float):
     """
     collect_key = decrypt(cfg.collect_api_key_enc) if cfg.collect_api_key_enc else ""
     asr_key = decrypt(cfg.asr_api_key_enc) if cfg.asr_api_key_enc else ""
+    proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
 
     # 采集：拿元数据 + 无水印视频地址
     video_url = ""
     try:
-        cr = collect_svc.fetch_video(task.douyin_url, cfg.collect_provider, collect_key)
+        cr = collect_svc.fetch_video(task.douyin_url, cfg.collect_provider, collect_key, proxy=proxy)
         video_url = cr.video_url
         task.source_meta = {"title": cr.title, "author": cr.author,
                             "play_count": cr.play_count, "digg_count": cr.digg_count,
@@ -447,7 +448,7 @@ def _run_collect_asr(db: Session, task: Task, cfg: Config, started: float):
 
     # ASR：视频 → 逐字稿
     try:
-        ar = asr_svc.transcribe_url(video_url, cfg.asr_provider, asr_key)
+        ar = asr_svc.transcribe_url(video_url, cfg.asr_provider, asr_key, proxy=proxy)
         if ar.text.strip():
             task.transcript = ar.text.strip()
             db.commit()

@@ -47,6 +47,7 @@ def _to_out(cfg: Config) -> ConfigOut:
         jianying_draft_dir=cfg.jianying_draft_dir or "",
         task_storage_dir=cfg.task_storage_dir or "",
         bgm_dir=cfg.bgm_dir or "",
+        proxy_url=getattr(cfg, "proxy_url", None) or "",
     )
 
 
@@ -143,6 +144,8 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
         cfg.task_storage_dir = body.task_storage_dir.strip() or None
     if body.bgm_dir is not None:
         cfg.bgm_dir = body.bgm_dir.strip() or None
+    if body.proxy_url is not None:
+        cfg.proxy_url = body.proxy_url.strip() or None
     db.commit()
     return _to_out(cfg)
 

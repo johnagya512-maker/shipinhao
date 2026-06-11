@@ -6,7 +6,7 @@ import type { ConfigOut, ConfigUpdate } from '../api/types'
 const LLM_PROVIDERS = ['deepseek', 'openai', 'qwen', 'doubao']
 const IMAGE_PROVIDERS = ['doubao', 'openai']
 const COLLECT_PROVIDERS = ['tikhub']
-const ASR_PROVIDERS = ['siliconflow']
+const ASR_PROVIDERS = ['volcano', 'siliconflow']
 const TTS_PROVIDERS = ['volcano', 'siliconflow']
 
 export default function ConfigPage() {
@@ -166,6 +166,16 @@ export default function ConfigPage() {
             value={form.collect_api_key ?? ''}
             onChange={(e) => set({ collect_api_key: e.target.value })} />
         </label>
+        <label className="block">
+          <span className="text-sm text-slate-400">出站代理（可选）</span>
+          <input type="text" className="field"
+            placeholder={cfg.proxy_url || '如 http://127.0.0.1:7890，留空则直连'}
+            value={form.proxy_url ?? ''}
+            onChange={(e) => set({ proxy_url: e.target.value })} />
+          <span className="block text-[11px] text-slate-600 mt-1">
+            TikHub 等境外采集接口直连不通（如报「远程主机强迫关闭连接」）时填此项，让采集请求走代理。
+          </span>
+        </label>
       </div>
 
       <div className="card space-y-4">
@@ -184,6 +194,11 @@ export default function ConfigPage() {
             placeholder={cfg.asr_api_key_mask || '未配置'}
             value={form.asr_api_key ?? ''}
             onChange={(e) => set({ asr_api_key: e.target.value })} />
+          <span className="block text-[11px] text-slate-600 mt-1">
+            {(form.asr_provider ?? cfg.asr_provider) === 'volcano'
+              ? '火山：填「豆包录音文件识别大模型2.0」的 API Key（控制台 x-api-key，无需 appid）。需先开通该模型。'
+              : '硅基流动：填平台 API Key（SenseVoice 转写）。'}
+          </span>
         </label>
       </div>
 

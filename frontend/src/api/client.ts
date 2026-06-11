@@ -151,6 +151,14 @@ export const api = {
   queueStats: () => request<QueueStats>('/tasks-queue/stats'),
   createTask: (body: TaskCreate) =>
     request<TaskOut>('/tasks', { method: 'POST', body: JSON.stringify(body) }),
+  // 解析视频链接出逐字稿（不创建任务）：采集无水印视频 → ASR 转写。
+  // 解析较慢（下载视频+转写），给足超时。失败抛带错误码的 ApiError 引导手填。
+  parseTranscript: (douyinUrl: string) =>
+    request<{ transcript: string; title: string; author: string; platform: string
+      play_count: number; digg_count: number }>('/tasks/parse-transcript', {
+      method: 'POST', body: JSON.stringify({ douyin_url: douyinUrl }),
+      signal: AbortSignal.timeout(180_000),
+    }),
   estimate: (body: TaskCreate) =>
     request<EstimateOut>('/tasks/estimate', { method: 'POST', body: JSON.stringify(body) }),
   getTask: (id: string) => request<TaskOut>(`/tasks/${id}`),

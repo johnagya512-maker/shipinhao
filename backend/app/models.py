@@ -130,6 +130,9 @@ class Config(Base):
     task_storage_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # 背景音乐目录：用户把 mp3 放进来，新建任务时可选作 BGM。为空则禁用 BGM。
     bgm_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 出站代理：访问境外接口（如 TikHub 采集）走代理。形如 http://127.0.0.1:7890。
+    # 为空则直连。仅作用于采集/ASR 下载等出站请求，不影响国内接口。
+    proxy_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
     daily_cost_cap: Mapped[float] = mapped_column(Numeric(8, 2), default=100)
     concurrency: Mapped[int] = mapped_column(Integer, default=3)
     # 任务级并发：同时执行的任务数上限（与 concurrency 的图片级并发相乘 ≈ 总图片请求量）。

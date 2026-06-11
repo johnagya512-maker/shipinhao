@@ -117,6 +117,7 @@ class ConfigUpdate(BaseModel):
     jianying_draft_dir: str | None = None
     task_storage_dir: str | None = None
     bgm_dir: str | None = None
+    proxy_url: str | None = None
 
 
 class ConfigOut(BaseModel):
@@ -142,6 +143,7 @@ class ConfigOut(BaseModel):
     jianying_draft_dir: str
     task_storage_dir: str
     bgm_dir: str
+    proxy_url: str = ""
 
 
 class EstimateOut(BaseModel):

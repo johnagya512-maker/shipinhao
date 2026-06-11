@@ -63,6 +63,7 @@ def _ensure_columns():
         ("configs", "vision_model", "VARCHAR(80) DEFAULT 'doubao-seed-1-6-250615'"),
         ("configs", "max_concurrent_tasks", "INTEGER DEFAULT 3"),
         ("configs", "tts_favorites", "JSON"),
+        ("configs", "proxy_url", "VARCHAR(200)"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

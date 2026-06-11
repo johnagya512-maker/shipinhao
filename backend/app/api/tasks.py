@@ -204,6 +204,52 @@ def estimate(body: TaskCreate, db: Session = Depends(get_db)):
     return EstimateOut(estimated_cost=est, daily_cap_reached=cost_svc.daily_cap_reached(db))
 
 
+@router.post("/tasks/parse-transcript")
+def parse_transcript(body: dict, db: Session = Depends(get_db)):
+    """解析视频链接 → 出逐字稿（不创建任务）。
+    贴分享链接/口令 → 采集拿无水印视频地址 → ASR 转写成文案，返回给前端展示。
+    用户拿到文案后可手动改、可点二创预览，满意了再「开始生成」。
+    入参 {douyin_url}。返回 {transcript, title, author, platform, play_count, digg_count}。
+    未配采集/ASR Key 或链接无效时返回明确错误，引导手填。"""
+    from app.services import collect as collect_svc
+    from app.services import asr as asr_svc
+    from app.core.security import decrypt
+    url = (body.get("douyin_url") or "").strip()
+    if not url:
+        raise HTTPException(400, detail="E6001: 请填写视频链接")
+    cfg = db.get(Config, 1)
+    collect_key = decrypt(cfg.collect_api_key_enc) if cfg and cfg.collect_api_key_enc else ""
+    asr_key = decrypt(cfg.asr_api_key_enc) if cfg and cfg.asr_api_key_enc else ""
+    if not collect_key:
+        raise HTTPException(400, detail="E6001: 未配置采集 API Key，请在配置页填写，或切到「粘贴文案」手填逐字稿")
+    if not asr_key:
+        raise HTTPException(400, detail="E6101: 未配置 ASR（语音转写）API Key，请在配置页填写，或切到「粘贴文案」手填逐字稿")
+    proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
+
+    # 采集：拿元数据 + 无水印视频地址
+    try:
+        cr = collect_svc.fetch_video(url, cfg.collect_provider if cfg else "tikhub", collect_key, proxy=proxy)
+    except collect_svc.CollectUnavailable:
+        raise HTTPException(400, detail="E6001: 未配置采集 API Key，请在配置页填写，或切到「粘贴文案」手填逐字稿")
+    except collect_svc.CollectError as e:
+        raise HTTPException(400, detail=str(e))
+    if not cr.video_url:
+        raise HTTPException(400, detail="E6009: 采集成功但未取到视频地址，无法转写；请手动粘贴逐字稿")
+
+    # ASR：视频 → 逐字稿
+    try:
+        ar = asr_svc.transcribe_url(cr.video_url, cfg.asr_provider if cfg else "siliconflow", asr_key, proxy=proxy)
+    except asr_svc.ASRUnavailable:
+        raise HTTPException(400, detail="E6101: 未配置 ASR API Key，请在配置页填写，或切到「粘贴文案」手填逐字稿")
+    except asr_svc.ASRError as e:
+        raise HTTPException(502, detail=str(e))
+    text = (ar.text or "").strip()
+    if not text:
+        raise HTTPException(502, detail="E6107: 转写结果为空，可能该视频无人声；请手动粘贴逐字稿")
+    return {"transcript": text, "title": cr.title, "author": cr.author,
+            "platform": cr.platform, "play_count": cr.play_count, "digg_count": cr.digg_count}
+
+
 @router.post("/tasks/collect-preview")
 def collect_preview(body: dict, db: Session = Depends(get_db)):
     """采集预览：贴抖音链接先拿元数据展示（不创建任务）。
@@ -216,7 +262,8 @@ def collect_preview(body: dict, db: Session = Depends(get_db)):
     cfg = db.get(Config, 1)
     key = decrypt(cfg.collect_api_key_enc) if cfg and cfg.collect_api_key_enc else ""
     try:
-        cr = collect_svc.fetch_douyin(url, cfg.collect_provider if cfg else "tikhub", key)
+        cr = collect_svc.fetch_douyin(url, cfg.collect_provider if cfg else "tikhub", key,
+                                      proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None)
         return {"available": True, "title": cr.title, "author": cr.author,
                 "play_count": cr.play_count, "digg_count": cr.digg_count,
                 "has_video": bool(cr.video_url)}

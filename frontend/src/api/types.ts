@@ -151,6 +151,7 @@ export interface ConfigOut {
   jianying_draft_dir: string
   task_storage_dir: string
   bgm_dir: string
+  proxy_url: string
 }
 
 export interface ConfigUpdate {
@@ -173,6 +174,7 @@ export interface ConfigUpdate {
   jianying_draft_dir?: string
   task_storage_dir?: string
   bgm_dir?: string
+  proxy_url?: string
 }
 
 export interface QueueStats {
