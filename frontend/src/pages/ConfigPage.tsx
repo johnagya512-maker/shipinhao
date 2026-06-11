@@ -13,10 +13,12 @@ export default function ConfigPage() {
   const [cfg, setCfg] = useState<ConfigOut | null>(null)
   const [form, setForm] = useState<ConfigUpdate>({})
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
-  const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testingTts, setTestingTts] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  // 字段级自动保存状态：key → 该字段当前是 保存中/已保存/出错。
+  const [fieldStatus, setFieldStatus] = useState<Record<string, 'saving' | 'saved' | 'error'>>({})
+  const [fieldErr, setFieldErr] = useState<Record<string, string>>({})
 
   useEffect(() => {
     api.getConfig().then(setCfg).catch((e: ApiError) =>
@@ -25,23 +27,39 @@ export default function ConfigPage() {
 
   const set = (patch: Partial<ConfigUpdate>) => setForm((f) => ({ ...f, ...patch }))
 
-  async function save() {
-    setSaving(true)
-    setMsg(null)
+  // 自动保存单个字段：失焦(文本/密码)或改动(下拉/数字)即调用。成功后局部更新 cfg、
+  // 字段旁实时显示「已保存」；Key 类字段保存后清空输入框（回显掩码）。
+  async function saveField<K extends keyof ConfigUpdate>(key: K, value: ConfigUpdate[K]) {
+    // Key 类字段留空表示「不修改」，不触发保存。
+    if (typeof key === 'string' && key.endsWith('_api_key') && !String(value ?? '').trim()) return
+    setFieldStatus((s) => ({ ...s, [key]: 'saving' }))
+    setFieldErr((e) => ({ ...e, [key]: '' }))
     try {
-      const updated = await api.updateConfig(form)
+      const updated = await api.updateConfig({ [key]: value } as ConfigUpdate)
       setCfg(updated)
-      setForm((f) => ({
-        ...f, llm_api_key: '', image_api_key: '',
-        collect_api_key: '', asr_api_key: '', tts_api_key: '',
-      }))
-      setMsg({ type: 'ok', text: '已保存' })
+      if (typeof key === 'string' && key.endsWith('_api_key')) {
+        setForm((f) => ({ ...f, [key]: '' }))
+      }
+      setFieldStatus((s) => ({ ...s, [key]: 'saved' }))
+      // 「已保存」提示 2.5 秒后淡出，避免长期占着；用 key 比对防止被后续保存覆盖误清。
+      setTimeout(() => {
+        setFieldStatus((s) => (s[key as string] === 'saved' ? { ...s, [key]: undefined as never } : s))
+      }, 2500)
     } catch (e) {
-      setMsg({ type: 'err', text: (e as ApiError).message })
-    } finally {
-      setSaving(false)
+      setFieldStatus((s) => ({ ...s, [key]: 'error' }))
+      setFieldErr((er) => ({ ...er, [key]: (e as ApiError).message }))
     }
   }
+
+  // 字段旁的实时状态小标（保存中 / ✓ 已保存 / ✗ 错误）。
+  function Status({ k }: { k: keyof ConfigUpdate }) {
+    const s = fieldStatus[k as string]
+    if (s === 'saving') return <span className="text-[11px] text-slate-500 ml-2">保存中…</span>
+    if (s === 'saved') return <span className="text-[11px] text-emerald-400 ml-2">✓ 已保存</span>
+    if (s === 'error') return <span className="text-[11px] text-red-400 ml-2">✗ {fieldErr[k as string] || '保存失败'}</span>
+    return null
+  }
+
 
   async function test() {
     setTesting(true)
@@ -100,13 +118,13 @@ export default function ConfigPage() {
       )}
 
       <div className="card space-y-4">
-        <div className="font-semibold text-slate-100">文案模型（LLM）</div>
+        <div className="font-semibold text-slate-100">文案模型（LLM）<Status k="llm_provider" /><Status k="llm_model" /><Status k="llm_api_key" /></div>
         <div className="grid grid-cols-2 gap-4">
           <label className="block">
             <span className="text-sm text-slate-400">供应商</span>
             <select className="field"
               defaultValue={cfg.llm_provider}
-              onChange={(e) => set({ llm_provider: e.target.value })}>
+              onChange={(e) => { set({ llm_provider: e.target.value }); saveField('llm_provider', e.target.value) }}>
               {LLM_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </label>
@@ -114,7 +132,8 @@ export default function ConfigPage() {
             <span className="text-sm text-slate-600">模型</span>
             <input className="field"
               defaultValue={cfg.llm_model}
-              onChange={(e) => set({ llm_model: e.target.value })} />
+              onChange={(e) => set({ llm_model: e.target.value })}
+              onBlur={(e) => saveField('llm_model', e.target.value)} />
           </label>
         </div>
         <label className="block">
@@ -122,7 +141,8 @@ export default function ConfigPage() {
           <input type="password" className="field"
             placeholder={cfg.llm_api_key_mask || '未配置'}
             value={form.llm_api_key ?? ''}
-            onChange={(e) => set({ llm_api_key: e.target.value })} />
+            onChange={(e) => set({ llm_api_key: e.target.value })}
+            onBlur={(e) => saveField('llm_api_key', e.target.value)} />
           {cfg.llm_api_key_mask && (
             <span className="text-xs text-slate-400">当前：{cfg.llm_api_key_mask}（留空不修改）</span>
           )}
@@ -130,12 +150,12 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-4">
-        <div className="font-semibold text-slate-100">配图模型（图像）</div>
+        <div className="font-semibold text-slate-100">配图模型（图像）<Status k="image_provider" /><Status k="image_api_key" /></div>
         <label className="block">
           <span className="text-sm text-slate-400">供应商</span>
           <select className="field"
             defaultValue={cfg.image_provider}
-            onChange={(e) => set({ image_provider: e.target.value })}>
+            onChange={(e) => { set({ image_provider: e.target.value }); saveField('image_provider', e.target.value) }}>
             {IMAGE_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
@@ -144,18 +164,19 @@ export default function ConfigPage() {
           <input type="password" className="field"
             placeholder={cfg.image_api_key_mask || '未配置'}
             value={form.image_api_key ?? ''}
-            onChange={(e) => set({ image_api_key: e.target.value })} />
+            onChange={(e) => set({ image_api_key: e.target.value })}
+            onBlur={(e) => saveField('image_api_key', e.target.value)} />
         </label>
       </div>
 
       <div className="card space-y-4">
-        <div className="font-semibold text-slate-100">视频采集（贴链接自动取素材，可选）</div>
+        <div className="font-semibold text-slate-100">视频采集（贴链接自动取素材，可选）<Status k="collect_provider" /><Status k="collect_api_key" /><Status k="proxy_url" /></div>
         <div className="text-[11px] text-slate-500 -mt-2">支持抖音/快手/小红书/B站/微博/视频号/TikTok，按链接自动识别平台（TikHub）。</div>
         <label className="block">
           <span className="text-sm text-slate-400">供应商</span>
           <select className="field"
             defaultValue={cfg.collect_provider}
-            onChange={(e) => set({ collect_provider: e.target.value })}>
+            onChange={(e) => { set({ collect_provider: e.target.value }); saveField('collect_provider', e.target.value) }}>
             {COLLECT_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
@@ -164,14 +185,16 @@ export default function ConfigPage() {
           <input type="password" className="field"
             placeholder={cfg.collect_api_key_mask || '未配置'}
             value={form.collect_api_key ?? ''}
-            onChange={(e) => set({ collect_api_key: e.target.value })} />
+            onChange={(e) => set({ collect_api_key: e.target.value })}
+            onBlur={(e) => saveField('collect_api_key', e.target.value)} />
         </label>
         <label className="block">
           <span className="text-sm text-slate-400">出站代理（可选）</span>
           <input type="text" className="field"
             placeholder={cfg.proxy_url || '如 http://127.0.0.1:7890，留空则直连'}
             value={form.proxy_url ?? ''}
-            onChange={(e) => set({ proxy_url: e.target.value })} />
+            onChange={(e) => set({ proxy_url: e.target.value })}
+            onBlur={(e) => saveField('proxy_url', e.target.value)} />
           <span className="block text-[11px] text-slate-600 mt-1">
             TikHub 等境外采集接口直连不通（如报「远程主机强迫关闭连接」）时填此项，让采集请求走代理。
           </span>
@@ -179,12 +202,12 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-4">
-        <div className="font-semibold text-slate-100">语音转写 ASR（视频自动转逐字稿，可选）</div>
+        <div className="font-semibold text-slate-100">语音转写 ASR（视频自动转逐字稿，可选）<Status k="asr_provider" /><Status k="asr_api_key" /></div>
         <label className="block">
           <span className="text-sm text-slate-400">供应商</span>
           <select className="field"
             defaultValue={cfg.asr_provider}
-            onChange={(e) => set({ asr_provider: e.target.value })}>
+            onChange={(e) => { set({ asr_provider: e.target.value }); saveField('asr_provider', e.target.value) }}>
             {ASR_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
@@ -193,7 +216,8 @@ export default function ConfigPage() {
           <input type="password" className="field"
             placeholder={cfg.asr_api_key_mask || '未配置'}
             value={form.asr_api_key ?? ''}
-            onChange={(e) => set({ asr_api_key: e.target.value })} />
+            onChange={(e) => set({ asr_api_key: e.target.value })}
+            onBlur={(e) => saveField('asr_api_key', e.target.value)} />
           <span className="block text-[11px] text-slate-600 mt-1">
             {(form.asr_provider ?? cfg.asr_provider) === 'volcano'
               ? '火山：填「豆包录音文件识别大模型2.0」的 API Key（控制台 x-api-key，无需 appid）。需先开通该模型。'
@@ -203,13 +227,13 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-4">
-        <div className="font-semibold text-slate-100">配音 TTS（自动配音成片，可选）</div>
+        <div className="font-semibold text-slate-100">配音 TTS（自动配音成片，可选）<Status k="tts_provider" /><Status k="tts_voice" /><Status k="tts_api_key" /><Status k="tts_appid" /></div>
         <div className="grid grid-cols-2 gap-4">
           <label className="block">
             <span className="text-sm text-slate-400">供应商</span>
             <select className="field"
               defaultValue={cfg.tts_provider}
-              onChange={(e) => set({ tts_provider: e.target.value })}>
+              onChange={(e) => { set({ tts_provider: e.target.value }); saveField('tts_provider', e.target.value) }}>
               {TTS_PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           </label>
@@ -219,7 +243,8 @@ export default function ConfigPage() {
               <input className="field flex-1"
                 placeholder="留空用默认音色"
                 defaultValue={cfg.tts_voice}
-                onChange={(e) => set({ tts_voice: e.target.value })} />
+                onChange={(e) => set({ tts_voice: e.target.value })}
+                onBlur={(e) => saveField('tts_voice', e.target.value)} />
               <button type="button" onClick={previewTts} disabled={previewing}
                 className="mt-1 px-3 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800 disabled:opacity-50">
                 {previewing ? '试听中…' : '▶ 试听'}
@@ -232,36 +257,38 @@ export default function ConfigPage() {
           <input type="password" className="field"
             placeholder={cfg.tts_api_key_mask || '未配置'}
             value={form.tts_api_key ?? ''}
-            onChange={(e) => set({ tts_api_key: e.target.value })} />
+            onChange={(e) => set({ tts_api_key: e.target.value })}
+            onBlur={(e) => saveField('tts_api_key', e.target.value)} />
         </label>
         <label className="block">
           <span className="text-sm text-slate-600">App ID（仅火山 volcano 需要）</span>
           <input className="mt-1 w-full border rounded-lg px-3 py-2"
             placeholder={cfg.tts_appid || '火山控制台的 appid'}
             defaultValue={cfg.tts_appid}
-            onChange={(e) => set({ tts_appid: e.target.value })} />
+            onChange={(e) => set({ tts_appid: e.target.value })}
+            onBlur={(e) => saveField('tts_appid', e.target.value)} />
         </label>
       </div>
 
       <div className="card grid grid-cols-2 gap-4 mt-4">
         <label className="block">
-          <span className="text-sm text-slate-600">每日成本上限（元）</span>
+          <span className="text-sm text-slate-600">每日成本上限（元）<Status k="daily_cost_cap" /></span>
           <input type="number" min={0} step={1} className="mt-1 w-full border rounded-lg px-3 py-2"
             defaultValue={cfg.daily_cost_cap}
-            onChange={(e) => set({ daily_cost_cap: Number(e.target.value) })} />
+            onChange={(e) => { set({ daily_cost_cap: Number(e.target.value) }); saveField('daily_cost_cap', Number(e.target.value)) }} />
         </label>
         <label className="block">
-          <span className="text-sm text-slate-600">最大并行任务数（1-10）</span>
+          <span className="text-sm text-slate-600">最大并行任务数（1-10）<Status k="max_concurrent_tasks" /></span>
           <input type="number" min={1} max={10} className="mt-1 w-full border rounded-lg px-3 py-2"
             defaultValue={cfg.max_concurrent_tasks}
-            onChange={(e) => set({ max_concurrent_tasks: Number(e.target.value) })} />
+            onChange={(e) => { set({ max_concurrent_tasks: Number(e.target.value) }); saveField('max_concurrent_tasks', Number(e.target.value)) }} />
           <span className="text-xs text-slate-500 mt-1 block">同时执行几个任务，超出的自动排队。改后立即生效。</span>
         </label>
         <label className="block">
-          <span className="text-sm text-slate-600">单任务配图并发（1-10）</span>
+          <span className="text-sm text-slate-600">单任务配图并发（1-10）<Status k="concurrency" /></span>
           <input type="number" min={1} max={10} className="mt-1 w-full border rounded-lg px-3 py-2"
             defaultValue={cfg.concurrency}
-            onChange={(e) => set({ concurrency: Number(e.target.value) })} />
+            onChange={(e) => { set({ concurrency: Number(e.target.value) }); saveField('concurrency', Number(e.target.value)) }} />
           <span className="text-xs text-slate-500 mt-1 block">一个任务内同时生成几张图。</span>
         </label>
         <div className="col-span-2 text-xs text-amber-500/90 bg-amber-500/5 rounded-lg px-3 py-2">
@@ -271,19 +298,20 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-2 mt-4">
-        <div className="font-semibold text-slate-100">剪映草稿目录（成片自动写入，可直接打开编辑）</div>
+        <div className="font-semibold text-slate-100">剪映草稿目录（成片自动写入，可直接打开编辑）<Status k="jianying_draft_dir" /></div>
         <label className="block">
           <div className="flex gap-2">
             <input className="field flex-1"
               placeholder={cfg.jianying_draft_dir || 'D:\\下载\\JianyingPro Drafts'}
               value={form.jianying_draft_dir ?? cfg.jianying_draft_dir}
-              onChange={(e) => set({ jianying_draft_dir: e.target.value })} />
+              onChange={(e) => set({ jianying_draft_dir: e.target.value })}
+              onBlur={(e) => saveField('jianying_draft_dir', e.target.value)} />
             {window.desktop && (
               <button type="button"
                 className="mt-1 px-4 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800"
                 onClick={async () => {
                   const dir = await window.desktop!.pickFolder()
-                  if (dir) set({ jianying_draft_dir: dir })
+                  if (dir) { set({ jianying_draft_dir: dir }); saveField('jianying_draft_dir', dir) }
                 }}>
                 浏览…
               </button>
@@ -296,19 +324,20 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-2 mt-4">
-        <div className="font-semibold text-slate-100">任务存储目录（图片/音频等中间产物落盘位置）</div>
+        <div className="font-semibold text-slate-100">任务存储目录（图片/音频等中间产物落盘位置）<Status k="task_storage_dir" /></div>
         <label className="block">
           <div className="flex gap-2">
             <input className="field flex-1"
               placeholder={cfg.task_storage_dir || '留空用默认（应用数据目录）'}
               value={form.task_storage_dir ?? cfg.task_storage_dir}
-              onChange={(e) => set({ task_storage_dir: e.target.value })} />
+              onChange={(e) => set({ task_storage_dir: e.target.value })}
+              onBlur={(e) => saveField('task_storage_dir', e.target.value)} />
             {window.desktop && (
               <button type="button"
                 className="mt-1 px-4 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800"
                 onClick={async () => {
                   const dir = await window.desktop!.pickFolder()
-                  if (dir) set({ task_storage_dir: dir })
+                  if (dir) { set({ task_storage_dir: dir }); saveField('task_storage_dir', dir) }
                 }}>
                 浏览…
               </button>
@@ -321,19 +350,20 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-2 mt-4">
-        <div className="font-semibold text-slate-100">背景音乐目录（可选，mp4 合成时混入 BGM）</div>
+        <div className="font-semibold text-slate-100">背景音乐目录（可选，mp4 合成时混入 BGM）<Status k="bgm_dir" /></div>
         <label className="block">
           <div className="flex gap-2">
             <input className="field flex-1"
               placeholder={cfg.bgm_dir || '留空则不启用 BGM'}
               value={form.bgm_dir ?? cfg.bgm_dir}
-              onChange={(e) => set({ bgm_dir: e.target.value })} />
+              onChange={(e) => set({ bgm_dir: e.target.value })}
+              onBlur={(e) => saveField('bgm_dir', e.target.value)} />
             {window.desktop && (
               <button type="button"
                 className="mt-1 px-4 rounded-lg border border-slate-700 text-slate-200 text-sm whitespace-nowrap bg-slate-800/40 hover:bg-slate-800"
                 onClick={async () => {
                   const dir = await window.desktop!.pickFolder()
-                  if (dir) set({ bgm_dir: dir })
+                  if (dir) { set({ bgm_dir: dir }); saveField('bgm_dir', dir) }
                 }}>
                 浏览…
               </button>
@@ -346,10 +376,6 @@ export default function ConfigPage() {
       </div>
 
       <div className="flex gap-3 mt-5">
-        <button onClick={save} disabled={saving}
-          className="px-5 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium disabled:opacity-50">
-          {saving ? '保存中…' : '保存配置'}
-        </button>
         <button onClick={test} disabled={testing}
           className="px-5 py-2 rounded-lg border border-slate-300 text-sm font-medium disabled:opacity-50">
           {testing ? '测试中…' : '测试 LLM 连通'}
@@ -358,6 +384,7 @@ export default function ConfigPage() {
           className="px-5 py-2 rounded-lg border border-slate-300 text-sm font-medium disabled:opacity-50">
           {testingTts ? '测试中…' : '测试 TTS 连通'}
         </button>
+        <span className="self-center text-[12px] text-slate-500">改动即时自动保存，无需手动保存。</span>
       </div>
     </div>
   )
