@@ -236,9 +236,11 @@ def parse_transcript(body: dict, db: Session = Depends(get_db)):
     if not cr.video_url:
         raise HTTPException(400, detail="E6009: 采集成功但未取到视频地址，无法转写；请手动粘贴逐字稿")
 
-    # ASR：视频 → 逐字稿
+    # ASR：视频 → 逐字稿（传候选地址列表+时长，内部校验音频抽全、必要时换地址重试）
     try:
-        ar = asr_svc.transcribe_url(cr.video_url, cfg.asr_provider if cfg else "siliconflow", asr_key, proxy=proxy)
+        ar = asr_svc.transcribe_url(cr.video_url_candidates or cr.video_url,
+                                    cfg.asr_provider if cfg else "siliconflow", asr_key,
+                                    proxy=proxy, expect_ms=cr.duration_ms)
     except asr_svc.ASRUnavailable:
         raise HTTPException(400, detail="E6101: 未配置 ASR API Key，请在配置页填写，或切到「粘贴文案」手填逐字稿")
     except asr_svc.ASRError as e:

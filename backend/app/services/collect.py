@@ -60,7 +60,9 @@ class CollectResult:
     play_count: int = 0
     digg_count: int = 0
     video_url: str = ""          # 无水印视频地址，供下游 ASR 取音频
+    video_url_candidates: list = field(default_factory=list)  # 多个CDN候选,ASR重试换地址
     platform: str = ""           # 识别出的平台 key
+    duration_ms: int = 0         # 视频时长（毫秒），供 ASR 校验音频是否抽全
     raw_meta: dict = field(default_factory=dict)
 
 
@@ -183,19 +185,20 @@ def _first(d: dict, *paths, default=None):
     return default
 
 
-def _douyin_play_url(aweme: dict) -> str:
-    """抖音专用：从 aweme_detail.video 精确取可下载的播放直链。
+def _douyin_play_candidates(aweme: dict) -> list:
+    """抖音专用：从 aweme_detail.video 取所有可下载播放直链，按优先级排序返回。
 
     TikHub 返回的 video.play_addr.url_list 里通常有多个地址：
-    - zjcdn.com 的 CDN 直链：带防盗链，第三方裸下载常被掐断；
-    - www.douyin.com/aweme/v1/play/?video_id=... 官方播放入口：更通畅，优先用它。
-    取不到 video.* 时返回空串，交由通用深搜兜底。
+    - www.douyin.com/aweme/v1/play/?video_id=... 官方播放入口：最通畅，排最前；
+    - zjcdn.com 的 CDN 直链：带防盗链，第三方裸下载可能被掐断（导致音频截断/文案不全），
+      作为备用——ASR 抽音频时若主地址被截断，会自动换列表里下一个重试。
+    取不到 video.* 时返回空列表，交由通用深搜兜底。
     """
     video = aweme.get("video") if isinstance(aweme, dict) else None
     if not isinstance(video, dict):
-        return ""
+        return []
     # 收集各码率字段下的所有候选地址，保持顺序去重。
-    cands: list[str] = []
+    cands: list = []
     for field in ("play_addr", "play_addr_h264", "download_addr", "play_addr_265", "bit_rate"):
         node = video.get(field)
         if isinstance(node, dict):
@@ -208,13 +211,19 @@ def _douyin_play_url(aweme: dict) -> str:
                 for u in ((pa or {}).get("url_list") or []):
                     if isinstance(u, str) and u.startswith("http") and u not in cands:
                         cands.append(u)
-    if not cands:
-        return ""
-    # 优先抖音官方播放入口（最通畅），否则退而取第一个候选。
-    for u in cands:
-        if "douyin.com/aweme/v1/play" in u:
-            return u
-    return cands[0]
+    # 官方播放入口排到最前，其余保持原序；去掉 dash 分片地址（ffmpeg 拉流易出问题）。
+    cands = [u for u in cands if "/play/dash/" not in u]
+    official = [u for u in cands if "douyin.com/aweme/v1/play" in u]
+    others = [u for u in cands if "douyin.com/aweme/v1/play" not in u]
+    ordered = official + others
+    # 去重保序后最多保留 5 个候选（够覆盖换 CDN 重试，避免重试过多拖慢）。
+    seen, out = set(), []
+    for u in ordered:
+        if u not in seen:
+            seen.add(u); out.append(u)
+        if len(out) >= 5:
+            break
+    return out
 
 
 def _deep_find_video_url(node, depth=0):
@@ -264,7 +273,16 @@ def _parse_response(data: dict) -> CollectResult:
     play_count = int(_first(stats, "play_count", "play", "view_count", "playCount", default=0) or 0)
     digg_count = int(_first(stats, "digg_count", "like_count", "digg", "likeCount", default=0) or 0)
 
-    video_url = _douyin_play_url(aweme) or _deep_find_video_url(aweme) or _deep_find_video_url(data)
+    candidates = _douyin_play_candidates(aweme)
+    video_url = (candidates[0] if candidates
+                 else _deep_find_video_url(aweme) or _deep_find_video_url(data))
+    if not candidates and video_url:
+        candidates = [video_url]
+
+    # 视频时长（毫秒）：抖音在 video.duration / aweme.duration；多路径容错。
+    video_node = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
+    duration_ms = int(_first(video_node, "duration", default=0)
+                      or _first(aweme, "duration", default=0) or 0)
 
     return CollectResult(
         title=title,
@@ -272,6 +290,8 @@ def _parse_response(data: dict) -> CollectResult:
         play_count=play_count,
         digg_count=digg_count,
         video_url=video_url,
+        video_url_candidates=candidates,
+        duration_ms=duration_ms,
         raw_meta={"id": _first(aweme, "aweme_id", "id", "note_id", default=None), "stats": stats},
     )
 

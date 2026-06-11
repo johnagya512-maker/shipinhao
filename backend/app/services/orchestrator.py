@@ -446,9 +446,11 @@ def _run_collect_asr(db: Session, task: Task, cfg: Config, started: float):
         _save_result(db, task.id, "S", "failed", output={"error": str(e)})
         return
 
-    # ASR：视频 → 逐字稿
+    # ASR：视频 → 逐字稿（传候选地址+时长，内部校验抽全、必要时换地址重试）
     try:
-        ar = asr_svc.transcribe_url(video_url, cfg.asr_provider, asr_key, proxy=proxy)
+        ar = asr_svc.transcribe_url(cr.video_url_candidates or video_url,
+                                    cfg.asr_provider, asr_key, proxy=proxy,
+                                    expect_ms=cr.duration_ms)
         if ar.text.strip():
             task.transcript = ar.text.strip()
             db.commit()

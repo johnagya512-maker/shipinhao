@@ -8,6 +8,7 @@
 未配置 ASR Key 时抛 ASRUnavailable，由编排降级为"手贴逐字稿"模式。
 """
 import os
+import re
 import time
 import uuid
 import base64
@@ -88,20 +89,11 @@ def _ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def _media_url_to_audio_b64(media_url: str, timeout: float = 180.0,
-                            proxy: str | None = None) -> tuple[str, str]:
-    """把媒体 URL 拉流抽成 mp3 音频，返回 (base64字符串, format)。
-
-    为何不直接把 URL 交给火山：抖音等平台的视频 CDN 有防盗链，火山服务器远程下载
-    会失败(45000006)或卡在下载阶段超时。改由本端 ffmpeg 拉流（带断点重连、带
-    Referer/UA 头），只抽音轨转 16k 单声道 mp3（体积小、识别足够），再以 base64
-    随 submit 一起提交，彻底绕开火山远程下载。
-    """
+def _run_ffmpeg_extract(media_url: str, out_path: str, timeout: float,
+                        env: dict) -> tuple[int, float, str]:
+    """跑一次 ffmpeg 抽音频。返回 (returncode, 抽到的时长秒, stderr尾)。
+    时长从 stderr 最后一个 time=HH:MM:SS.xx 解析（ffmpeg 进度输出）。"""
     ff = _ffmpeg_exe()
-    fd, out_path = tempfile.mkstemp(suffix=".mp3")
-    os.close(fd)
-    # -reconnect*: 对端掐断时自动重连；-headers: 带防盗链所需的 Referer/UA。
-    # -vn 丢视频只留音轨；-t 限时长上限，防超长视频拖垮识别（够用且省时）。
     cmd = [
         ff, "-y",
         "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
@@ -111,46 +103,102 @@ def _media_url_to_audio_b64(media_url: str, timeout: float = 180.0,
         "-t", "1800",
         out_path,
     ]
-    # ffmpeg 自带网络栈，proxy 经环境变量传入（http_proxy/https_proxy）。
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    # 解析实际写出的音频时长（取 stderr 里最后一个 time=）。
+    got_sec = 0.0
+    for m in re.finditer(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", p.stderr or ""):
+        hh, mm, ss = m.groups()
+        got_sec = int(hh) * 3600 + int(mm) * 60 + float(ss)
+    return p.returncode, got_sec, (p.stderr or "")[-300:]
+
+
+def _media_url_to_audio_b64(media_urls, timeout: float = 180.0,
+                            proxy: str | None = None,
+                            expect_ms: int = 0) -> tuple[str, str]:
+    """把媒体 URL 拉流抽成 mp3 音频，返回 (base64字符串, format)。
+
+    为何不直接把 URL 交给火山：抖音等平台的视频 CDN 有防盗链，火山服务器远程下载
+    会失败(45000006)或卡在下载阶段超时。改由本端 ffmpeg 拉流（带断点重连、带
+    Referer/UA 头），只抽音轨转 16k 单声道 mp3（体积小、识别足够），再以 base64
+    随 submit 一起提交，彻底绕开火山远程下载。
+
+    media_urls：单个地址或候选地址列表（来自 play_addr 多个 CDN）。CDN 中途掐断会
+    导致 ffmpeg 以 returncode 0 静默截断、音频不全（表现为"第二次解析文案不全"）。
+    故抽完用 expect_ms（采集拿到的视频时长）校验：实际时长明显短于期望时，换下一个
+    候选地址重试，避免不完整音频流到识别端。
+    """
+    if isinstance(media_urls, str):
+        media_urls = [media_urls]
+    media_urls = [u for u in media_urls if u]
+    if not media_urls:
+        raise ASRError("E6111: 无可用视频地址")
+    expect_sec = (expect_ms or 0) / 1000.0
     env = dict(os.environ)
     if proxy:
         env["http_proxy"] = proxy
         env["https_proxy"] = proxy
+
+    best_path, best_sec = None, -1.0
+    last_tail = ""
+    for idx, url in enumerate(media_urls):
+        fd, out_path = tempfile.mkstemp(suffix=".mp3")
+        os.close(fd)
+        try:
+            rc, got_sec, tail = _run_ffmpeg_extract(url, out_path, timeout, env)
+        except subprocess.TimeoutExpired:
+            _safe_unlink(out_path)
+            last_tail = "ffmpeg 超时"
+            continue
+        last_tail = tail
+        ok_size = os.path.exists(out_path) and os.path.getsize(out_path) >= 1024
+        if rc != 0 or not ok_size:
+            _safe_unlink(out_path)
+            continue
+        # 校验完整性：期望时长已知时，抽到的须达期望的 95%（容忍少量末尾误差）。
+        complete = (expect_sec <= 0) or (got_sec >= expect_sec * 0.95) or (got_sec >= 1800 * 0.95)
+        if got_sec > best_sec:  # 留最长的那次兜底
+            _safe_unlink(best_path)
+            best_path, best_sec = out_path, got_sec
+        else:
+            _safe_unlink(out_path)
+        if complete:
+            break
+        # 不完整 → 还有候选就换地址重试
+    if best_path is None:
+        raise ASRError(f"E6111: 音频提取失败: {last_tail}")
+    # 若拿到时长仍明显不足期望，记一笔但仍用最长结果（总比报错强）。
+    if expect_sec > 0 and best_sec < expect_sec * 0.95 and best_sec < 1800 * 0.95:
+        # 不抛错：避免"宁缺毋滥"卡死整个解析；用已抽到的最长音频继续。
+        pass
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        _safe_unlink(out_path)
-        raise ASRError("E6110: 音频下载/转码超时，可能视频源地址不通或过大，请重试或手动粘贴逐字稿")
-    if p.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) < 1024:
-        tail = (p.stderr or "")[-300:]
-        _safe_unlink(out_path)
-        raise ASRError(f"E6111: 音频提取失败（ffmpeg 返回 {p.returncode}）: {tail}")
-    try:
-        data = open(out_path, "rb").read()
+        data = open(best_path, "rb").read()
     finally:
-        _safe_unlink(out_path)
+        _safe_unlink(best_path)
     return base64.b64encode(data).decode(), "mp3"
 
 
-def _safe_unlink(path: str) -> None:
+def _safe_unlink(path) -> None:
+    if not path:
+        return
     try:
         os.unlink(path)
     except OSError:
         pass
 
 
-def _transcribe_volcano(media_url: str, api_key: str, timeout: float = 120.0,
-                        poll_interval: float = 3.0, max_poll: int = 60,
-                        proxy: str | None = None) -> ASRResult:
+def _transcribe_volcano(media_url, api_key: str, timeout: float = 120.0,
+                        poll_interval: float = 3.0, max_poll: int = 100,
+                        proxy: str | None = None, expect_ms: int = 0) -> ASRResult:
     """火山异步识别：本端抽取音频字节 → base64 提交 → 轮询查询结果。
 
     不直接把 media_url 交给火山远程下载——抖音等平台 CDN 有防盗链，火山服务器
     拉不动（45000006 / 卡在下载阶段超时）。改由本端 ffmpeg 拉流抽音频再上传。
+    media_url 可为单地址或候选地址列表；expect_ms 为视频时长，用于校验音频抽全。
     proxy：本端下载媒体走代理（境外/受限源用）；火山接口本身国内直连。
     """
     # 1) 本端把视频拉成音频 base64（绕开火山远程下载抖音 CDN 的防盗链问题）。
-    audio_b64, audio_fmt = _media_url_to_audio_b64(media_url, proxy=proxy)
+    #    传候选地址 + 期望时长，内部对 CDN 掐断导致的截断做换地址重试。
+    audio_b64, audio_fmt = _media_url_to_audio_b64(media_url, proxy=proxy, expect_ms=expect_ms)
 
     req_id = uuid.uuid4().hex
     headers = {
@@ -253,24 +301,29 @@ def transcribe(audio_bytes: bytes, provider: str, api_key: str | None,
     return ASRResult(text=(body.get("text") or "").strip())
 
 
-def transcribe_url(video_url: str, provider: str, api_key: str | None,
-                   timeout: float = 120.0, proxy: str | None = None) -> ASRResult:
+def transcribe_url(video_url, provider: str, api_key: str | None,
+                   timeout: float = 120.0, proxy: str | None = None,
+                   expect_ms: int = 0) -> ASRResult:
     """转写媒体 URL。
 
-    - volcano：直接把 URL 交给火山异步识别，不必本地下载（省带宽、更快）。
+    - volcano：本端 ffmpeg 抽音频 → base64 上传识别（绕开火山远程下载 CDN）。
     - siliconflow：先下载媒体字节再上传转写。
+    video_url 可为单地址或候选地址列表；expect_ms 为视频时长，校验音频抽全用。
     proxy：下载/请求走代理（境外媒体地址直连不通时用）。
     """
     if not api_key:
         raise ASRUnavailable("未配置 ASR API Key")
     if provider == "volcano":
-        return _transcribe_volcano(video_url, api_key, timeout=timeout, proxy=proxy)
+        return _transcribe_volcano(video_url, api_key, timeout=timeout,
+                                   proxy=proxy, expect_ms=expect_ms)
     # siliconflow：需先下载再上传
     get_kw = {"timeout": timeout, "follow_redirects": True}
     if proxy:
         get_kw["proxy"] = proxy
+    # video_url 可能是候选列表，siliconflow 取第一个。
+    one_url = video_url[0] if isinstance(video_url, (list, tuple)) else video_url
     try:
-        r = httpx.get(video_url, **get_kw)
+        r = httpx.get(one_url, **get_kw)
         r.raise_for_status()
     except httpx.HTTPError as e:
         raise ASRError(f"E6106: 下载媒体失败: {e}")
