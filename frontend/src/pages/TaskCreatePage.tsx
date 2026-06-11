@@ -335,10 +335,10 @@ export default function TaskCreatePage() {
           <label className="block">
             <span className="text-sm text-slate-400">视频链接（需配采集/ASR Key）</span>
             <input className="field"
-              placeholder="粘贴抖音/快手/小红书/B站/微博/TikTok 的分享口令或链接…"
+              placeholder="粘贴抖音/快手/小红书/B站/微博/视频号/TikTok 的分享口令或链接…"
               value={form.douyin_url ?? ''}
               onChange={(e) => { set({ douyin_url: e.target.value }); setEst(null) }} />
-            <span className="block text-[11px] text-slate-600 mt-1">支持：抖音 · 快手 · 小红书 · B站 · 微博 · TikTok（自动识别平台）</span>
+            <span className="block text-[11px] text-slate-600 mt-1">支持：抖音 · 快手 · 小红书 · B站 · 微博 · 视频号 · TikTok（自动识别平台）</span>
           </label>
         ) : (
           <label className="block">

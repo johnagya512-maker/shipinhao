@@ -150,7 +150,7 @@ export default function ConfigPage() {
 
       <div className="card space-y-4">
         <div className="font-semibold text-slate-100">视频采集（贴链接自动取素材，可选）</div>
-        <div className="text-[11px] text-slate-500 -mt-2">支持抖音/快手/小红书/B站/微博/TikTok，按链接自动识别平台（TikHub）。</div>
+        <div className="text-[11px] text-slate-500 -mt-2">支持抖音/快手/小红书/B站/微博/视频号/TikTok，按链接自动识别平台（TikHub）。</div>
         <label className="block">
           <span className="text-sm text-slate-400">供应商</span>
           <select className="field"

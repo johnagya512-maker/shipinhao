@@ -19,22 +19,26 @@ from dataclasses import dataclass, field
 # TikHub 服务基址。
 TIKHUB_BASE = os.environ.get("TIKHUB_BASE", "https://api.tikhub.io")
 
-# 各平台「单视频/作品详情」接口路径。这些是按 TikHub 命名习惯给的默认值，
-# 若与实际文档不符，用环境变量 TIKHUB_PATH_<PLATFORM> 覆盖即可（无需改代码）。
-# <PLATFORM> 取值：DOUYIN / TIKTOK / KUAISHOU / XIAOHONGSHU / BILIBILI / WEIBO。
+# 各平台「按分享链接取单视频/作品详情」接口。值为 (路径, 链接参数名)。
+# 优先用 by_share_url / by_url 这类"吃链接"的端点——因为用户贴的是分享链接而非视频ID。
+# 路径可被环境变量 TIKHUB_PATH_<PLATFORM> 覆盖、参数名可被 TIKHUB_PARAM_<PLATFORM> 覆盖，
+# 无需改代码即可校正。<PLATFORM>：DOUYIN/TIKTOK/KUAISHOU/XIAOHONGSHU/BILIBILI/WEIBO/WECHAT。
+# 已据 TikHub 文档确认：douyin/kuaishou/wechat 的路径；其余为最可能的命名，按需用环境变量校正。
 _DEFAULT_PATHS = {
-    "douyin": "/api/v1/douyin/web/fetch_one_video",
-    "tiktok": "/api/v1/tiktok/web/fetch_one_video",
-    "kuaishou": "/api/v1/kuaishou/web/fetch_one_video",
-    "xiaohongshu": "/api/v1/xiaohongshu/web/fetch_feed_notes",
-    "bilibili": "/api/v1/bilibili/web/fetch_one_video",
-    "weibo": "/api/v1/weibo/web/fetch_post_detail",
+    "douyin": ("/api/v1/douyin/web/fetch_one_video_by_share_url", "share_url"),
+    "tiktok": ("/api/v1/tiktok/web/fetch_one_video_by_share_url", "share_url"),
+    "kuaishou": ("/api/v1/kuaishou/web/fetch_one_video_by_url", "url"),
+    "xiaohongshu": ("/api/v1/xiaohongshu/web/get_note_info_v2", "share_text"),
+    "bilibili": ("/api/v1/bilibili/web/fetch_one_video", "bv_id"),
+    "weibo": ("/api/v1/weibo/web/fetch_post_detail", "url"),
+    "wechat": ("/api/v1/wechat_channels/fetch_video_by_share_url", "share_url"),
 }
 
 # 平台中文名，用于元数据展示。
 PLATFORM_NAMES = {
     "douyin": "抖音", "tiktok": "TikTok", "kuaishou": "快手",
     "xiaohongshu": "小红书", "bilibili": "B站", "weibo": "微博",
+    "wechat": "视频号",
 }
 
 # 链接/分享口令 → 平台 的识别特征（按域名关键字）。
@@ -45,6 +49,7 @@ _PLATFORM_HINTS = [
     ("xiaohongshu", ("xiaohongshu.com", "xhslink.com", "xhs.cn")),
     ("bilibili", ("bilibili.com", "b23.tv", "bili2233")),
     ("weibo", ("weibo.com", "weibo.cn", "t.cn")),
+    ("wechat", ("channels.weixin.qq.com", "finder", "weixin.qq.com/finder")),
 ]
 
 
@@ -88,13 +93,16 @@ def detect_platform(url_or_share: str) -> str:
     return ""
 
 
-def _endpoint_for(platform: str) -> str:
-    """取某平台的完整接口 URL，允许环境变量覆盖路径。"""
-    override = os.environ.get(f"TIKHUB_PATH_{platform.upper()}")
-    path = override or _DEFAULT_PATHS.get(platform)
-    if not path:
+def _endpoint_for(platform: str) -> tuple[str, str]:
+    """取某平台的 (完整接口 URL, 链接参数名)。路径和参数名均可被环境变量覆盖：
+    TIKHUB_PATH_<PLATFORM> 改路径，TIKHUB_PARAM_<PLATFORM> 改链接参数名。"""
+    entry = _DEFAULT_PATHS.get(platform)
+    if not entry:
         raise CollectError(f"E6007: 暂未配置平台 {platform} 的采集接口")
-    return TIKHUB_BASE.rstrip("/") + path
+    default_path, default_param = entry
+    path = os.environ.get(f"TIKHUB_PATH_{platform.upper()}") or default_path
+    param = os.environ.get(f"TIKHUB_PARAM_{platform.upper()}") or default_param
+    return TIKHUB_BASE.rstrip("/") + path, param
 
 
 def fetch_video(url_or_share: str, provider: str, api_key: str | None,
@@ -110,15 +118,17 @@ def fetch_video(url_or_share: str, provider: str, api_key: str | None,
     url = extract_url(url_or_share)
     platform = detect_platform(url_or_share) or detect_platform(url)
     if not platform:
-        raise CollectError("E6006: 无法识别链接所属平台（支持：抖音/TikTok/快手/小红书/B站/微博）")
+        raise CollectError("E6006: 无法识别链接所属平台（支持：抖音/快手/小红书/B站/微博/视频号/TikTok）")
 
     if provider != "tikhub":
         raise CollectError(f"E6002: 暂不支持的采集供应商: {provider}")
 
-    endpoint = _endpoint_for(platform)
+    endpoint, param_name = _endpoint_for(platform)
     headers = {"Authorization": f"Bearer {api_key}"}
+    # 多数"按链接"接口收原始分享口令也能解析，故传完整 url_or_share（含口令文本）。
     try:
-        resp = httpx.get(endpoint, params={"url": url}, headers=headers, timeout=timeout)
+        resp = httpx.get(endpoint, params={param_name: url_or_share.strip() or url},
+                         headers=headers, timeout=timeout)
     except httpx.RequestError as e:
         raise CollectError(f"E6003: 采集请求失败: {e}")
 
