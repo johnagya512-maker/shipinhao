@@ -271,7 +271,9 @@ export default function TaskCreatePage() {
       const r = await api.parseTranscript(url)
       set({ transcript: r.transcript })
       setParseMeta({ title: r.title, author: r.author, platform: r.platform })
-      if (r.title && !(form.title ?? '').trim()) set({ title: r.title })
+      // r.title 是视频原标题/描述，可能是一长段文案；书名框只取前 30 字，
+      // 避免把整段 desc 灌进去（后续会被后端当短标题用而串台）。
+      if (r.title && !(form.title ?? '').trim()) set({ title: r.title.slice(0, 30) })
       if (r.author && !(form.author ?? '').trim()) set({ author: r.author })
       // 不切 tab：文案直接显示在下方结果框，用户在链接 tab 即可看到/微调，再点二创预览或开始生成。
       setEst(null)

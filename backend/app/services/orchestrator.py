@@ -225,15 +225,17 @@ def run_pipeline(db: Session, task_id: str):
 
         # 自动命名：用户没填标题时，让 LLM 读定稿文案生成一个钩子短标题，
         # 用于剪映草稿箱/下载文件名一眼识别（如「屠呦呦·190次失败」）。
-        # 锦上添花，失败不阻断出片——异常时退回关键词。
-        if not (task.title or "").strip():
+        # title 过长（>30字）多半是误填或复用草稿残留的采集长描述/上一篇正文，
+        # 视作"无有效短标题"一并重新生成，避免串台。锦上添花，失败不阻断。
+        cur_title = (task.title or "").strip()
+        if not cur_title or len(cur_title) > 30:
             try:
                 gen_title, _tr = tm.run_gen_title(cfg.llm_provider, cfg.llm_model,
                                                   llm_key, script, task.keyword)
                 task.title = (gen_title or task.keyword or "").strip() or None
                 db.commit()
             except Exception:
-                task.title = task.title or (task.keyword or None)
+                task.title = cur_title or (task.keyword or None)
                 db.commit()
 
         # 成品物料：长标题 + 热门话题标签（发布时直接可用）。锦上添花，失败不阻断。
