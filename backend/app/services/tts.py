@@ -129,6 +129,38 @@ def _has_readable(text: str) -> bool:
     return bool(re.search(r"[\w一-鿿]", text))
 
 
+# 火山 TTS 单次合成的安全字数上限。超长文本会被截断/填充大段静音（实测某些超长句
+# 合成出 60 秒、大半是静音），故合成前按此长度二次切分。
+_TTS_MAX_CHARS = 120
+
+
+def _split_long(text: str, limit: int = _TTS_MAX_CHARS) -> list[str]:
+    """把过长文本切成 ≤limit 的小段：优先按次级标点（逗号/顿号/分号等）断句，
+    单个标点小句仍超长时按字数硬切。保证每段都在 TTS 安全长度内。"""
+    text = text.strip()
+    if len(text) <= limit:
+        return [text] if text else []
+    # 按次级标点切，保留标点在句尾
+    pieces = re.split(r"(?<=[，,、；;：:])", text)
+    out, buf = [], ""
+    for p in pieces:
+        if not p:
+            continue
+        if len(buf) + len(p) <= limit:
+            buf += p
+        else:
+            if buf:
+                out.append(buf)
+            # 单片仍超长 → 按字数硬切
+            while len(p) > limit:
+                out.append(p[:limit])
+                p = p[limit:]
+            buf = p
+    if buf:
+        out.append(buf)
+    return [s for s in out if s.strip()]
+
+
 def synthesize(segments: list[dict], provider: str, api_key: str | None,
                out_dir: Path, voice: str | None = None, appid: str | None = None,
                model: str | None = None, timeout: float = 120.0, speed: float = 1.0) -> TTSResult:
@@ -141,10 +173,16 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
     if not api_key:
         raise TTSUnavailable("未配置 TTS API Key")
 
-    # 过滤：不仅排除空白段，还排除「只有标点/符号、无任何可朗读字符」的碎片段
-    # （如机械切分把引号拆出的单独 '"'）。火山 TTS 对纯标点会报 3011 No readable text。
-    texts = [t for t in (s.get("text", "").strip() for s in segments)
-             if t and _has_readable(t)]
+    # 过滤：排除空白段、纯标点碎片段（火山对纯标点报 3011 No readable text）；
+    # 再把超长段二次切分到 TTS 安全长度（超长会被合成成大段静音）。
+    texts: list[str] = []
+    for s in segments:
+        t = (s.get("text", "") or "").strip()
+        if not t or not _has_readable(t):
+            continue
+        for piece in _split_long(t):
+            if _has_readable(piece):
+                texts.append(piece)
     if not texts:
         raise TTSError("E6201: 无可合成的分段文本")
 
@@ -224,7 +262,20 @@ def _concat_audio(parts: list[Path], out_path: Path):
 
 
 def _probe_duration(path: Path) -> float:
-    """复用 video_module 的音频时长探测。"""
+    """探测音频时长（秒）。优先 ffmpeg（对刚写出的 mp3 更可靠），回退 moviepy。"""
+    # ffmpeg 读时长：解析 stderr 里的 "Duration: HH:MM:SS.ss"
+    try:
+        ff = _ffmpeg_exe()
+        r = subprocess.run([ff, "-i", str(path)], capture_output=True, text=True)
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", r.stderr or "")
+        if m:
+            h, mn, s = m.groups()
+            dur = int(h) * 3600 + int(mn) * 60 + float(s)
+            if dur > 0:
+                return round(dur, 2)
+    except Exception:
+        pass
+    # 回退 moviepy
     try:
         from app.modules.video_module import get_audio_duration
         return round(get_audio_duration(str(path)), 2)
