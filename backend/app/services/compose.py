@@ -78,18 +78,34 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
     # 动画模板 + 任务派生种子（草稿可复现：同任务重生成动画序列不变）
     template = getattr(task, "draft_template", None) or "classic"
     seed = int(task_id[-6:], 36) if task_id else 0
+
+    def _try_build(name):
+        return jianying.build_draft(image_paths, weights, audio_path, segments, draft_dir,
+                                    draft_name=name, enable_subtitles=subs,
+                                    enable_animations=anim,
+                                    jianying_dir=jianying_dir or None,
+                                    template=template, seed=seed)
     try:
-        r = jianying.build_draft(image_paths, weights, audio_path, segments, draft_dir,
-                                 draft_name=draft_name, enable_subtitles=subs,
-                                 enable_animations=anim,
-                                 jianying_dir=jianying_dir or None,
-                                 template=template, seed=seed)
+        r = _try_build(draft_name)
     except Exception as e:
-        task.status = "failed"
-        task.error_code = "E5001"
-        task.error_message = f"剪映草稿生成失败: {e}"[:500]
-        db.commit()
-        raise
+        # 剪映正开着同名草稿导致无法覆盖时，自动换带序号的新名重试（最多 3 次），
+        # 避免用户必须先去关剪映；其它错误照常抛出。
+        msg = str(e)
+        if "剪映中打开" in msg or "无法覆盖" in msg or "PermissionError" in msg:
+            r = None
+            for n in range(2, 5):
+                try:
+                    r = _try_build(_safe_name(f"{draft_name}_{n}"))
+                    break
+                except Exception as e2:
+                    e = e2
+                    continue
+        if r is None:
+            task.status = "failed"
+            task.error_code = "E5001"
+            task.error_message = f"剪映草稿生成失败: {e}"[:500]
+            db.commit()
+            raise
     return _finish(db, task, task_id, "jianying_draft", r["draft_path"],
                    "application/json",
                    {"duration": r["duration"], "dropped_images": r["dropped_images"],

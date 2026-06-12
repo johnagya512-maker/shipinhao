@@ -152,6 +152,14 @@ export default function TaskDetailPage() {
     finally { setBusy(false) }
   }
 
+  // 只重新生成草稿：配音(T)已成功、仅最后出草稿(G)失败时用，复用现有配音不重做、不耗额度。
+  async function onRebuildDraft() {
+    setBusy(true); setError(null)
+    try { await api.rerunStep(id, 'G'); await load() }
+    catch (err) { setError((err as ApiError).message) }
+    finally { setBusy(false) }
+  }
+
   if (error && !data) {
     return <div className="px-4 py-2 rounded-lg text-sm bg-red-50 text-red-700">{error}</div>
   }
@@ -293,6 +301,12 @@ export default function TaskDetailPage() {
 
           {/* 操作按钮 */}
           <div className="flex flex-col gap-2">
+            {task.error_code === 'E5001' && (
+              <button onClick={onRebuildDraft} disabled={busy}
+                className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition-colors">
+                {busy ? '重新生成草稿中…' : '📄 只重新生成草稿（不重做配音）'}
+              </button>
+            )}
             {canUpload && (
               <>
                 <button onClick={onRetryTTS} disabled={busy || uploading}
