@@ -347,13 +347,20 @@ def run_compliance(provider, model, key, script, track="character_story"):
         data = {"passed": True, "violations": [], "risk_score": 0.0}
     violations = data.get("violations", [])
     risk = _normalize_risk(data.get("risk_score", 0.0))
-    # 规则命中高危词强制拉高风险
+    # LLM 语义判定常把否定语境（如"不聊补药""无法治愈"）误判为 high，单独一票否决
+    # 会误杀正常文案。故 high 级硬拦截只认规则词库（带否定检测、确定性强）；
+    # LLM 的 high 仅作风险参考——保留展示，并把风险分托底拉高，但不直接 block。
+    llm_has_high = any(v.get("severity") == "high" for v in violations)
+    if llm_has_high:
+        risk = max(risk, 0.6)  # LLM 报 high：拉高风险分（但 ≤0.7，不致直接失败）
+    # 规则命中高危词才强制拉满风险并一票否决
     if matched["high"]:
         risk = max(risk, 0.9)
         for w in matched["high"]:
             violations.append({"type": "违禁词", "snippet": w, "severity": "high",
                                "suggestion": "删除或改写"})
-    passed = risk <= 0.7 and not any(v.get("severity") == "high" for v in violations)
+    # 通过条件：规则库无 high 命中，且综合风险 ≤ 0.7（LLM 误判不再卡死，真违禁仍拦）
+    passed = risk <= 0.7 and not matched["high"]
     return {
         "passed": passed,
         "violations": violations,
@@ -382,7 +389,10 @@ def _normalize_risk(value) -> float:
 
 
 # 违禁词库（PRD 10.2，可外置为配置文件）
-_HIGH_WORDS = ["治愈", "根治", "100%有效", "包好", "彻底解决", "降血压", "治疗",
+# 注：「治疗」不入库——它中性，正向引导（"配合治疗""及时就医治疗"）远多于违规用法，
+# 裸词匹配会误杀合规的就医引导；真正的疗效承诺由"治愈/根治/包好/神效/替代药物"等覆盖，
+# 另有 LLM 语义判定兜底。
+_HIGH_WORDS = ["治愈", "根治", "100%有效", "包好", "彻底解决", "降血压",
                "替代药物", "神效", "奇迹", "祖传秘方", "立竿见影",
                "加微信", "私信我", "点击主页"]
 _WARN_WORDS = ["不看后悔", "致命"]
