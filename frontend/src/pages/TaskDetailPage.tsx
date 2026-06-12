@@ -308,9 +308,13 @@ export default function TaskDetailPage() {
             )}
             {canRecompose && (
               <>
-                <button onClick={onRecompose} disabled={busy || uploading}
+                <button onClick={onRetryTTS} disabled={busy || uploading}
                   className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition-colors">
-                  {busy ? '重新生成中…' : '🎬 用最新的图重新生成视频'}
+                  {busy ? '重新配音中…' : '🔊 重新 AI 配音并出片'}
+                </button>
+                <button onClick={onRecompose} disabled={busy || uploading}
+                  className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-slate-700/70 text-slate-200 hover:bg-slate-700 disabled:opacity-50 transition-colors">
+                  {busy ? '重新生成中…' : '🎬 用现有配音+最新图重生成'}
                 </button>
                 <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
                   uploading ? 'bg-slate-700 text-slate-400' : 'bg-slate-700/70 text-slate-200 hover:bg-slate-700'}`}>
