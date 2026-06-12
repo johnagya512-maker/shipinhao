@@ -190,9 +190,9 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
     out_dir.mkdir(parents=True, exist_ok=True)
     part_paths: list[Path] = []
     for i, text in enumerate(texts):
-        audio_bytes = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed)
         p = out_dir / f"seg_{i:03d}.mp3"
-        p.write_bytes(audio_bytes)
+        _synth_one_checked(text, provider, api_key, voice, appid, model,
+                           timeout, speed, p)
         part_paths.append(p)
 
     final_path = out_dir / "audio.mp3"
@@ -259,6 +259,57 @@ def _concat_audio(parts: list[Path], out_path: Path):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise TTSError(f"E6206: 音频拼接失败: {r.stderr[:200]}")
+
+
+def _silence_ratio(path: Path) -> float:
+    """估算音频中的静音占比（0~1）。火山 TTS 偶发返回大段静音的异常音频
+    （实测某段 60 秒里 58 秒静音），用此识别坏段并触发重试。"""
+    try:
+        ff = _ffmpeg_exe()
+        r = subprocess.run([ff, "-i", str(path), "-af",
+                            "silencedetect=noise=-40dB:d=2", "-f", "null", "-"],
+                           capture_output=True, text=True)
+        sils = re.findall(r"silence_duration:\s*([\d.]+)", r.stderr or "")
+        siltot = sum(float(x) for x in sils)
+        dur = _probe_duration(path)
+        return (siltot / dur) if dur > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
+                       timeout, speed, out_path: Path) -> None:
+    """合成单段并写盘；若产出大段静音（火山偶发异常），自动重试，最多 3 次。
+    重试仍异常则保留最后一次结果（不阻断整体出片）。"""
+    last = None
+    for attempt in range(3):
+        audio = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed)
+        out_path.write_bytes(audio)
+        # 短文本（<60字）合成出 >20 秒、且静音过半，几乎肯定是异常返回
+        if len(text) < 60 and _probe_duration(out_path) > 20 and _silence_ratio(out_path) > 0.5:
+            last = out_path
+            continue
+        return
+    # 兜底：用最后一次结果，但裁掉尾部静音，避免整段几十秒空白
+    if last is not None:
+        _trim_trailing_silence(out_path)
+
+
+def _trim_trailing_silence(path: Path) -> None:
+    """裁掉音频尾部静音（重试仍异常时的兜底，至少不留几十秒空白）。"""
+    try:
+        ff = _ffmpeg_exe()
+        tmp = path.with_suffix(".trim.mp3")
+        r = subprocess.run([ff, "-y", "-i", str(path), "-af",
+                            "silenceremove=stop_periods=-1:stop_duration=2:stop_threshold=-40dB",
+                            "-c:a", "libmp3lame", "-b:a", "192k", str(tmp)],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 500:
+            tmp.replace(path)
+        else:
+            tmp.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _probe_duration(path: Path) -> float:
