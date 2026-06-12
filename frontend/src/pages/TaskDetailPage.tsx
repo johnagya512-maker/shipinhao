@@ -223,8 +223,8 @@ export default function TaskDetailPage() {
             )}
           </div>
 
-          {/* 发布物料：长标题 / 短标题 / 热门标签，一键复制，直接拿去发布 */}
-          {(task.long_title || task.title || (task.hashtags && task.hashtags.length > 0)) && (
+          {/* 发布物料：短标题 / 长标题 / 热门标签，一键复制，直接拿去发布 */}
+          {(task.long_title || task.short_title || task.title || (task.hashtags && task.hashtags.length > 0)) && (
             <div className="card !p-4 space-y-3">
               <div className="text-sm font-semibold text-slate-100">发布物料 <span className="text-[11px] text-slate-500 font-normal">· 复制即用</span></div>
               {task.long_title && (
@@ -239,16 +239,16 @@ export default function TaskDetailPage() {
                   <p className="text-sm text-slate-200 leading-relaxed">{task.long_title}</p>
                 </div>
               )}
-              {task.title && (
+              {(task.short_title || task.title) && (
                 <div className="pt-2 border-t border-slate-800/60">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[11px] text-slate-500">短标题</span>
-                    <button onClick={() => copyText('short', task.title!)}
+                    <button onClick={() => copyText('short', (task.short_title || task.title)!)}
                       className="text-[11px] text-brand-300 hover:text-brand-200">
                       {copiedKey === 'short' ? '✓ 已复制' : '复制'}
                     </button>
                   </div>
-                  <p className="text-sm text-slate-200">{task.title}</p>
+                  <p className="text-sm text-slate-200">{task.short_title || task.title}</p>
                 </div>
               )}
               {task.hashtags && task.hashtags.length > 0 && (

@@ -59,6 +59,7 @@ def _ensure_columns():
         ("tasks", "draft_template", "VARCHAR(20) DEFAULT 'classic'"),
         ("tasks", "creation_mode", "VARCHAR(16) DEFAULT 'same_topic'"),
         ("tasks", "long_title", "VARCHAR(200)"),
+        ("tasks", "short_title", "VARCHAR(50)"),
         ("tasks", "hashtags", "JSON"),
         ("configs", "task_storage_dir", "VARCHAR(500)"),
         ("configs", "bgm_dir", "VARCHAR(500)"),

@@ -106,6 +106,7 @@ export interface TaskDetail {
   transcript: string
   title?: string | null
   long_title?: string | null
+  short_title?: string | null
   hashtags?: string[] | null
   author?: string | null
   keyword?: string | null

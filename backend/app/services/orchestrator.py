@@ -238,11 +238,13 @@ def run_pipeline(db: Session, task_id: str):
                 task.title = cur_title or (task.keyword or None)
                 db.commit()
 
-        # 成品物料：长标题 + 热门话题标签（发布时直接可用）。锦上添花，失败不阻断。
-        if not (task.long_title or "").strip() or not task.hashtags:
+        # 成品物料：短标题 + 长标题 + 热门话题标签（发布时直接可用）。锦上添花，失败不阻断。
+        if not (task.short_title or "").strip() or not (task.long_title or "").strip() or not task.hashtags:
             try:
-                (long_title, tags), _tt = tm.run_gen_title_tags(
+                (short_title, long_title, tags), _tt = tm.run_gen_title_tags(
                     cfg.llm_provider, cfg.llm_model, llm_key, script, task.keyword)
+                if short_title and not (task.short_title or "").strip():
+                    task.short_title = short_title
                 if long_title and not (task.long_title or "").strip():
                     task.long_title = long_title
                 if tags and not task.hashtags:
