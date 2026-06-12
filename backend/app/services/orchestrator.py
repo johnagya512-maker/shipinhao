@@ -175,12 +175,21 @@ def run_pipeline(db: Session, task_id: str):
                 raise TaskAborted("E2002",
                                   f"采集转写后预估成本 {real_est} 元超过上限 {task.cost_limit} 元")
 
-        # A 清洗
-        a_out = _llm_step(db, task, cfg, llm_key, "A",
-                          lambda: tm.run_clean(cfg.llm_provider, cfg.llm_model, llm_key,
-                                               task.transcript, task.keyword, task.title, task.author),
-                          started, pausable=False)
-        cleaned = a_out["cleaned_text"]
+        # A 清洗（direct=「不改文案」跳过清洗，原文一字不改、不调 LLM、不计费；
+        # semi_auto/full_auto 仍做清洗）
+        if task.processing_mode == "direct":
+            existing_a = _get_result(db, task.id, "A")
+            if existing_a and existing_a.status == "success":
+                cleaned = existing_a.output.get("cleaned_text", task.transcript)
+            else:
+                cleaned = task.transcript
+                _save_result(db, task.id, "A", "success", output={"cleaned_text": cleaned})
+        else:
+            a_out = _llm_step(db, task, cfg, llm_key, "A",
+                              lambda: tm.run_clean(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                   task.transcript, task.keyword, task.title, task.author),
+                              started, pausable=False)
+            cleaned = a_out["cleaned_text"]
 
         # keyword 兜底提取（PRD 9.2）：未填则用 A 输出首句近似
         if not task.keyword:

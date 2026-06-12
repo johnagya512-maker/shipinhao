@@ -223,6 +223,8 @@ export default function TaskCreatePage() {
   }
 
   const set = (patch: Partial<TaskCreate>) => setForm((f) => ({ ...f, ...patch }))
+  // 「不改文案」：用原文不做 AI 改写（semi_auto/direct 都属此类）。选中时隐藏改写强度等仅改写相关的设置。
+  const noRewrite = (form.processing_mode ?? 'full_auto') !== 'full_auto'
 
   // 收藏/取消收藏音色（写后端 + 本地同步）
   async function toggleFav(voiceId: string) {
@@ -424,11 +426,11 @@ export default function TaskCreatePage() {
           </label>
         )}
 
-        {/* 二创方式：拆解爆款结构 → 复刻骨架重写。核心卖点。 */}
+        {/* 二创方式：拆解爆款结构 → 复刻骨架重写。核心卖点。「不改文案」走 semi_auto，原文一字不改。 */}
         <div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-400">二创方式 <span className="text-[11px] text-slate-600">· 拆解爆款结构再仿写</span></span>
-            {inputMode === 'transcript' || (form.transcript ?? '').trim() ? (
+            {!noRewrite && (inputMode === 'transcript' || (form.transcript ?? '').trim()) ? (
               <button type="button" onClick={doAnalyzeStructure} disabled={analyzing}
                 className="text-[12px] px-2.5 py-1 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
                 {analyzing ? '生成中…约30-60秒' : '✨ 预览二创文案'}
@@ -438,14 +440,18 @@ export default function TaskCreatePage() {
           {analyzing && (
             <p className="mt-1 text-[11px] text-slate-500">正在拆解结构并改写，大模型生成需要点时间，请稍候，不要离开本页。</p>
           )}
-          <div className="mt-2 grid grid-cols-2 gap-2">
+          <div className="mt-2 grid grid-cols-3 gap-2">
             {([
               ['same_topic', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
               ['none', '直接改写', '不拆结构，按常规套路改写'],
+              ['keep', '不改文案', '用我写的原文，一字不改，按标点分句'],
             ] as const).map(([key, name, desc]) => {
-              const on = (form.creation_mode || 'same_topic') === key
+              const on = key === 'keep' ? noRewrite : (!noRewrite && (form.creation_mode || 'same_topic') === key)
               return (
-                <button key={key} type="button" onClick={() => set({ creation_mode: key })}
+                <button key={key} type="button" onClick={() => {
+                  if (key === 'keep') set({ processing_mode: 'direct' })
+                  else set({ creation_mode: key, processing_mode: 'full_auto' })
+                }}
                   className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
                        : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'}`}>
