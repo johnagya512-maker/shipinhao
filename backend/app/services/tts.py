@@ -8,6 +8,7 @@
 长文案按段合成，再用 imageio-ffmpeg 拼接为单一音频，供 compose/jianying 消费。
 """
 import base64
+import re
 import subprocess
 import tempfile
 import uuid
@@ -122,6 +123,12 @@ def _synth_one(text: str, provider: str, api_key: str, voice: str | None,
     raise TTSError(f"E6202: 暂不支持的 TTS 供应商: {provider}")
 
 
+def _has_readable(text: str) -> bool:
+    """文本是否含可朗读字符（汉字/字母/数字）。纯标点、空白、符号返回 False，
+    用于过滤机械切分产生的碎片段（如单独的引号），避免 TTS 报 No readable text。"""
+    return bool(re.search(r"[\w一-鿿]", text))
+
+
 def synthesize(segments: list[dict], provider: str, api_key: str | None,
                out_dir: Path, voice: str | None = None, appid: str | None = None,
                model: str | None = None, timeout: float = 120.0, speed: float = 1.0) -> TTSResult:
@@ -134,7 +141,10 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
     if not api_key:
         raise TTSUnavailable("未配置 TTS API Key")
 
-    texts = [s["text"].strip() for s in segments if s.get("text", "").strip()]
+    # 过滤：不仅排除空白段，还排除「只有标点/符号、无任何可朗读字符」的碎片段
+    # （如机械切分把引号拆出的单独 '"'）。火山 TTS 对纯标点会报 3011 No readable text。
+    texts = [t for t in (s.get("text", "").strip() for s in segments)
+             if t and _has_readable(t)]
     if not texts:
         raise TTSError("E6201: 无可合成的分段文本")
 

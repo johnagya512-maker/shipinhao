@@ -328,7 +328,9 @@ def mechanical_split(script_text: str):
         parts = re.split(r"(?<=[。！？!?…；;])", line)
         for p in parts:
             p = p.strip()
-            if p:
+            # 必须含可朗读字符（汉字/字母/数字），跳过被切出的纯标点碎片（如单独的引号），
+            # 否则下游 TTS 对纯标点段会报 No readable text。
+            if p and re.search(r"[\w一-鿿]", p):
                 segs.append(p)
     if not segs:  # 无标点的整段：兜底按长度切，约 30 字一句
         segs = [script_text[i:i + 30] for i in range(0, len(script_text), 30)] or [script_text]
