@@ -200,24 +200,27 @@ def _ffmpeg_exe() -> str:
 
 
 def _concat_audio(parts: list[Path], out_path: Path):
-    """用 ffmpeg concat demuxer 把多段 mp3 拼成一段。"""
+    """把多段 mp3 拼成一段。
+
+    用 concat filter 重新编码（而非 demuxer + -c copy）：各段 mp3 有独立的编码器
+    延迟与填充，流复制拼接会在段边界错位、爆音，甚至个别段播放无声。重编码消除这些问题，
+    代价是多一次编码（音频量小，可忽略）。
+    """
     if len(parts) == 1:
         out_path.write_bytes(parts[0].read_bytes())
         return
     ff = _ffmpeg_exe()
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
-                                     encoding="utf-8") as f:
-        for p in parts:
-            f.write(f"file '{p.as_posix()}'\n")
-        list_file = f.name
-    try:
-        r = subprocess.run([ff, "-y", "-f", "concat", "-safe", "0",
-                            "-i", list_file, "-c", "copy", str(out_path)],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            raise TTSError(f"E6206: 音频拼接失败: {r.stderr[:200]}")
-    finally:
-        Path(list_file).unlink(missing_ok=True)
+    cmd = [ff, "-y"]
+    for p in parts:
+        cmd += ["-i", str(p)]
+    n = len(parts)
+    # 每个输入的音频流依次喂给 concat filter，输出单条音频流
+    filt = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+    cmd += ["-filter_complex", filt, "-map", "[out]",
+            "-c:a", "libmp3lame", "-ar", "44100", "-b:a", "192k", str(out_path)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise TTSError(f"E6206: 音频拼接失败: {r.stderr[:200]}")
 
 
 def _probe_duration(path: Path) -> float:
