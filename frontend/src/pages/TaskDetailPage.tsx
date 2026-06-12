@@ -144,6 +144,14 @@ export default function TaskDetailPage() {
     finally { setBusy(false) }
   }
 
+  // 重试 AI 配音：配音失败进入 awaiting_audio 后，从 T 步重跑（清 T/G 产物，上游走缓存）。
+  async function onRetryTTS() {
+    setBusy(true); setError(null)
+    try { await api.rerunStep(id, 'T'); await load() }
+    catch (err) { setError((err as ApiError).message) }
+    finally { setBusy(false) }
+  }
+
   if (error && !data) {
     return <div className="px-4 py-2 rounded-lg text-sm bg-red-50 text-red-700">{error}</div>
   }
@@ -286,11 +294,17 @@ export default function TaskDetailPage() {
           {/* 操作按钮 */}
           <div className="flex flex-col gap-2">
             {canUpload && (
-              <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
-                uploading ? 'bg-slate-700 text-slate-400' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
-                {uploading ? '上传中…' : '上传音频生成成片'}
-                <input ref={fileRef} type="file" accept="audio/*" className="hidden" disabled={uploading} onChange={onUpload} />
-              </label>
+              <>
+                <button onClick={onRetryTTS} disabled={busy || uploading}
+                  className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition-colors">
+                  {busy ? '重试中…' : '🔊 重试 AI 配音'}
+                </button>
+                <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
+                  uploading ? 'bg-slate-700 text-slate-400' : 'bg-slate-700/70 text-slate-200 hover:bg-slate-700'}`}>
+                  {uploading ? '上传中…' : '或上传自己的配音音频'}
+                  <input ref={fileRef} type="file" accept="audio/*" className="hidden" disabled={uploading} onChange={onUpload} />
+                </label>
+              </>
             )}
             {canRecompose && (
               <>
