@@ -449,8 +449,12 @@ export default function TaskCreatePage() {
               const on = key === 'keep' ? noRewrite : (!noRewrite && (form.creation_mode || 'same_topic') === key)
               return (
                 <button key={key} type="button" onClick={() => {
-                  if (key === 'keep') set({ processing_mode: 'direct' })
-                  else set({ creation_mode: key, processing_mode: 'full_auto' })
+                  if (key === 'keep') {
+                    set({ processing_mode: 'direct' })
+                    setPreviewScript(''); setStructure(null)   // 不改文案：清掉残留的二创预览
+                  } else {
+                    set({ creation_mode: key, processing_mode: 'full_auto' })
+                  }
                 }}
                   className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
@@ -504,8 +508,8 @@ export default function TaskCreatePage() {
           )}
           {analyzeErr && <p className="mt-1 text-[11px] text-red-400">{analyzeErr}</p>}
 
-          {/* 预览成品：二创后的完整文案（主），结构骨架折叠为次要信息 */}
-          {previewScript && (
+          {/* 预览成品：二创后的完整文案（主），结构骨架折叠为次要信息。不改文案模式不显示。 */}
+          {previewScript && !noRewrite && (
             <div className="mt-2 rounded-xl bg-slate-900/60 border border-brand-500/30 p-3">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[12px] font-medium text-brand-300">✨ 二创文案预览</span>
