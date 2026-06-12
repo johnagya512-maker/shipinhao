@@ -33,6 +33,12 @@ export default function StepTimeline({ taskId, modules, onChanged }: Props) {
   const byKey = new Map(modules.map((m) => [m.module, m]))
   // 只展示该任务实际涉及的步骤（产物存在的，或核心必经步骤）
   const flow = STEP_FLOW.filter((s) => byKey.has(s.key) || ['A', 'B', 'P', 'E', 'G'].includes(s.key))
+  // 是否有任一上游步骤已成功（用于判断该步能否重跑：上游就绪则重跑有意义，
+  // 即便该步自身没留下产物记录，如失败未落库的视频合成 G）。
+  const hasUpstreamDone = (key: string) => {
+    const i = STEP_FLOW.findIndex((s) => s.key === key)
+    return STEP_FLOW.slice(0, i).some((s) => byKey.get(s.key)?.status === 'success')
+  }
 
   async function rerunStep(key: string) {
     const name = STEP_FLOW.find((s) => s.key === key)?.name
@@ -71,7 +77,7 @@ export default function StepTimeline({ taskId, modules, onChanged }: Props) {
               {m?.duration != null && (
                 <span className="text-[11px] text-slate-500 font-mono">{m.duration}s</span>
               )}
-              {RERUNNABLE.has(s.key) && status && (
+              {RERUNNABLE.has(s.key) && (status || hasUpstreamDone(s.key)) && (
                 <button onClick={() => rerunStep(s.key)} disabled={busy !== null}
                   className="text-[11px] px-1.5 py-0.5 rounded text-slate-400 opacity-0 group-hover:opacity-100
                     hover:bg-slate-700 hover:text-slate-200 transition disabled:opacity-40"
