@@ -18,8 +18,8 @@ const STEP_FLOW: { key: string; name: string }[] = [
   { key: 'T', name: '配音合成' },
   { key: 'G', name: '视频合成' },
 ]
-// 可单步重跑的步骤（对应后端 _DOWNSTREAM）
-const RERUNNABLE = new Set(['A', 'B', 'D', 'CP', 'SB', 'P', 'E'])
+// 可单步重跑的步骤（对应后端 _DOWNSTREAM）。重跑某步会清该步及其下游、保留上游缓存。
+const RERUNNABLE = new Set(['A', 'H', 'B', 'F', 'D', 'CP', 'SB', 'P', 'E', 'T', 'G'])
 
 interface Props {
   taskId: string
@@ -35,7 +35,10 @@ export default function StepTimeline({ taskId, modules, onChanged }: Props) {
   const flow = STEP_FLOW.filter((s) => byKey.has(s.key) || ['A', 'B', 'P', 'E', 'G'].includes(s.key))
 
   async function rerunStep(key: string) {
-    if (!confirm(`从「${STEP_FLOW.find((s) => s.key === key)?.name}」重新执行？该步及其后续会重算。`)) return
+    const name = STEP_FLOW.find((s) => s.key === key)?.name
+    // 配音(T)重跑会重新合成、消耗 TTS 字数额度，额外提醒；其余步骤照常确认。
+    const extra = key === 'T' ? '\n注意：重新配音会消耗 TTS 字数额度。' : ''
+    if (!confirm(`从「${name}」重新执行？该步及其后续会重算。${extra}`)) return
     setBusy(key); setErr(null)
     try {
       await api.rerunStep(taskId, key)

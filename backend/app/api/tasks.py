@@ -497,7 +497,9 @@ def rerun_task(task_id: str, body: RerunRequest, bg: BackgroundTasks,
 # 文案链 A→H→B→F；配图链 D→CP→SB→P→E；成片 G/T 收尾。
 _DOWNSTREAM = {
     "A": ["A", "H", "B", "F", "D", "CP", "SB", "P", "E", "T", "G"],
+    "H": ["H", "B", "F", "D", "CP", "SB", "P", "E", "T", "G"],
     "B": ["B", "F", "D", "CP", "SB", "P", "E", "T", "G"],
+    "F": ["F", "D", "CP", "SB", "P", "E", "T", "G"],
     "D": ["D", "CP", "SB", "P", "E", "T", "G"],
     "CP": ["CP", "SB", "P", "E", "T", "G"],
     "SB": ["SB", "P", "E", "T", "G"],
