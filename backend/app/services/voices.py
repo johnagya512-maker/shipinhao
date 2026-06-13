@@ -52,6 +52,47 @@ VOICE_LIBRARY = [
     {"id": "zh_female_roumeinvyou_emo_v2_mars_bigtts", "name": "柔美女友", "tag": "可调情绪", "category": "emotion"},
     {"id": "zh_male_beijingxiaoye_emo_mars_bigtts", "name": "北京小爷", "tag": "可调情绪", "category": "emotion"},
     {"id": "zh_female_jiaohuanvsheng_emo_mars_bigtts", "name": "娇憨女声", "tag": "可调情绪", "category": "emotion"},
+    {"id": "zh_male_yangguangqingnian_emo_v2_mars_bigtts", "name": "阳光青年(情感)", "tag": "可调情绪", "category": "emotion"},
+    {"id": "zh_female_meilinvyou_emo_v2_mars_bigtts", "name": "魅力女友(情感)", "tag": "可调情绪", "category": "emotion"},
+    {"id": "zh_male_junlangnanyou_emo_v2_mars_bigtts", "name": "俊朗男友", "tag": "可调情绪", "category": "emotion"},
+
+    # ── 视频配音 / 解说旁白（扩充）──
+    {"id": "zh_male_changtianyi_mars_bigtts", "name": "长天意", "tag": "纪录片·大气旁白", "category": "narration"},
+    {"id": "zh_female_zhixingwenwan_mars_bigtts", "name": "知性温婉", "tag": "知识·讲解", "category": "narration"},
+    {"id": "zh_male_baqiqingshu_mars_bigtts", "name": "霸气青叔", "tag": "硬核·解说", "category": "narration"},
+    {"id": "zh_male_qingyiyuxuan_mars_bigtts", "name": "清逸御轩", "tag": "儒雅·讲述", "category": "narration"},
+    {"id": "zh_female_kailangjiejie_moon_bigtts", "name": "开朗姐姐", "tag": "亲和·讲解", "category": "narration"},
+    {"id": "zh_male_dongfanghaoran_moon_bigtts", "name": "东方浩然", "tag": "正气·播报", "category": "narration"},
+
+    # ── 通用男声（扩充）──
+    {"id": "zh_male_yuanboxiaoshu_moon_bigtts", "name": "渊博小叔", "tag": "成熟·磁性", "category": "male"},
+    {"id": "zh_male_ruyayichen_moon_bigtts", "name": "儒雅亦辰", "tag": "温文·斯文", "category": "male"},
+    {"id": "zh_male_qingshuangnanda_mars_bigtts", "name": "清爽男大", "tag": "青春·阳光", "category": "male"},
+    {"id": "zh_male_haoyuxiaoge_moon_bigtts", "name": "浩宇小哥", "tag": "亲切·邻家", "category": "male"},
+    {"id": "zh_male_guozhoudege_moon_bigtts", "name": "果周德哥", "tag": "稳重·大哥", "category": "male"},
+
+    # ── 通用女声（扩充）──
+    {"id": "zh_female_linjianvhai_moon_bigtts", "name": "邻家女孩", "tag": "甜美·邻家", "category": "female"},
+    {"id": "zh_female_tianmeiyueyue_moon_bigtts", "name": "甜美悦悦", "tag": "甜美·活泼", "category": "female"},
+    {"id": "zh_female_kefuyuanyuan_moon_bigtts", "name": "客服圆圆", "tag": "专业·亲和", "category": "female"},
+    {"id": "zh_female_wenroushunv_moon_bigtts", "name": "温柔淑女", "tag": "温柔·端庄", "category": "female"},
+    {"id": "zh_female_popo_mars_bigtts", "name": "婆婆", "tag": "年长·亲切", "category": "female"},
+    {"id": "zh_female_shaoergushi_mars_bigtts", "name": "少儿故事", "tag": "童趣·讲故事", "category": "female"},
+
+    # ── 角色扮演（扩充）──
+    {"id": "zh_male_naiqimengwa_mars_bigtts", "name": "奶气萌娃", "tag": "童声·萌", "category": "character"},
+    {"id": "zh_female_baotuanzi_mars_bigtts", "name": "包子姐", "tag": "搞笑·活泼", "category": "character"},
+    {"id": "zh_male_dongfangjianke_moon_bigtts", "name": "东方剑客", "tag": "武侠·豪迈", "category": "character"},
+    {"id": "zh_female_gufengshaoyu_moon_bigtts", "name": "古风少御", "tag": "古风·清冷", "category": "character"},
+    {"id": "zh_female_wuzetian_moon_bigtts", "name": "霸气女皇", "tag": "威严·气场", "category": "character"},
+    {"id": "zh_female_sajiaonvyou_mars_bigtts", "name": "撒娇女友", "tag": "甜腻·撒娇", "category": "character"},
+
+    # ── 方言口音（扩充）──
+    {"id": "zh_female_sichuanxiaomei_moon_bigtts", "name": "四川小妹", "tag": "川味·麻辣", "category": "dialect"},
+    {"id": "zh_male_dongbeilaotie_moon_bigtts", "name": "东北老铁", "tag": "东北·豪爽", "category": "dialect"},
+    {"id": "zh_male_henanboge_moon_bigtts", "name": "河南博哥", "tag": "河南·中原", "category": "dialect"},
+    {"id": "zh_female_shanghainvsheng_moon_bigtts", "name": "上海女声", "tag": "沪语·软糯", "category": "dialect"},
+    {"id": "zh_male_guangxinanda_moon_bigtts", "name": "广西男大", "tag": "桂味·方言", "category": "dialect"},
 ]
 
 
