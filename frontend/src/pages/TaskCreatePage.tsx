@@ -728,7 +728,7 @@ export default function TaskCreatePage() {
                     {unavail
                       ? <span className="shrink-0 text-[10px] text-amber-500/80" title="未授权">未授权</span>
                       : <button type="button" title="试听"
-                          onClick={(e) => { e.stopPropagation(); previewVoice(v.id) }}
+                          onClick={(e) => { e.stopPropagation(); previewVoice(v.id, form.voice_speed ?? 1) }}
                           className="shrink-0 text-slate-400 hover:text-brand-300 text-xs">{playing ? '■' : '🔊'}</button>}
                   </div>
                   <span className="block text-[10px] text-slate-500 truncate" title={v.tag}>{v.tag}</span>

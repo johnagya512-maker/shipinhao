@@ -7,6 +7,7 @@
 轨道：图片轨（按时长对账）+ 音频轨 + 字幕轨（复用 align_subtitles）。时间单位：微秒。
 """
 from pathlib import Path
+import re
 from app.modules.video_module import reconcile_durations, align_subtitles, get_audio_duration
 
 SEC = 1_000_000  # 1 秒 = 1e6 微秒
@@ -76,14 +77,25 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
         for s in align_subtitles(sub_segs, audio_total, seg_durs):
             if not s["text"].strip():
                 continue
-            st = int(round(s["start"] * SEC))
-            du = max(1, int(round((s["end"] - s["start"]) * SEC)))
-            kw = {}
-            if style is not None:
-                kw["style"] = style
-            if border is not None:
-                kw["border"] = border
-            script.add_segment(TextSegment(s["text"], Timerange(st, du), **kw), "subtitle")
+            seg_start = s["start"]
+            seg_dur = max(0.001, s["end"] - s["start"])
+            # 一屏只显示几个字：把整段文字按 ≤12 字切成多条短字幕，
+            # 在该段时间区间内按字数比例平分时长，依次显示。
+            caps = _split_caption(s["text"], max_chars=12)
+            total_chars = sum(len(c) for c in caps) or 1
+            cum = 0
+            for cap in caps:
+                cstart = seg_start + seg_dur * (cum / total_chars)
+                cum += len(cap)
+                cend = seg_start + seg_dur * (cum / total_chars)
+                st = int(round(cstart * SEC))
+                du = max(1, int(round((cend - cstart) * SEC)))
+                kw = {}
+                if style is not None:
+                    kw["style"] = style
+                if border is not None:
+                    kw["border"] = border
+                script.add_segment(TextSegment(cap, Timerange(st, du), **kw), "subtitle")
 
     return round(audio_total, 2), dropped
 
@@ -187,6 +199,34 @@ def _expand_images_to_fill(image_paths, image_weights, audio_total):
     ws = list(image_weights) if image_weights else [1.0] * n
     weights = (ws * reps)[:need]
     return paths, weights
+
+
+def _split_caption(text: str, max_chars: int = 12) -> list:
+    """把一段字幕文字切成多条 ≤max_chars 的短字幕（一屏只显示几个字，像短视频）。
+    优先在标点处断，标点间仍超长则按字数硬切。返回短句列表（去掉句末多余标点）。"""
+    text = text.strip()
+    if not text:
+        return []
+    # 先按标点切成自然小句（保留标点判断，但显示时去掉行尾标点更清爽）
+    pieces = re.split(r"(?<=[，,。．.！!？?；;、：:])", text)
+    caps, buf = [], ""
+    for p in pieces:
+        p = p.strip()
+        if not p:
+            continue
+        if len(buf) + len(p) <= max_chars:
+            buf += p
+        else:
+            if buf:
+                caps.append(buf)
+            while len(p) > max_chars:
+                caps.append(p[:max_chars])
+                p = p[max_chars:]
+            buf = p
+    if buf:
+        caps.append(buf)
+    # 去掉每条行尾的标点（短视频字幕惯例），保留内部
+    return [c.rstrip("，,。．.！!？?；;、：: ") or c for c in caps]
 
 
 def _read_seg_durations(audio_path: str, n: int):

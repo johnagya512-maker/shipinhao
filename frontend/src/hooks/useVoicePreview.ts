@@ -16,14 +16,14 @@ export function useVoicePreview() {
     setPreviewingId(null)
   }
 
-  async function preview(voiceId: string) {
+  async function preview(voiceId: string, speed: number = 1.0) {
     setError(null)
     // 再次点同一个 = 停止
     if (previewingId === voiceId) { stop(); return }
     stop()
     setPreviewingId(voiceId)
     try {
-      const blob = await api.previewTts({ voice: voiceId })
+      const blob = await api.previewTts({ voice: voiceId, speed })
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       audioRef.current = audio
