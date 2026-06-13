@@ -107,6 +107,46 @@ def _synth_siliconflow(text: str, api_key: str, voice: str | None,
     return resp.content
 
 
+YUNTTS_EDGE_ENDPOINT = "https://www.yuntts.com/api/v1/edge_tts"
+YUNTTS_EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+
+
+def _synth_yuntts_edge(text: str, api_key: str, voice: str | None,
+                       timeout: float, speed: float = 1.0) -> bytes:
+    """云声配音 Edge TTS 合成（同步接口，返回音频 URL 再下载）。会员免费、不限量。
+    speed(0.5~2.0 倍) 换算成 Edge 的 rate(-100~100 百分比)：1.0→0，1.5→+50，0.5→-50。"""
+    rate = int(round((_clamp_speed(speed) - 1.0) * 100))
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "text": text,
+        "voice": voice or YUNTTS_EDGE_DEFAULT_VOICE,
+        "rate": rate,
+    }
+    try:
+        resp = httpx.post(YUNTTS_EDGE_ENDPOINT, json=payload, headers=headers, timeout=timeout)
+    except httpx.RequestError as e:
+        raise TTSError(f"E6203: TTS 请求失败: {e}")
+    if resp.status_code == 401:
+        raise TTSError("E6204: TTS API Key 无效")
+    if resp.status_code >= 400:
+        raise TTSError(f"E6205: TTS 接口返回 {resp.status_code}: {resp.text[:200]}")
+    try:
+        body = resp.json()
+    except Exception:
+        raise TTSError(f"E6205: TTS 返回非 JSON: {resp.text[:120]}")
+    if body.get("code") != 200:
+        raise TTSError(f"E6208: TTS 合成失败: {body.get('msg') or body.get('message') or body}")
+    audio_url = body.get("audio_url") or body.get("url") or (body.get("data") or {}).get("audio_url")
+    if not audio_url:
+        raise TTSError(f"E6209: TTS 未返回音频地址: {str(body)[:120]}")
+    try:
+        a = httpx.get(audio_url, timeout=timeout, follow_redirects=True)
+        a.raise_for_status()
+    except httpx.HTTPError as e:
+        raise TTSError(f"E6206: 下载合成音频失败: {e}")
+    return a.content
+
+
 def _clamp_speed(speed) -> float:
     """语速限制在 0.5~2.0，非法值回退 1.0。"""
     try:
@@ -122,6 +162,8 @@ def _synth_one(text: str, provider: str, api_key: str, voice: str | None,
         return _synth_volcano(text, api_key, voice, appid, timeout, speed)
     if provider == "siliconflow":
         return _synth_siliconflow(text, api_key, voice, model, timeout, speed)
+    if provider == "yuntts_edge":
+        return _synth_yuntts_edge(text, api_key, voice, timeout, speed)
     raise TTSError(f"E6202: 暂不支持的 TTS 供应商: {provider}")
 
 

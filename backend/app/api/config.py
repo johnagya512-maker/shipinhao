@@ -63,10 +63,15 @@ def list_voices(db: Session = Depends(get_db)):
     可用性按火山账号授权而定，库是候选清单。"""
     cfg = _get_or_create(db)
     key = decrypt(cfg.tts_api_key_enc) if cfg.tts_api_key_enc else ""
-    # 触发/复用当前凭证的后台探活；立即取已探出的结果合并进返回。
+    library, needs_probe = voices_svc.library_for(cfg.tts_provider)
+    if not needs_probe:
+        # Edge 等供应商音色对所有账号开放，无需探活，恒可用。
+        voices = [{**v, "available": True} for v in library]
+        return {"categories": voices_svc.CATEGORIES, "voices": voices, "probing": False}
+    # 火山：触发/复用当前凭证的后台探活；立即取已探出的结果合并进返回。
     voices_svc.ensure_probe(cfg.tts_provider, cfg.tts_appid, key)
     avail = voices_svc.availability(cfg.tts_appid, key)
-    voices = [{**v, "available": avail.get(v["id"])} for v in voices_svc.VOICE_LIBRARY]
+    voices = [{**v, "available": avail.get(v["id"])} for v in library]
     return {"categories": voices_svc.CATEGORIES, "voices": voices,
             "probing": bool(key) and not avail}
 

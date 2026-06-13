@@ -96,6 +96,44 @@ VOICE_LIBRARY = [
 ]
 
 
+# ── 云声配音 Edge TTS 音色库（微软 Edge 神经网络音色，会员免费、不限量、无需探活）──
+# voice 用微软命名（zh-CN-XxxNeural）。Edge 音色对所有账号开放，故 available 恒 True。
+EDGE_VOICE_LIBRARY = [
+    # 视频配音 / 解说
+    {"id": "zh-CN-YunjianNeural", "name": "云健", "tag": "解说·体育激情", "category": "narration"},
+    {"id": "zh-CN-YunyangNeural", "name": "云扬", "tag": "新闻·专业播报", "category": "narration"},
+    {"id": "zh-CN-liaoning-XiaobeiNeural", "name": "晓北", "tag": "东北·旁白", "category": "narration"},
+    # 通用男声
+    {"id": "zh-CN-YunxiNeural", "name": "云希", "tag": "阳光·活力少年", "category": "male"},
+    {"id": "zh-CN-YunxiaNeural", "name": "云夏", "tag": "可爱·童声男", "category": "male"},
+    {"id": "zh-CN-YunfengNeural", "name": "云枫", "tag": "成熟·稳重", "category": "male"},
+    {"id": "zh-CN-YunhaoNeural", "name": "云皓", "tag": "广告·磁性", "category": "male"},
+    {"id": "zh-CN-YunjieNeural", "name": "云杰", "tag": "纪实·沉稳", "category": "male"},
+    # 通用女声
+    {"id": "zh-CN-XiaoxiaoNeural", "name": "晓晓", "tag": "温暖·通用首选", "category": "female"},
+    {"id": "zh-CN-XiaoyiNeural", "name": "晓伊", "tag": "活泼·亲切", "category": "female"},
+    {"id": "zh-CN-XiaohanNeural", "name": "晓涵", "tag": "温柔·舒缓", "category": "female"},
+    {"id": "zh-CN-XiaomengNeural", "name": "晓梦", "tag": "甜美·治愈", "category": "female"},
+    {"id": "zh-CN-XiaoruiNeural", "name": "晓睿", "tag": "成熟·知性", "category": "female"},
+    {"id": "zh-CN-XiaoxuanNeural", "name": "晓萱", "tag": "干练·御姐", "category": "female"},
+    {"id": "zh-CN-XiaomoNeural", "name": "晓墨", "tag": "情感·细腻", "category": "female"},
+    {"id": "zh-CN-XiaozhenNeural", "name": "晓甄", "tag": "认真·清晰", "category": "female"},
+    # 方言
+    {"id": "zh-CN-shaanxi-XiaoniNeural", "name": "晓妮", "tag": "陕西·方言", "category": "dialect"},
+    {"id": "zh-HK-HiuMaanNeural", "name": "曉曼", "tag": "粤语·女声", "category": "dialect"},
+    {"id": "zh-HK-WanLungNeural", "name": "雲龍", "tag": "粤语·男声", "category": "dialect"},
+    {"id": "zh-TW-HsiaoChenNeural", "name": "曉臻", "tag": "台湾·女声", "category": "dialect"},
+]
+
+
+def library_for(provider: str | None):
+    """按 TTS 供应商返回 (音色清单, 是否需要探活)。
+    yuntts_edge 用 Edge 音色库且无需探活（恒可用）；其余用火山候选库（需探活）。"""
+    if provider == "yuntts_edge":
+        return EDGE_VOICE_LIBRARY, False
+    return VOICE_LIBRARY, True
+
+
 # ── 按账号探活：音色授权是按火山账号的，库里是候选清单，实际可用性需用当前凭证试合成 ──
 # 探活结果按「凭证指纹」缓存在内存：同一套 appid+key 只测一轮，凭证变了重测。
 # 探活在后台线程跑（逐个合成一句短文本，慢），接口先返回缓存（首次全为 None=未知）。
