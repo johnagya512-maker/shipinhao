@@ -73,9 +73,22 @@ def reconcile_durations(weights: list[float], audio_total: float) -> list[float]
     return durs
 
 
-def align_subtitles(segments: list[dict], audio_total: float) -> list[dict]:
-    """按字符比例分配字幕时间（PRD 4.8）。返回 [{text,start,end}]。"""
+def align_subtitles(segments: list[dict], audio_total: float,
+                    seg_durations: list[float] | None = None) -> list[dict]:
+    """分配字幕时间，返回 [{text,start,end}]。
+
+    seg_durations（各段真实音频时长）可用且与段数匹配时，按真实时长精确对齐
+    （字幕与配音逐段对准）；否则回退按字符比例近似分配（PRD 4.8）。
+    """
     texts = [s["text"] for s in segments]
+    if seg_durations and len(seg_durations) == len(texts) and sum(seg_durations) > 0:
+        out = []
+        cum = 0.0
+        for t, d in zip(texts, seg_durations):
+            start = cum
+            cum += d
+            out.append({"text": t, "start": round(start, 3), "end": round(cum, 3)})
+        return out
     total_chars = sum(len(t) for t in texts) or 1
     out = []
     cum = 0

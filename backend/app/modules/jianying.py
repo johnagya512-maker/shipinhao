@@ -59,10 +59,12 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
     # 音频轨：用素材真实时长铺满，不超界
     script.add_segment(AudioSegment(audio_mat, Timerange(0, audio_us)), "main_audio")
 
-    # 字幕轨：复用字符比例对齐。样式按模板（白字黑描边等），无样式则剪映默认。
+    # 字幕轨：优先按各段配音的真实时长对齐（字幕与语音逐段对准），
+    # 取不到分段时长时回退字符比例。样式按模板，无样式则剪映默认。
     if enable_subtitles and segments:
+        seg_durs = _read_seg_durations(audio_path, len(segments))
         style, border = _subtitle_style(draft, tpl.subtitle_style(tmpl))
-        for s in align_subtitles(segments, audio_total):
+        for s in align_subtitles(segments, audio_total, seg_durs):
             if not s["text"].strip():
                 continue
             st = int(round(s["start"] * SEC))
@@ -159,6 +161,21 @@ def _build_bare_json(image_paths, image_weights, audio_path, segments,
     script.dump(str(draft_path))
     return {"draft_path": str(draft_path), "duration": duration,
             "dropped_images": dropped, "in_jianying": False}
+
+
+def _read_seg_durations(audio_path: str, n: int):
+    """从 audio.mp3 同目录读 seg_000.mp3.. 的真实时长（秒），供字幕精确对齐。
+    数量与段数 n 不符或读取失败则返回 None（回退字符比例对齐）。"""
+    try:
+        from app.modules.video_module import get_audio_duration
+        ad = Path(audio_path).parent
+        segs = sorted(ad.glob("seg_*.mp3"))
+        if len(segs) != n:
+            return None
+        durs = [round(get_audio_duration(str(p)), 3) for p in segs]
+        return durs if sum(durs) > 0 else None
+    except Exception:
+        return None
 
 
 def _apply_intro(seg, draft, name):

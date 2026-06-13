@@ -33,6 +33,8 @@ class TTSResult:
     audio_path: str
     duration: float = 0.0
     segment_count: int = 0
+    # 每段（与传入 segments 一一对应）的真实音频时长（秒），供字幕按真实时长精确对齐。
+    seg_durations: list = None
 
 
 class TTSUnavailable(Exception):
@@ -189,20 +191,22 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     part_paths: list[Path] = []
+    seg_durations: list[float] = []
     for i, text in enumerate(texts):
         p = out_dir / f"seg_{i:03d}.mp3"
         _synth_one_checked(text, provider, api_key, voice, appid, model,
                            timeout, speed, p)
+        # 每段单独去残留长静音（火山偶发的尾部静音填充），保证段时长真实、与字幕对齐。
+        # 不在拼接后整条去静音——那会打乱"段时长↔字幕"的对应关系，导致字幕错位。
+        _remove_long_silence(p)
         part_paths.append(p)
+        seg_durations.append(_probe_duration(p))
 
     final_path = out_dir / "audio.mp3"
     _concat_audio(part_paths, final_path)
-    # 兜底：整条音频去除残留长静音（火山额度紧张时会持续返回静音段，逐段重试可能
-    # 仍按不住）。一次性压缩所有 >1.5 秒的大空白，保留 0.4 秒自然停顿。
-    _remove_long_silence(final_path)
     duration = _probe_duration(final_path)
     return TTSResult(audio_path=str(final_path), duration=duration,
-                     segment_count=len(part_paths))
+                     segment_count=len(part_paths), seg_durations=seg_durations)
 
 
 def _remove_long_silence(path: Path) -> None:
