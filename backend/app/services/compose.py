@@ -90,9 +90,10 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
     except Exception as e:
         # 剪映正开着同名草稿导致无法覆盖时，自动换带序号的新名重试（最多 3 次），
         # 避免用户必须先去关剪映；其它错误照常抛出。
+        r = None
         msg = str(e)
-        if "剪映中打开" in msg or "无法覆盖" in msg or "PermissionError" in msg:
-            r = None
+        is_locked = ("剪映中打开" in msg or "无法覆盖" in msg or "PermissionError" in msg)
+        if is_locked:
             for n in range(2, 5):
                 try:
                     r = _try_build(_safe_name(f"{draft_name}_{n}"))

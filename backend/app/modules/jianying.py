@@ -77,25 +77,30 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
         for s in align_subtitles(sub_segs, audio_total, seg_durs):
             if not s["text"].strip():
                 continue
-            seg_start = s["start"]
-            seg_dur = max(0.001, s["end"] - s["start"])
-            # 一屏只显示几个字：把整段文字按 ≤12 字切成多条短字幕，
-            # 在该段时间区间内按字数比例平分时长，依次显示。
+            seg_start_us = int(round(s["start"] * SEC))
+            seg_end_us = int(round(s["end"] * SEC))
+            if seg_end_us <= seg_start_us:
+                seg_end_us = seg_start_us + 1
+            # 一屏只显示几个字：把整段文字按 ≤12 字切成多条短字幕，在该段时间区间内
+            # 按字数比例平分。用整数微秒累进、下一条紧接上一条的结束，避免取整后端点
+            # 重叠（剪映字幕轨不允许重叠，会抛 SegmentOverlap）。
             caps = _split_caption(s["text"], max_chars=12)
             total_chars = sum(len(c) for c in caps) or 1
+            span = seg_end_us - seg_start_us
             cum = 0
-            for cap in caps:
-                cstart = seg_start + seg_dur * (cum / total_chars)
+            cur = seg_start_us
+            for ci, cap in enumerate(caps):
                 cum += len(cap)
-                cend = seg_start + seg_dur * (cum / total_chars)
-                st = int(round(cstart * SEC))
-                du = max(1, int(round((cend - cstart) * SEC)))
+                # 最后一条对齐到段末尾，其余按字数比例切分点
+                nxt = seg_end_us if ci == len(caps) - 1 else seg_start_us + span * cum // total_chars
+                du = max(1, nxt - cur)
                 kw = {}
                 if style is not None:
                     kw["style"] = style
                 if border is not None:
                     kw["border"] = border
-                script.add_segment(TextSegment(cap, Timerange(st, du), **kw), "subtitle")
+                script.add_segment(TextSegment(cap, Timerange(cur, du), **kw), "subtitle")
+                cur = nxt
 
     return round(audio_total, 2), dropped
 
