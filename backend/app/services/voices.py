@@ -129,7 +129,7 @@ EDGE_VOICE_LIBRARY = [
 def library_for(provider: str | None):
     """按 TTS 供应商返回 (音色清单, 是否需要探活)。
     yuntts_edge 用 Edge 音色库且无需探活（恒可用）；其余用火山候选库（需探活）。"""
-    if provider == "yuntts_edge":
+    if provider in ("yuntts_edge", "edge_local"):
         return EDGE_VOICE_LIBRARY, False
     return VOICE_LIBRARY, True
 

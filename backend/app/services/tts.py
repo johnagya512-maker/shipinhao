@@ -112,6 +112,32 @@ YUNTTS_EDGE_ENDPOINT = "https://www.yuntts.com/api/v1/edge_tts"
 YUNTTS_EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
 
+def _synth_edge_local(text: str, voice: str | None, speed: float, timeout: float) -> bytes:
+    """本地 edge-tts 开源库合成（直连微软，免费、不限量、无需 key/会员）。
+    speed(0.5~2.0) 换算成 edge-tts 的 rate 百分比字符串：1.0→'+0%'，1.5→'+50%'，0.8→'-20%'。"""
+    import asyncio
+    import edge_tts
+    pct = int(round((_clamp_speed(speed) - 1.0) * 100))
+    rate = f"+{pct}%" if pct >= 0 else f"{pct}%"
+    v = voice or YUNTTS_EDGE_DEFAULT_VOICE
+
+    async def _run() -> bytes:
+        buf = bytearray()
+        com = edge_tts.Communicate(text, v, rate=rate)
+        async for chunk in com.stream():
+            if chunk["type"] == "audio":
+                buf += chunk["data"]
+        return bytes(buf)
+
+    try:
+        audio = asyncio.run(_run())
+    except Exception as e:
+        raise TTSError(f"E6212: 本地 Edge TTS 合成失败（检查网络/音色名）: {str(e)[:150]}")
+    if not audio:
+        raise TTSError("E6209: 本地 Edge TTS 返回空音频（可能音色名无效）")
+    return audio
+
+
 def _synth_yuntts_edge(text: str, api_key: str, voice: str | None,
                        timeout: float, speed: float = 1.0) -> bytes:
     """云声配音 Edge TTS 合成（同步接口）。返回 JSON 含 audio_url 再下载；需平台会员权限。
@@ -179,6 +205,8 @@ def _synth_one(text: str, provider: str, api_key: str, voice: str | None,
         return _synth_siliconflow(text, api_key, voice, model, timeout, speed)
     if provider == "yuntts_edge":
         return _synth_yuntts_edge(text, api_key, voice, timeout, speed)
+    if provider == "edge_local":
+        return _synth_edge_local(text, voice, speed, timeout)
     raise TTSError(f"E6202: 暂不支持的 TTS 供应商: {provider}")
 
 
@@ -229,7 +257,7 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
     api_key 为空 → 抛 TTSUnavailable，编排降级为手动上传音频。
     返回 TTSResult，audio_path 指向拼接后的整段音频。
     """
-    if not api_key:
+    if not api_key and provider != "edge_local":
         raise TTSUnavailable("未配置 TTS API Key")
 
     # 过滤：排除空白段、纯标点碎片段（火山对纯标点报 3011 No readable text）；
@@ -292,7 +320,7 @@ def test_connectivity(provider: str, api_key: str | None, voice: str | None = No
     api_key 为空 → 抛 TTSUnavailable；Key/音色/appid 有误 → 抛 TTSError（带错误码）。
     不落盘、不拼接，仅探活。
     """
-    if not api_key:
+    if not api_key and provider != "edge_local":
         raise TTSUnavailable("未配置 TTS API Key")
     audio_bytes = _synth_one("测试配音，你好。", provider, api_key, voice,
                              appid, model, timeout, speed)
@@ -305,7 +333,7 @@ def synth_preview(provider: str, api_key: str | None, voice: str | None = None,
                   appid: str | None = None, model: str | None = None,
                   speed: float = 1.0, timeout: float = 30.0) -> bytes:
     """试听：合成一句短文本，返回 mp3 字节（不落盘），供前端直接播放。"""
-    if not api_key:
+    if not api_key and provider != "edge_local":
         raise TTSUnavailable("未配置 TTS API Key")
     audio = _synth_one("你好，这是配音试听效果。", provider, api_key, voice,
                        appid, model, timeout, speed)

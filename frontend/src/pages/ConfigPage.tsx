@@ -7,7 +7,7 @@ const LLM_PROVIDERS = ['deepseek', 'openai', 'qwen', 'doubao']
 const IMAGE_PROVIDERS = ['doubao', 'openai']
 const COLLECT_PROVIDERS = ['tikhub']
 const ASR_PROVIDERS = ['volcano', 'siliconflow']
-const TTS_PROVIDERS = ['volcano', 'siliconflow', 'yuntts_edge']
+const TTS_PROVIDERS = ['edge_local', 'volcano', 'siliconflow', 'yuntts_edge']
 
 export default function ConfigPage() {
   const [cfg, setCfg] = useState<ConfigOut | null>(null)
