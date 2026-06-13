@@ -320,18 +320,21 @@ def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
         out_path.write_bytes(audio)
         dur = _probe_duration(out_path)
         cps = (len(text) / dur) if dur > 0 else 999
-        sil = _silence_ratio(out_path) if dur > 15 else 0.0
-        abnormal = (dur <= 0) or (cps > cps_limit) or (dur > 20 and sil > 0.5)
+        # 静音占比：>5 秒的音频就检查（不再要求 >20 秒，否则像"念6秒+静音11秒"
+        # 这种 17 秒的段会漏判）。
+        sil = _silence_ratio(out_path) if dur > 5 else 0.0
+        # 异常：念不全(语速畸高) / 内含或尾随大段静音(静音过半) / 时长无效
+        abnormal = (dur <= 0) or (cps > cps_limit) or (sil > 0.4)
         if not abnormal:
             return  # 正常，直接用
         # 记录最优候选：偏离正常时长越小越好
         score = abs(dur - expect)
         if best is None or score < best[0]:
             best = (score, audio)
-    # 多次仍异常：写回最优候选，并裁掉可能的尾部静音
+    # 多次仍异常：写回最优候选，并裁掉残留静音（含段内长停顿）
     if best is not None:
         out_path.write_bytes(best[1])
-        _trim_trailing_silence(out_path)
+        _remove_long_silence(out_path)
 
 
 def _trim_trailing_silence(path: Path) -> None:
