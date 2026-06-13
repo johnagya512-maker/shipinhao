@@ -304,19 +304,33 @@ def _silence_ratio(path: Path) -> float:
 
 def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
                        timeout, speed, out_path: Path) -> None:
-    """合成单段并写盘；若产出大段静音（火山偶发异常），自动重试，最多 3 次。
-    重试仍异常则保留最后一次结果（不阻断整体出片）。"""
-    last = None
-    for attempt in range(3):
+    """合成单段并写盘；若产出异常音频（火山偶发返回不完整/大段静音），自动重试，最多 4 次。
+    取多次结果里"最接近正常语速"的一版，避免坏结果进成品。
+
+    判定异常的两种情形（实测均出现过）：
+    1. 残缺：只念了开头就结束——音频过短、字/秒畸高（如 41 字仅 4 秒 = 10 字/秒）。
+    2. 静音填充：念几个字后填大段静音到几十秒——时长畸长、静音过半。
+    正常中文播报约 4~6 字/秒，故以 8 字/秒为上限阈值。
+    """
+    cps_limit = 8.0          # 字/秒上限，超过视为没念全
+    expect = len(text) / 5.0  # 正常时长估计（5 字/秒）
+    best = None              # (越小越好的偏差, 音频字节)
+    for attempt in range(4):
         audio = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed)
         out_path.write_bytes(audio)
-        # 短文本（<60字）合成出 >20 秒、且静音过半，几乎肯定是异常返回
-        if len(text) < 60 and _probe_duration(out_path) > 20 and _silence_ratio(out_path) > 0.5:
-            last = out_path
-            continue
-        return
-    # 兜底：用最后一次结果，但裁掉尾部静音，避免整段几十秒空白
-    if last is not None:
+        dur = _probe_duration(out_path)
+        cps = (len(text) / dur) if dur > 0 else 999
+        sil = _silence_ratio(out_path) if dur > 15 else 0.0
+        abnormal = (dur <= 0) or (cps > cps_limit) or (dur > 20 and sil > 0.5)
+        if not abnormal:
+            return  # 正常，直接用
+        # 记录最优候选：偏离正常时长越小越好
+        score = abs(dur - expect)
+        if best is None or score < best[0]:
+            best = (score, audio)
+    # 多次仍异常：写回最优候选，并裁掉可能的尾部静音
+    if best is not None:
+        out_path.write_bytes(best[1])
         _trim_trailing_silence(out_path)
 
 
