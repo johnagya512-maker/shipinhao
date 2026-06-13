@@ -302,26 +302,32 @@ def run_pipeline(db: Session, task_id: str):
             n_images = im.count_for_duration(est_dur, seconds_per_image=tracks.seconds_per_image(task.track))
 
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
+            # 参考图 data URI 不落库（体积大），每次现编码，供人物镜头图生图用。
+            ref_uri = None
+            if task.reference_image:
+                try:
+                    from app.services.image import _encode_reference
+                    ref_uri = _encode_reference(task.reference_image)
+                except Exception:
+                    ref_uri = None
             existing_p = _get_result(db, task.id, "P")
             if existing_p and existing_p.status == "success":
-                prompts_list = [(p["prompt"], p["sub_type"], Path(p["out_path"]), p["duration"])
+                prompts_list = [(p["prompt"], p["sub_type"], Path(p["out_path"]), p["duration"],
+                                 ref_uri if p.get("has_char") else None)
                                 for p in existing_p.output["prompts"]]
             else:
                 # 反推人物特征（"CP"）：先于画面脚本。有参考图时用视觉模型看一次参考图，
-                # 生成稳定外貌特征文字，供 SB 把人物特征写进 has_character 分镜的 desc_prompt
-                # （文字锚定角色一致性，不再把参考图当 img2img 底图）。失败不阻断。
+                # 生成稳定外貌特征文字（文字锚定，供 SB 写进分镜）；参考图 data URI（上面已编码）
+                # 留作图生图入参（人物镜头保持主角一致：同一个人、不同场景）。失败不阻断。
                 character_desc = None
-                if task.reference_image:
+                if ref_uri:
                     try:
-                        from app.services.image import _encode_reference
-                        ref_uri = _encode_reference(task.reference_image)
-                        if ref_uri:
-                            cp_out = _llm_step(db, task, cfg, llm_key, "CP",
-                                               lambda: tm.run_character_profile(
-                                                   cfg.image_provider, cfg.vision_model,
-                                                   img_key, ref_uri),
-                                               started)
-                            character_desc = (cp_out.get("profile") or "").strip() or None
+                        cp_out = _llm_step(db, task, cfg, llm_key, "CP",
+                                           lambda: tm.run_character_profile(
+                                               cfg.image_provider, cfg.vision_model,
+                                               img_key, ref_uri),
+                                           started)
+                        character_desc = (cp_out.get("profile") or "").strip() or None
                     except Exception as e:
                         _save_result(db, task.id, "CP", "failed", output={"error": str(e)})
 
@@ -343,7 +349,8 @@ def run_pipeline(db: Session, task_id: str):
                 prompts_list = im.build_image_prompts(book_info, segments, out_dir,
                                                       image_count=n_images,
                                                       track=task.track, image_style=task.image_style,
-                                                      scenes=scenes, character_desc=character_desc)
+                                                      scenes=scenes, character_desc=character_desc,
+                                                      ref_uri=ref_uri)
                 # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑。
                 # scenes 必须与实际内容图数（n_images-2）一一对应：SB 分镜可能多于/少于配图数，
                 # 这里按配图数截断/补齐，否则前端画廊格子数与实际图数对不上，多出的显示"未生成"。
@@ -355,8 +362,9 @@ def run_pipeline(db: Session, task_id: str):
                     aligned_scenes = []
                 _save_result(db, task.id, "P", "success",
                              output={"prompts": [{"prompt": p, "sub_type": st,
-                                                  "out_path": str(op), "duration": sd}
-                                                 for (p, st, op, sd) in prompts_list],
+                                                  "out_path": str(op), "duration": sd,
+                                                  "has_char": bool(rf)}
+                                                 for (p, st, op, sd, rf) in prompts_list],
                                      "scenes": aligned_scenes})
                 _maybe_pause(db, task, "P")
 

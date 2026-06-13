@@ -86,14 +86,15 @@ def _wrap(style: dict, subject: str) -> str:
 
 
 def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
-                       suggested_duration, model, aspect_ratio="9:16"):
+                       suggested_duration, model, aspect_ratio="9:16", ref_uri=None):
     """生成单张：可重试错误(超时/限流/审核误判)退避重试，耗尽则降级占位图。
     单张失败不中断整批，保证链路产出（PRD 11.2 必选模块尽量不整体失败）。"""
     from app.modules.retry import with_retry
     try:
         result, _ = with_retry(
             lambda: generate_image(provider, api_key, prompt, sub_type, out_path,
-                                   suggested_duration, model=model, aspect_ratio=aspect_ratio),
+                                   suggested_duration, model=model, aspect_ratio=aspect_ratio,
+                                   ref_uri=ref_uri),
             IMG_RETRY)
         return result
     except ImageError as e:
@@ -105,14 +106,15 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
 
 def run_images(provider, api_key, book_info, segments, out_dir: Path,
                image_count=5, track="character_story", image_style=None, model=None,
-               concurrency=5, aspect_ratio="9:16", character_desc=None):
+               concurrency=5, aspect_ratio="9:16", character_desc=None, ref_uri=None):
     """生成 1 封面 + N 内容 + 1 结尾。按赛道主体 + 画风三层包裹。
-    纯文生图：角色一致性靠提示词里的人物特征文字（character_desc）锚定，
-    且仅在需要人物出场的画面注入；空镜/物件画面紧贴文案、不带人物。
+    角色一致性：有参考图(ref_uri)时人物镜头走图生图(同一个人、不同场景)，
+    否则靠提示词里的人物特征文字(character_desc)锚定；空镜/物件画面紧贴文案、不带人物。
     单张被内容审核反复拒绝时降级为占位图，不中断整条链路。
     多张并发生成（线程池，I/O 密集），保持封面→内容→结尾的顺序返回。"""
     tasks = build_image_prompts(book_info, segments, out_dir, image_count=image_count,
-                                track=track, image_style=image_style, character_desc=character_desc)
+                                track=track, image_style=image_style,
+                                character_desc=character_desc, ref_uri=ref_uri)
     return render_images(provider, api_key, tasks, model=model, concurrency=concurrency,
                          aspect_ratio=aspect_ratio)
 
@@ -131,13 +133,15 @@ _SHOT_VARIATIONS = [
 
 def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
                         track="character_story", image_style=None, scenes=None,
-                        character_desc=None):
+                        character_desc=None, ref_uri=None):
     """Step 3「提示词生成」：组装绘图任务列表（提示词+落盘路径），不调用绘图 API。
-    返回 [(prompt, sub_type, out_path, suggested_duration), ...]，保持封面→内容→结尾顺序。
+    返回 [(prompt, sub_type, out_path, suggested_duration, ref_uri), ...]，封面→内容→结尾顺序。
     scenes 非空时用画面脚本（视觉化分镜描述）作内容图主体，否则回退到 segment 截字。
     scenes 每项可为 dict {"desc","has_character"} 或纯字符串（兼容老格式，视为有人物）。
     character_desc 非空时，仅在「需要人物出场」的画面（封面 + has_character 的内容图）
-    注入主角特征文字做一致性锚定；空镜/物件镜头不带人物特征，让画面紧贴文案。"""
+    注入主角特征文字做一致性锚定；空镜/物件镜头不带人物特征，让画面紧贴文案。
+    ref_uri（参考图 data URI）非空时，人物镜头走图生图（保持主角一致：同一个人、不同场景），
+    每个人物镜头的 prompt 用「保持面部不变、改变场景姿势」句式包裹，并带上 ref_uri。"""
     image_count = max(MIN_IMAGES, min(MAX_IMAGES, image_count))
     n_content = image_count - 2
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -184,11 +188,19 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
         scene_items = [{"cap": "", "desc_prompt": d, "has_character": True} for d in descs]
         use_storyboard = False
 
+    # 图生图人物镜头的提示词包裹：强调"保持参考人物面部/外貌不变，改变场景姿势"
+    # （实测此句式能做到同一个人、不同场景，而非复刻参考图构图）。
+    def _persona(subject):
+        return (f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
+                f"但改为以下全新画面（不同的姿势、表情、构图）：{subject}")
+
     # 封面：人物故事赛道是视频第一帧、需抓眼球，强制带主角特征（若有）。
     cover_prompt_subject = cover_subject
     if character_desc and track == "character_story":
         cover_prompt_subject = f"{cover_subject}，主角形象：{character_desc}"
-    tasks = [(_wrap(style, cover_prompt_subject), "cover", out_dir / "cover.png", 4)]
+    cover_ref = ref_uri if track == "character_story" else None
+    cover_text = _persona(cover_prompt_subject) if cover_ref else cover_prompt_subject
+    tasks = [(_wrap(style, cover_text), "cover", out_dir / "cover.png", 4, cover_ref)]
 
     for i, item in enumerate(scene_items):
         desc = item["desc_prompt"]
@@ -205,9 +217,12 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
             else:
                 anchor = "，画面中无人物，聚焦场景与物件本身"
             content_subject = f"{desc}，{shot}{anchor}"
-        tasks.append((_wrap(style, content_subject), "content",
-                      out_dir / f"content_{i}.png", 10))
-    tasks.append((_wrap(style, cta_subject), "cta", out_dir / "cta.png", 6))
+        # 仅"需要人物出场"的镜头走图生图（带参考图）；空镜/物件镜头纯文生图。
+        item_ref = ref_uri if has_char else None
+        content_text = _persona(content_subject) if item_ref else content_subject
+        tasks.append((_wrap(style, content_text), "content",
+                      out_dir / f"content_{i}.png", 10, item_ref))
+    tasks.append((_wrap(style, cta_subject), "cta", out_dir / "cta.png", 6, None))
     return tasks
 
 
@@ -220,8 +235,8 @@ def render_images(provider, api_key, tasks, model=None, concurrency=5,
     workers = max(1, min(concurrency, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_gen_with_fallback, provider, api_key, p, st, op, sd, model,
-                          aspect_ratio): idx
-                for idx, (p, st, op, sd) in enumerate(tasks)}
+                          aspect_ratio, rf): idx
+                for idx, (p, st, op, sd, rf) in enumerate(tasks)}
         for fut in futs:
             results[futs[fut]] = fut.result()  # 单张失败会抛不可重试错误，向上传递
     return results

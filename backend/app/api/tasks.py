@@ -658,13 +658,37 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     img_key = decrypt(cfg.image_api_key_enc) if cfg and cfg.image_api_key_enc else ""
     out_path = Path(img["path"])
 
+    # 人物镜头重试也带参考图保持主角一致（同一个人、不同场景）。
+    # 是否人物镜头：优先看 P 产物 has_char；其次 SB scenes 的 has_character；封面默认是。
+    ref_uri = None
+    is_char = (index == 0)
+    if p and p.output:
+        pl = p.output.get("prompts") or []
+        if index < len(pl) and "has_char" in pl[index]:
+            is_char = bool(pl[index]["has_char"])
+    if not is_char and sb and sb.output:
+        scs = sb.output.get("scenes") or []
+        if 0 <= sidx < len(scs):
+            is_char = bool(scs[sidx].get("has_character", False))
+    if is_char and task.reference_image and task.track == "character_story":
+        try:
+            from app.services.image import _encode_reference
+            ref_uri = _encode_reference(task.reference_image)
+        except Exception:
+            ref_uri = None
+
     def _gen(subj):
-        """裸主体 → 套风格 → 生成。返回 result。空镜补无人物兜底由调用方传入。"""
+        """裸主体 → 套风格 → 生成。人物镜头带参考图图生图保持一致性。"""
+        text = _wrap(style, subj)
+        if ref_uri:
+            text = _wrap(style, f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
+                                f"但改为以下全新画面（不同的姿势、表情、构图）：{subj}")
         return _gen_with_fallback(cfg.image_provider if cfg else "mock", img_key,
-                                  _wrap(style, subj),
+                                  text,
                                   sub_type, out_path, img.get("suggested_duration", 6),
                                   model=cfg.image_model if cfg else None,
-                                  aspect_ratio=task.aspect_ratio or "9:16")
+                                  aspect_ratio=task.aspect_ratio or "9:16",
+                                  ref_uri=ref_uri)
 
     try:
         result = _gen(subject)

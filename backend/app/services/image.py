@@ -100,10 +100,11 @@ def _encode_reference(path: str) -> str | None:
 def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    out_path: Path, suggested_duration: int,
                    model: str | None = None, timeout: float = 60.0,
-                   aspect_ratio: str = "9:16") -> ImageResult:
+                   aspect_ratio: str = "9:16", ref_uri: str | None = None) -> ImageResult:
     """生成单张配图。无 Key 或 provider=mock 时走占位图。
-    纯文生图：角色一致性靠提示词里的人物特征文字锚定（见 image_module.build_image_prompts），
-    不再把参考图当 img2img 底图，让每张画面紧贴文案、镜头自由。"""
+    ref_uri 非空时走图生图（把参考图作为 image 传入），用于人物镜头保持主角一致性
+    （同一个人、不同场景——提示词须明确"保持面部不变、改变场景姿势"，见 build_image_prompts）；
+    为空时纯文生图。"""
     w, h = _dims_for(aspect_ratio)
     use_mock = (not api_key) or provider == "mock"
     if use_mock:
@@ -123,6 +124,9 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    "response_format": "url", "stream": False, "watermark": False}
         if model:
             payload["model"] = model
+        if ref_uri:
+            # 图生图：传参考图保持人物一致性（Seedream 4.x 支持 image 入参，实测有效）
+            payload["image"] = ref_uri
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
     except httpx.TimeoutException as e:
         raise ImageError(f"配图超时: {e}", retryable=True)
