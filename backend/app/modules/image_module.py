@@ -7,11 +7,11 @@ from app.modules import tracks
 
 IMG_RETRY = 2
 
-# 配图节奏：人物故事/中老年受众，约 6 秒一张（常规叙事 5-7s 的中值）。
+# 配图节奏：默认约 8 秒一张（中老年友好）；实际秒/张由赛道决定（见 tracks.seconds_per_image）。
 # 张数随时长动态变，封顶避免成本失控；下限保证封面+内容+CTA 基本结构。
-SECONDS_PER_IMAGE = 6
+SECONDS_PER_IMAGE = 8
 MIN_IMAGES = 3
-MAX_IMAGES = 24
+MAX_IMAGES = 48
 
 
 def count_for_duration(total_duration: float,

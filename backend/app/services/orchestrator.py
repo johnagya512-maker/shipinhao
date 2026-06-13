@@ -295,10 +295,11 @@ def run_pipeline(db: Session, task_id: str):
         # E 配图（必选）。拆两步：P 提示词生成（不调绘图 API）→ E 批量生图。
         if "E" in task.modules:
             out_dir = storage_root(db) / task.id / "images"
-            # 张数按改写后文案字数自动匹配（约 5 字/秒口播、6 秒/张），
-            # 不依赖 F 分段数（其段数/估时波动大），保证节奏稳定。
+            # 张数按改写后文案字数自动匹配（约 5 字/秒口播），每张图停留秒数按赛道
+            # （tracks.seconds_per_image，中老年友好 6-9 秒/张），不依赖 F 分段数
+            # （其段数/估时波动大），保证节奏稳定。
             est_dur = len(script) / cost_svc.CHARS_PER_SECOND
-            n_images = im.count_for_duration(est_dur)
+            n_images = im.count_for_duration(est_dur, seconds_per_image=tracks.seconds_per_image(task.track))
 
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
             existing_p = _get_result(db, task.id, "P")

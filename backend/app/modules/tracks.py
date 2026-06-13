@@ -170,3 +170,25 @@ def get_style(style_key: str | None, track_key: str | None = None) -> dict:
         style_key = get_track(track_key)["default_style"]
     return IMAGE_STYLES.get(style_key, IMAGE_STYLES["古风电影"])
 
+
+# ── 各赛道出图节奏：每张图停留秒数 ──
+# 面向视频号中老年观众为基调（看清画面+跟上字幕，不过快不过慢）：
+# 叙事/慢品类放慢（8-9 秒），知识/带货/美食类信息密、切换勤（6-7 秒）。
+_SECONDS_PER_IMAGE = {
+    "character_story": 8,   # 人物故事：叙事，看清人物
+    "health_book": 8,       # 健康书单：中老年主力，舒适
+    "culture_science": 7,   # 文化科普：信息较密
+    "kids_picturebook": 9,  # 绘本故事：慢，给孩子看图
+    "ecommerce": 6,         # 电商带货：节奏快、抓注意力
+    "soul_chicken": 8,      # 心灵鸡汤：慢品
+    "folk_tale": 9,         # 民间故事：娓娓道来
+    "food_探店": 6,         # 美食探店：画面丰富、切换勤
+    "general": 7,           # 通用：折中
+}
+DEFAULT_SECONDS_PER_IMAGE = 8
+
+
+def seconds_per_image(track_key: str | None) -> float:
+    """取某赛道的每张图停留秒数（决定出图节奏/张数）。未配置赛道用默认值。"""
+    return _SECONDS_PER_IMAGE.get(track_key or DEFAULT_TRACK, DEFAULT_SECONDS_PER_IMAGE)
+
