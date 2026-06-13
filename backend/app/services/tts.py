@@ -11,6 +11,7 @@ import base64
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 import httpx
@@ -113,29 +114,43 @@ YUNTTS_EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
 def _synth_yuntts_edge(text: str, api_key: str, voice: str | None,
                        timeout: float, speed: float = 1.0) -> bytes:
-    """云声配音 Edge TTS 合成（同步接口，返回音频 URL 再下载）。会员免费、不限量。
+    """云声配音 Edge TTS 合成（同步接口）。返回 JSON 含 audio_url 再下载；需平台会员权限。
     speed(0.5~2.0 倍) 换算成 Edge 的 rate(-100~100 百分比)：1.0→0，1.5→+50，0.5→-50。"""
     rate = int(round((_clamp_speed(speed) - 1.0) * 100))
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+               "User-Agent": "Mozilla/5.0"}
     payload = {
         "text": text,
         "voice": voice or YUNTTS_EDGE_DEFAULT_VOICE,
-        "rate": rate,
+        "rate": rate, "pitch": 0, "volume": 0, "stream": False,
     }
-    try:
-        resp = httpx.post(YUNTTS_EDGE_ENDPOINT, json=payload, headers=headers, timeout=timeout)
-    except httpx.RequestError as e:
-        raise TTSError(f"E6203: TTS 请求失败: {e}")
+    # 偶发连接被重置（WinError 10054）自动退避重试，不一次就报错。
+    resp = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(YUNTTS_EDGE_ENDPOINT, json=payload, headers=headers, timeout=timeout)
+            break
+        except httpx.RequestError as e:
+            if attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            raise TTSError(f"E6203: TTS 请求失败（已重试）: {e}")
     if resp.status_code == 401:
         raise TTSError("E6204: TTS API Key 无效")
-    if resp.status_code >= 400:
-        raise TTSError(f"E6205: TTS 接口返回 {resp.status_code}: {resp.text[:200]}")
+    # 业务错误优先解析 JSON 的 message（如 403 权限不足）给友好提示
     try:
         body = resp.json()
     except Exception:
+        body = None
+    if isinstance(body, dict) and body.get("code") not in (200, None):
+        msg = body.get("message") or body.get("msg") or body.get("error") or ""
+        if resp.status_code == 403 or body.get("code") == 403 or "权限" in msg or "会员" in msg:
+            raise TTSError(f"E6211: 云声配音权限不足，请在 yuntts.com 升级为会员后再用 Edge TTS（{msg}）")
+        raise TTSError(f"E6208: TTS 合成失败: {msg or body}")
+    if resp.status_code >= 400:
+        raise TTSError(f"E6205: TTS 接口返回 {resp.status_code}: {resp.text[:200]}")
+    if not isinstance(body, dict):
         raise TTSError(f"E6205: TTS 返回非 JSON: {resp.text[:120]}")
-    if body.get("code") != 200:
-        raise TTSError(f"E6208: TTS 合成失败: {body.get('msg') or body.get('message') or body}")
     audio_url = body.get("audio_url") or body.get("url") or (body.get("data") or {}).get("audio_url")
     if not audio_url:
         raise TTSError(f"E6209: TTS 未返回音频地址: {str(body)[:120]}")
