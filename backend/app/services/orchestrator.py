@@ -345,11 +345,19 @@ def run_pipeline(db: Session, task_id: str):
                                                       track=task.track, image_style=task.image_style,
                                                       scenes=scenes, character_desc=character_desc)
                 # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑。
+                # scenes 必须与实际内容图数（n_images-2）一一对应：SB 分镜可能多于/少于配图数，
+                # 这里按配图数截断/补齐，否则前端画廊格子数与实际图数对不上，多出的显示"未生成"。
+                n_content = max(0, n_images - 2)
+                raw_scenes = scenes or []
+                if raw_scenes:
+                    aligned_scenes = [raw_scenes[min(i, len(raw_scenes) - 1)] for i in range(n_content)]
+                else:
+                    aligned_scenes = []
                 _save_result(db, task.id, "P", "success",
                              output={"prompts": [{"prompt": p, "sub_type": st,
                                                   "out_path": str(op), "duration": sd}
                                                  for (p, st, op, sd) in prompts_list],
-                                     "scenes": scenes or []})
+                                     "scenes": aligned_scenes})
                 _maybe_pause(db, task, "P")
 
             # Step4 批量生图（"E"）

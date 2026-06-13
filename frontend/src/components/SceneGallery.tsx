@@ -11,12 +11,14 @@ interface Props {
   onChanged: () => void   // 保存/重试后通知父组件刷新
 }
 
-// 从 P/SB 产物里取分镜列表；从 E 产物里取已生成的图。
+// 分镜列表优先取 P 产物（已与实际配图数一一对应）；P 没有 scenes 字段（老任务）才回退 SB。
+// 不能直接拿 SB.scenes——SB 分镜数可能多于实际配图数，会导致多出的卡片显示"未生成"。
 function extractScenes(modules: ModuleResult[]): Scene[] {
   const p = modules.find((m) => m.module === 'P')
   const sb = modules.find((m) => m.module === 'SB')
-  const raw = (p?.output?.scenes as Scene[] | undefined)
-    ?? (sb?.output?.scenes as Scene[] | undefined) ?? []
+  const pScenes = p?.output?.scenes as Scene[] | undefined
+  const raw = (pScenes !== undefined ? pScenes
+    : (sb?.output?.scenes as Scene[] | undefined)) ?? []
   return raw.map((s, i) => ({
     id: s.id ?? i + 1,
     cap: s.cap ?? '',
