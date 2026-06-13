@@ -33,6 +33,10 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
     audio_mat = AudioMaterial(audio_path)
     audio_us = int(audio_mat.duration)
     audio_total = audio_us / SEC
+    # 图片太少铺不满音频时（n×15秒上限 < 音频），循环复用图片，避免最后一张被拉成
+    # 几百秒的定格长镜头。扩展后每张仍在 [2,15] 秒内，画面持续切换。
+    image_paths, image_weights = _expand_images_to_fill(
+        image_paths, image_weights, audio_total)
     durs = reconcile_durations(image_weights, audio_total)
     dropped = max(0, len(image_paths) - len(durs))
     used_images = image_paths[:len(durs)]
@@ -166,6 +170,23 @@ def _build_bare_json(image_paths, image_weights, audio_path, segments,
     script.dump(str(draft_path))
     return {"draft_path": str(draft_path), "duration": duration,
             "dropped_images": dropped, "in_jianying": False}
+
+
+def _expand_images_to_fill(image_paths, image_weights, audio_total):
+    """图片按 15 秒上限仍铺不满音频时，循环复用图片列表使总容量 >= 音频时长。
+    返回扩展后的 (paths, weights)。图片足够则原样返回。"""
+    from app.modules.video_module import MAX_DUR
+    n = len(image_paths)
+    if n == 0:
+        return image_paths, image_weights
+    need = int(audio_total // MAX_DUR) + 1   # 至少需要这么多张才能铺满
+    if n >= need:
+        return image_paths, image_weights
+    reps = (need + n - 1) // n               # 循环几轮
+    paths = (list(image_paths) * reps)[:need]
+    ws = list(image_weights) if image_weights else [1.0] * n
+    weights = (ws * reps)[:need]
+    return paths, weights
 
 
 def _read_seg_durations(audio_path: str, n: int):

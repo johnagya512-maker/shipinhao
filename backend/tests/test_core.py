@@ -11,17 +11,30 @@ def test_reconcile_sum_equals_audio():
 
 
 def test_reconcile_respects_min_when_too_many():
-    from app.modules.video_module import reconcile_durations, MIN_DUR
-    # 短音频 + 多图：每张被压到下限附近，总和仍等于音频
+    from app.modules.video_module import reconcile_durations, MIN_DUR, MAX_DUR
+    # 短音频 + 多图：每张被压到下限附近，且不超出 [MIN,MAX] 区间
     durs = reconcile_durations([5] * 6, 10.0)
-    assert abs(sum(durs) - 10.0) < 0.01
+    assert all(MIN_DUR - 0.01 <= d <= MAX_DUR + 0.01 for d in durs)
 
 
-def test_reconcile_extends_last_when_too_few():
-    from app.modules.video_module import reconcile_durations
-    # 长音频 + 少图：总和必须铺满音频，不留黑屏
+def test_expand_images_fills_long_audio():
+    from app.modules.jianying import _expand_images_to_fill
+    from app.modules.video_module import reconcile_durations, MAX_DUR
+    # 24 张图、561 秒音频：扩展后图片足以铺满，且无单张超长
+    imgs = [f"img{i}.png" for i in range(24)]
+    paths, ws = _expand_images_to_fill(imgs, [4] * 24, 561.0)
+    durs = reconcile_durations(ws, 561.0)
+    assert abs(sum(durs) - 561.0) < 1.0
+    assert all(d <= MAX_DUR + 0.01 for d in durs)
+    assert len(paths) > 24  # 确实做了复用扩展
+
+
+def test_reconcile_no_overlong_single_image():
+    from app.modules.video_module import reconcile_durations, MAX_DUR
+    # 长音频 + 少图：不把残差堆给单张（旧 bug 会让最后一张变几百秒）。
+    # 每张都不超过 MAX_DUR 上限；铺满由上层 _expand_images_to_fill 复用图片解决。
     durs = reconcile_durations([5, 5], 60.0)
-    assert abs(sum(durs) - 60.0) < 0.01
+    assert all(d <= MAX_DUR + 0.01 for d in durs)
 
 
 def test_subtitle_alignment_covers_full_audio():

@@ -66,10 +66,20 @@ def reconcile_durations(weights: list[float], audio_total: float) -> list[float]
     else:
         durs = [min(MAX_DUR, max(MIN_DUR, d)) for d in durs]
 
-    # 最终强制对齐：把残差并入最后一张
-    residual = audio_total - sum(durs)
-    if durs:
-        durs[-1] += residual
+    # 最终对齐：把残差均摊到未触上限的图（而非全塞最后一张，否则图少音频长时
+    # 最后一张会被拉成几百秒）。多轮均摊；仍有正残差说明图太少、全到 15 秒上限，
+    # 由调用方靠循环/补图解决，这里不再把超时堆给单张。
+    for _ in range(20):
+        residual = audio_total - sum(durs)
+        if abs(residual) < 0.01:
+            break
+        free = [i for i in range(len(durs))
+                if (residual > 0 and durs[i] < MAX_DUR) or (residual < 0 and durs[i] > MIN_DUR)]
+        if not free:
+            break
+        share = residual / len(free)
+        for i in free:
+            durs[i] = min(MAX_DUR, max(MIN_DUR, durs[i] + share))
     return durs
 
 
