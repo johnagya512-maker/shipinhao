@@ -197,9 +197,30 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
 
     final_path = out_dir / "audio.mp3"
     _concat_audio(part_paths, final_path)
+    # 兜底：整条音频去除残留长静音（火山额度紧张时会持续返回静音段，逐段重试可能
+    # 仍按不住）。一次性压缩所有 >1.5 秒的大空白，保留 0.4 秒自然停顿。
+    _remove_long_silence(final_path)
     duration = _probe_duration(final_path)
     return TTSResult(audio_path=str(final_path), duration=duration,
                      segment_count=len(part_paths))
+
+
+def _remove_long_silence(path: Path) -> None:
+    """把音频里所有 >1.5 秒的静音压缩到 0.4 秒（去大空白、留自然停顿）。失败不阻断。"""
+    try:
+        ff = _ffmpeg_exe()
+        tmp = path.with_suffix(".clean.mp3")
+        r = subprocess.run(
+            [ff, "-y", "-i", str(path), "-af",
+             "silenceremove=stop_periods=-1:stop_duration=1.5:stop_threshold=-40dB:stop_silence=0.4",
+             "-c:a", "libmp3lame", "-b:a", "192k", str(tmp)],
+            capture_output=True, text=True)
+        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 1024:
+            tmp.replace(path)
+        else:
+            tmp.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def test_connectivity(provider: str, api_key: str | None, voice: str | None = None,
