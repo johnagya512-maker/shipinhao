@@ -61,10 +61,15 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
 
     # 字幕轨：优先按各段配音的真实时长对齐（字幕与语音逐段对准），
     # 取不到分段时长时回退字符比例。样式按模板，无样式则剪映默认。
+    # 注意：seg_xxx.mp3 只对应「可朗读段」（合成时已过滤纯标点碎片段），
+    # 故字幕也必须用同样过滤后的段，否则段数与音频段对不上、错位。
     if enable_subtitles and segments:
-        seg_durs = _read_seg_durations(audio_path, len(segments))
+        import re as _re
+        sub_segs = [s for s in segments
+                    if s.get("text", "").strip() and _re.search(r"[\w一-鿿]", s["text"])]
+        seg_durs = _read_seg_durations(audio_path, len(sub_segs))
         style, border = _subtitle_style(draft, tpl.subtitle_style(tmpl))
-        for s in align_subtitles(segments, audio_total, seg_durs):
+        for s in align_subtitles(sub_segs, audio_total, seg_durs):
             if not s["text"].strip():
                 continue
             st = int(round(s["start"] * SEC))
