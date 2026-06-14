@@ -156,6 +156,76 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
     return ImageResult(str(out_path), sub_type, suggested_duration, {})
 
 
+# 豆包组图单次上限（实测 max_images=15 实际只返回 9）
+BATCH_MAX = 9
+
+
+def generate_images_batch(provider: str, api_key: str, prompt: str,
+                          sub_types: list, out_paths: list, durations: list,
+                          model: str | None = None, timeout: float = 180.0,
+                          aspect_ratio: str = "9:16", ref_uri: str | None = None) -> list:
+    """组图：一次请求生成多张（豆包 sequential_image_generation）。返回 ImageResult 列表。
+    一次最多 BATCH_MAX 张；同批同次生成 → 风格统一；传 ref_uri → 多张保持同一个人。
+    返回数量可能少于请求数，调用方需按 out_paths 长度对齐/补齐。"""
+    n = len(out_paths)
+    w, h = _dims_for(aspect_ratio)
+    use_mock = (not api_key) or provider == "mock"
+    if use_mock:
+        colors = {"cover": (255, 228, 196), "content": (220, 237, 220), "cta": (255, 218, 224)}
+        res = []
+        for st, op, du in zip(sub_types, out_paths, durations):
+            _placeholder(op, st, colors.get(st, (230, 230, 230)), size=(w, h))
+            res.append(ImageResult(str(op), st, du, {"mock": True}))
+        return res
+
+    url = _endpoint(provider)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"prompt": prompt,
+               "size": ASPECT_GEN_SIZE.get(aspect_ratio or "9:16", "1536x2730"),
+               "sequential_image_generation": "auto",
+               "sequential_image_generation_options": {"max_images": min(n, BATCH_MAX)},
+               "response_format": "url", "stream": False, "watermark": False}
+    if model:
+        payload["model"] = model
+    if ref_uri:
+        payload["image"] = ref_uri
+    try:
+        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as e:
+        raise ImageError(f"组图超时: {e}", retryable=True)
+    except httpx.RequestError as e:
+        raise ImageError(f"组图请求错误: {e}", retryable=True)
+    if resp.status_code == 401:
+        raise ImageError("绘图 API Key 无效", retryable=False)
+    if resp.status_code == 429:
+        raise ImageError("绘图限流", retryable=True)
+    if resp.status_code >= 500:
+        raise ImageError(f"绘图服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
+    if resp.status_code >= 400:
+        body = resp.text[:300]
+        if "SensitiveContent" in body or "sensitive" in body.lower():
+            raise ImageError(f"组图被内容审核拒绝(可重试): {body}", retryable=True)
+        raise ImageError(f"组图被拒 {resp.status_code}: {body}", retryable=False)
+
+    data = resp.json().get("data") or []
+    res = []
+    for i, op in enumerate(out_paths):
+        if i < len(data) and data[i].get("url"):
+            try:
+                img_bytes = httpx.get(data[i]["url"], timeout=timeout).content
+                op.write_bytes(img_bytes)
+                _normalize(op, size=(w, h))
+                res.append(ImageResult(str(op), sub_types[i], durations[i], {}))
+                continue
+            except Exception:
+                pass
+        # 该位置没拿到图 → 占位兜底（不中断）
+        _placeholder(op, sub_types[i], (230, 230, 230), size=(w, h))
+        res.append(ImageResult(str(op), sub_types[i], durations[i],
+                               {"fallback": True, "reason": "组图返回数量不足"}))
+    return res
+
+
 def _endpoint(provider: str) -> str:
     eps = {
         "doubao": "https://ark.cn-beijing.volces.com/api/v3/images/generations",

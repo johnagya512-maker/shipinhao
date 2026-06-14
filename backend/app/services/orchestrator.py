@@ -368,16 +368,32 @@ def run_pipeline(db: Session, task_id: str):
                                      "scenes": aligned_scenes})
                 _maybe_pause(db, task, "P")
 
-            # Step4 批量生图（"E"）
+            # Step4 批量生图（"E"）。豆包 Seedream 走组图（一次出多张，省~89%成本+人物一致+
+            # 风格统一）；其他供应商回退逐张并发。
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
-                images, _ = with_retry(
-                    lambda: im.render_images(cfg.image_provider, img_key, prompts_list,
-                                             model=cfg.image_model,
-                                             concurrency=cfg.concurrency,
-                                             aspect_ratio=task.aspect_ratio),
-                    IMAGE_RETRY)
-                img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * len(images)
+                _is_doubao = "seedream" in (cfg.image_model or "").lower() or \
+                             "doubao" in (cfg.image_model or "").lower()
+                if _is_doubao:
+                    images, _ = with_retry(
+                        lambda: im.render_images_grouped(cfg.image_provider, img_key, prompts_list,
+                                                         model=cfg.image_model,
+                                                         aspect_ratio=task.aspect_ratio),
+                        IMAGE_RETRY)
+                else:
+                    images, _ = with_retry(
+                        lambda: im.render_images(cfg.image_provider, img_key, prompts_list,
+                                                 model=cfg.image_model,
+                                                 concurrency=cfg.concurrency,
+                                                 aspect_ratio=task.aspect_ratio),
+                        IMAGE_RETRY)
+                # 成本：组图按实际请求批数计（每批≤9 张算一次），逐张按张数计。
+                if _is_doubao:
+                    import math
+                    n_req = max(1, math.ceil(len(images) / im.GROUP_MAX))
+                    img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * n_req
+                else:
+                    img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * len(images)
                 cost_svc.record_cost(db, task.id, "E", cfg.image_provider, img_cost)
                 task.total_cost = float(task.total_cost) + img_cost
                 db.commit()

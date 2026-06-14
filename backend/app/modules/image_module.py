@@ -240,3 +240,59 @@ def render_images(provider, api_key, tasks, model=None, concurrency=5,
         for fut in futs:
             results[futs[fut]] = fut.result()  # 单张失败会抛不可重试错误，向上传递
     return results
+
+
+# 豆包组图单次上限
+GROUP_MAX = 9
+
+
+def render_images_grouped(provider, api_key, tasks, model=None,
+                          aspect_ratio="9:16"):
+    """组图模式批量生图：把 tasks 按「是否带参考图」分组、每组≤9 张，一次请求出多张。
+    省约 89% 成本（N 张 → ceil(N/9) 次请求），同批同次生成→风格统一，带参考图→人物一致。
+    每个 task 五元组 (prompt, sub_type, out_path, duration, ref_uri)；
+    prompt 已是套风格的完整提示词，组图时合并为「请生成 N 张，分别为：1.xx 2.xx ...」。
+    任一批组图失败 → 该批回退逐张 render，不中断出片。返回顺序与 tasks 一致。"""
+    from app.services.image import generate_images_batch, ImageError
+    results = [None] * len(tasks)
+    # 分组：相邻、同 ref_uri（None 或同一张）的归一组，每组≤GROUP_MAX
+    groups = []  # [(indices, ref_uri)]
+    cur, cur_ref = [], "__init__"
+    for i, (_p, _st, _op, _sd, rf) in enumerate(tasks):
+        if rf != cur_ref or len(cur) >= GROUP_MAX:
+            if cur:
+                groups.append((cur, cur_ref))
+            cur, cur_ref = [i], rf
+        else:
+            cur.append(i)
+    if cur:
+        groups.append((cur, cur_ref))
+
+    for indices, ref in groups:
+        if len(indices) == 1:
+            # 单张直接走单图（封面等），无需组图
+            i = indices[0]
+            p, st, op, sd, rf = tasks[i]
+            results[i] = _gen_with_fallback(provider, api_key, p, st, op, sd, model,
+                                            aspect_ratio, rf)
+            continue
+        # 合并该批提示词：编号列出各镜头（用各自 prompt 主体）
+        sub_prompts = [tasks[i][0] for i in indices]
+        merged = (f"请生成 {len(indices)} 张风格统一的竖版画面，像同一支短片的连续分镜，"
+                  f"分别为：" + " ".join(f"{k+1}.{sp}" for k, sp in enumerate(sub_prompts)))
+        sub_types = [tasks[i][1] for i in indices]
+        out_paths = [tasks[i][2] for i in indices]
+        durations = [tasks[i][3] for i in indices]
+        try:
+            batch = generate_images_batch(provider, api_key, merged, sub_types,
+                                          out_paths, durations, model=model,
+                                          aspect_ratio=aspect_ratio, ref_uri=ref)
+            for k, i in enumerate(indices):
+                results[i] = batch[k]
+        except ImageError:
+            # 整批组图失败 → 回退逐张（各自原 prompt），保证出片
+            for i in indices:
+                p, st, op, sd, rf = tasks[i]
+                results[i] = _gen_with_fallback(provider, api_key, p, st, op, sd,
+                                                model, aspect_ratio, rf)
+    return results
