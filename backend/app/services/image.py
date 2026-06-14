@@ -163,10 +163,12 @@ BATCH_MAX = 9
 def generate_images_batch(provider: str, api_key: str, prompt: str,
                           sub_types: list, out_paths: list, durations: list,
                           model: str | None = None, timeout: float = 180.0,
-                          aspect_ratio: str = "9:16", ref_uri: str | None = None) -> list:
+                          aspect_ratio: str = "9:16", ref_uri: str | None = None,
+                          single_prompts: list | None = None) -> list:
     """组图：一次请求生成多张（豆包 sequential_image_generation）。返回 ImageResult 列表。
     一次最多 BATCH_MAX 张；同批同次生成 → 风格统一；传 ref_uri → 多张保持同一个人。
-    返回数量可能少于请求数，调用方需按 out_paths 长度对齐/补齐。"""
+    返回数量不足时：用单张 generate_image 补生成缺的那几张（single_prompts 提供各位置
+    的单张提示词）；单张也失败才占位。避免"组图少返回1张就要手动重试"。"""
     n = len(out_paths)
     w, h = _dims_for(aspect_ratio)
     use_mock = (not api_key) or provider == "mock"
@@ -219,7 +221,17 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
                 continue
             except Exception:
                 pass
-        # 该位置没拿到图 → 占位兜底（不中断）
+        # 该位置没拿到图 → 先用单图补生成（带原单张提示词+参考图），失败再占位。
+        sp = single_prompts[i] if single_prompts and i < len(single_prompts) else None
+        if sp:
+            try:
+                r = generate_image(provider, api_key, sp, sub_types[i], op,
+                                   durations[i], model=model, timeout=timeout,
+                                   aspect_ratio=aspect_ratio, ref_uri=ref_uri)
+                res.append(r)
+                continue
+            except Exception:
+                pass
         _placeholder(op, sub_types[i], (230, 230, 230), size=(w, h))
         res.append(ImageResult(str(op), sub_types[i], durations[i],
                                {"fallback": True, "reason": "组图返回数量不足"}))

@@ -285,7 +285,8 @@ def render_images_grouped(provider, api_key, tasks, model=None,
         try:
             batch = generate_images_batch(provider, api_key, merged, sub_types,
                                           out_paths, durations, model=model,
-                                          aspect_ratio=aspect_ratio, ref_uri=ref)
+                                          aspect_ratio=aspect_ratio, ref_uri=ref,
+                                          single_prompts=sub_prompts)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError:
