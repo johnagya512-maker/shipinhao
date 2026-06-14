@@ -58,6 +58,12 @@ class ImageRetryRequest(BaseModel):
     prompt: str | None = None
 
 
+class ImageBatchRetryRequest(BaseModel):
+    """多张图一起重新组图：传选中的图片下标（封面0、内容图1..、cta末尾）。
+    选中的图合并成一次组图请求生成 → 省请求、风格统一、人物一致。"""
+    indices: list[int]
+
+
 class StepRerunRequest(BaseModel):
     """单步重跑：清掉该模块及其下游产物后从该步重新执行。"""
     pass

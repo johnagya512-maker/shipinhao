@@ -47,6 +47,9 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   const [bust, setBust] = useState<Record<number, number>>({})
   // 单图重试后仍失败的原因（按分镜下标），覆盖在卡片上
   const [failReason, setFailReason] = useState<Record<number, string>>({})
+  // 多选「一起重新组图」：selected 记录勾选的分镜下标；batchRunning 标记组图请求进行中
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [batchRunning, setBatchRunning] = useState(false)
   // 并发重试时读取最新 scenes（避免闭包拿到旧值）
   const scenesRef = useRef(scenes)
   useEffect(() => { scenesRef.current = scenes }, [scenes])
@@ -127,6 +130,57 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     setRetrying((r) => { const n = new Set(r); n.delete(i); return n })
   }
 
+  // 勾选/取消勾选某张（用于多选「一起重新组图」）
+  function toggleSelect(i: number) {
+    setSelected((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n })
+  }
+
+  // 一键勾选所有失败的占位图，方便「把失败的一起重新组图」
+  function selectAllFailed() {
+    const f = new Set<number>()
+    scenes.forEach((_, i) => { if (images[i + 1]?.fallback) f.add(i) })
+    setSelected(f)
+  }
+
+  // 把选中的几张合并成一次组图请求重新生成（省请求、风格统一、人物一致）。
+  async function runBatchRetry() {
+    if (selected.size === 0 || batchRunning) return
+    setErr(null)
+    // 有未保存编辑先存，保证后端用最新提示词
+    if (dirty) {
+      try { await api.saveScenes(taskId, scenes); setDirty(false) }
+      catch (e) { setErr((e as ApiError).message); return }
+    }
+    setBatchRunning(true)
+    const sel = [...selected].sort((a, b) => a - b)
+    // 分镜下标 i → 图片下标 i+1（封面占 0，画廊卡片只含内容图）
+    const imgIndices = sel.map((i) => i + 1)
+    try {
+      const r = await api.batchRetryImages(taskId, imgIndices)
+      setBust((b) => {
+        const n = { ...b }
+        imgIndices.forEach((idx) => { n[idx] = (n[idx] ?? 0) + 1 })
+        return n
+      })
+      // 回填每张的失败原因（按分镜下标）
+      setFailReason((m) => {
+        const next = { ...m }
+        r.results.forEach((res) => {
+          const i = res.index - 1
+          if (res.failed) next[i] = humanReason(res.reason)
+          else delete next[i]
+        })
+        return next
+      })
+      setSelected(new Set())
+      onChanged()
+    } catch (e) {
+      setErr((e as ApiError).message)
+    } finally {
+      setBatchRunning(false)
+    }
+  }
+
   // 名额释放时，从队列里取下一张顶上
   useEffect(() => {
     if (retrying.size >= MAX_PARALLEL || queued.size === 0) return
@@ -147,7 +201,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     <div>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm text-slate-400">
-          共 {scenes.length} 个分镜 · 编辑文案/提示词后保存，或单张改提示词重试
+          共 {scenes.length} 个分镜 · 编辑后保存，或单张换图；勾选多张可「一起重新组图」（省请求、风格统一）
           {(retrying.size > 0 || queued.size > 0) && (
             <span className="ml-2 text-brand-400">
               · 重新生成中 {retrying.size}
@@ -155,11 +209,25 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
             </span>
           )}
         </div>
-        <button onClick={saveAll} disabled={!dirty || saving}
-          className="px-4 py-1.5 rounded-lg text-sm font-medium bg-brand-600 text-white
-            hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-          {saving ? '保存中…' : dirty ? '保存全部修改' : '已保存'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={selectAllFailed}
+            className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 text-slate-200
+              hover:bg-slate-600 transition-colors">
+            选中所有失败
+          </button>
+          <button onClick={runBatchRetry} disabled={selected.size === 0 || batchRunning}
+            className="px-4 py-1.5 rounded-lg text-sm font-medium bg-brand-600 text-white
+              hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            title="把选中的图合并成一次组图请求重新生成（省请求、风格统一、人物一致）">
+            {batchRunning ? '组图生成中…'
+              : selected.size > 0 ? `一起重新组图（${selected.size}）` : '一起重新组图'}
+          </button>
+          <button onClick={saveAll} disabled={!dirty || saving}
+            className="px-4 py-1.5 rounded-lg text-sm font-medium bg-brand-600 text-white
+              hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            {saving ? '保存中…' : dirty ? '保存全部修改' : '已保存'}
+          </button>
+        </div>
       </div>
 
       {err && <div className="mb-3 px-3 py-2 rounded-lg text-sm bg-red-500/10 text-red-400">{err}</div>}
@@ -174,9 +242,12 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
           const reason = failReason[i] || (failed ? humanReason(img?.fail_reason) : null)
           const isRetrying = retrying.has(i)
           const isQueued = queued.has(i)
+          const isSelected = selected.has(i)
           return (
             <div key={s.id ?? i} className={`rounded-xl border overflow-hidden flex flex-col ${
-              failed ? 'border-red-500/60 bg-red-500/5' : 'border-slate-700/60 bg-slate-900/40'}`}>
+              isSelected ? 'border-brand-500 ring-2 ring-brand-500/50 bg-brand-500/5'
+              : failed ? 'border-red-500/60 bg-red-500/5'
+              : 'border-slate-700/60 bg-slate-900/40'}`}>
               {/* 缩略图区 */}
               <div className="relative aspect-[9/16] bg-slate-950/60 flex items-center justify-center">
                 {src && !failed
@@ -184,7 +255,13 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
                   : <span className={`text-xs ${failed ? 'text-red-400' : 'text-slate-600'}`}>
                       {failed ? '生成失败' : '未生成'}
                     </span>}
-                <span className="absolute top-2 left-2 text-[11px] px-1.5 py-0.5 rounded bg-black/60 text-slate-200 font-mono">
+                <label className="absolute top-2 left-2 flex items-center justify-center w-6 h-6
+                  rounded bg-black/60 cursor-pointer hover:bg-black/80"
+                  title="勾选后可「一起重新组图」">
+                  <input type="checkbox" checked={isSelected}
+                    onChange={() => toggleSelect(i)} className="accent-brand-600 w-4 h-4" />
+                </label>
+                <span className="absolute top-2 left-10 text-[11px] px-1.5 py-0.5 rounded bg-black/60 text-slate-200 font-mono">
                   #{String(i + 1).padStart(2, '0')}
                 </span>
                 {s.has_character && (

@@ -11,7 +11,7 @@ from app.core.paths import storage_root
 from app.api.auth import require_auth
 from app.api.schemas import (TaskCreate, TaskOut, EstimateOut, RerunRequest,
                              TaskListOut, TaskListItem, ScenesPatch,
-                             ImageRetryRequest, StepRerunRequest)
+                             ImageRetryRequest, ImageBatchRetryRequest, StepRerunRequest)
 from app.models import Task, Config, ModuleResult
 from app.services import cost as cost_svc
 from app.services import orchestrator, compose
@@ -621,6 +621,38 @@ def edit_module_output(task_id: str, module: str, body: dict, db: Session = Depe
     return task
 
 
+def _resolve_subject(index, sidx, body_prompt, p, sb, style):
+    """按图片下标取「裸主体」(不含风格包裹)：优先请求里的新词，否则用 SB.scenes 的
+    desc_prompt，再兜底从 wrap 过的 P.prompt 里剥风格前后缀。找不到返回空串。"""
+    subject = (body_prompt or "").strip()
+    if not subject and sb and sb.output:
+        scs = sb.output.get("scenes") or []
+        if 0 <= sidx < len(scs):
+            subject = str(scs[sidx].get("desc_prompt", "")).strip()
+    if not subject and p and p.output:
+        pl = p.output.get("prompts") or []
+        if index < len(pl):
+            full = pl[index].get("prompt", "")
+            pre, suf = style.get("prefix", ""), style.get("suffix", "")
+            subject = full[len(pre):len(full) - len(suf)] if full.startswith(pre) else full
+    return subject
+
+
+def _is_char_shot(index, sidx, p, sb):
+    """该图是否人物镜头：优先看 P.prompts[i].has_char；其次 SB.scenes 的 has_character；
+    封面(index==0)默认是人物镜头。决定重试是否带参考图保持主角一致。"""
+    is_char = (index == 0)
+    if p and p.output:
+        pl = p.output.get("prompts") or []
+        if index < len(pl) and "has_char" in pl[index]:
+            is_char = bool(pl[index]["has_char"])
+    if not is_char and sb and sb.output:
+        scs = sb.output.get("scenes") or []
+        if 0 <= sidx < len(scs):
+            is_char = bool(scs[sidx].get("has_character", False))
+    return is_char
+
+
 @router.post("/tasks/{task_id}/images/{index}/retry")
 def retry_image(task_id: str, index: int, body: ImageRetryRequest,
                 db: Session = Depends(get_db)):
@@ -651,19 +683,7 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
 
     # 取「裸主体」(不含风格包裹)：优先请求里的新词，否则用 SB.scenes 的 desc_prompt。
     # 注意 P.prompts[i].prompt 是 wrap 过的完整提示词，不能直接当主体（会双重套风格）。
-    subject = (body.prompt or "").strip()
-    if not subject and sb and sb.output:
-        scs = sb.output.get("scenes") or []
-        if 0 <= sidx < len(scs):
-            subject = str(scs[sidx].get("desc_prompt", "")).strip()
-    if not subject:
-        # 兜底：从 wrap 过的 P.prompt 里剥掉风格前后缀，取回主体
-        if p and p.output:
-            pl = p.output.get("prompts") or []
-            if index < len(pl):
-                full = pl[index].get("prompt", "")
-                pre, suf = style.get("prefix", ""), style.get("suffix", "")
-                subject = full[len(pre):len(full) - len(suf)] if full.startswith(pre) else full
+    subject = _resolve_subject(index, sidx, body.prompt, p, sb, style)
     if not subject:
         raise HTTPException(400, detail="缺少提示词，无法生成")
 
@@ -673,17 +693,8 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     out_path = Path(img["path"])
 
     # 人物镜头重试也带参考图保持主角一致（同一个人、不同场景）。
-    # 是否人物镜头：优先看 P 产物 has_char；其次 SB scenes 的 has_character；封面默认是。
     ref_uri = None
-    is_char = (index == 0)
-    if p and p.output:
-        pl = p.output.get("prompts") or []
-        if index < len(pl) and "has_char" in pl[index]:
-            is_char = bool(pl[index]["has_char"])
-    if not is_char and sb and sb.output:
-        scs = sb.output.get("scenes") or []
-        if 0 <= sidx < len(scs):
-            is_char = bool(scs[sidx].get("has_character", False))
+    is_char = _is_char_shot(index, sidx, p, sb)
     if is_char and task.reference_image and task.track == "character_story":
         try:
             from app.services.image import _encode_reference
@@ -791,6 +802,129 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     # 返回：是否仍失败、原因、是否做过安全改写、改写后的主体（前端回填到输入框）
     return {"index": index, "image": img, "failed": failed, "reason": reason,
             "rewritten": rewritten, "new_prompt": subject if rewritten else None}
+
+
+@router.post("/tasks/{task_id}/images/batch-retry")
+def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
+                       db: Session = Depends(get_db)):
+    """多张图一起重新组图：把选中的图（不满意的+失败占位的）合并成一次组图请求生成。
+    相比逐张重试：省请求、同批生成→风格统一、人物镜头带参考图→主角一致。
+    各图主体仍走净化+统一风格包裹；整批组图失败时该批回退逐张兜底。"""
+    from app.core.security import decrypt
+    from app.modules.image_module import (render_images_grouped, _sanitize_imagery,
+                                          _wrap)
+    from app.modules import tracks
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    cfg = db.query(Config).first()
+    e = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
+    p = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
+    sb = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
+    if not e or not e.output or "images" not in e.output:
+        raise HTTPException(400, detail="该任务尚无配图产物，无法组图重试")
+    images = list(e.output["images"])
+    # 去重 + 校验下标，按下标升序（组图分组依赖相邻顺序）
+    sel = sorted({i for i in body.indices})
+    if not sel:
+        raise HTTPException(400, detail="未选择任何图片")
+    if sel[0] < 0 or sel[-1] >= len(images):
+        raise HTTPException(400, detail=f"图片下标越界（0~{len(images)-1}）")
+
+    style = tracks.get_style(task.image_style, task.track)
+    img_key = decrypt(cfg.image_api_key_enc) if cfg and cfg.image_api_key_enc else ""
+
+    # 人物镜头参考图（同一张，供组图保持主角一致）
+    ref_uri = None
+    if task.reference_image and task.track == "character_story":
+        try:
+            from app.services.image import _encode_reference
+            ref_uri = _encode_reference(task.reference_image)
+        except Exception:
+            ref_uri = None
+
+    # 为每张选中图构造组图任务五元组 (prompt, sub_type, out_path, duration, ref_uri)。
+    # 主体解析、人物判断复用单图重试同款 helper，保证两条路径行为一致。
+    tasks, subjects = [], {}
+    for index in sel:
+        img = images[index]
+        sidx = index - 1  # 内容图在 scenes 的下标 = 图片下标 - 1（封面占 0）
+        subject = _resolve_subject(index, sidx, None, p, sb, style)
+        if not subject:
+            raise HTTPException(400, detail=f"第 {index} 张缺少提示词，无法生成")
+        subject = _sanitize_imagery(subject)
+        subjects[index] = subject
+        is_char = _is_char_shot(index, sidx, p, sb)
+        item_ref = ref_uri if is_char else None
+        # 人物镜头走图生图：套「同一人物、不同画面」包裹再套风格；否则纯主体套风格。
+        if item_ref:
+            text = _wrap(style, f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
+                                f"但改为以下全新画面（不同的姿势、表情、构图）：{subject}")
+        else:
+            text = _wrap(style, subject)
+        tasks.append((text, img.get("sub_type", "content"), Path(img["path"]),
+                      img.get("suggested_duration", 6), item_ref))
+
+    # 组图生成（锁外，慢且不碰共享数据）
+    results = render_images_grouped(cfg.image_provider if cfg else "mock", img_key,
+                                    tasks, model=cfg.image_model if cfg else None,
+                                    aspect_ratio=task.aspect_ratio or "9:16")
+
+    # 回写：read-modify-write E/P/SB，必须在 per-task 锁内重读最新产物再改选中的几张，
+    # 避免与并发的单图重试互相覆盖（丢失更新）。
+    out = []
+    with _get_retry_lock(task_id):
+        e2 = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
+        p2 = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
+        sb2 = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
+        eo = dict(e2.output) if e2 and e2.output else None
+        imgs = list(eo["images"]) if eo and "images" in eo else None
+        po = dict(p2.output) if p2 and p2.output else None
+        sbo = dict(sb2.output) if sb2 and sb2.output else None
+        for k, index in enumerate(sel):
+            result = results[k]
+            sidx = index - 1
+            subject = subjects[index]
+            failed = bool(result.meta.get("fallback"))
+            reason = result.meta.get("reason") if failed else None
+            if imgs is not None and 0 <= index < len(imgs):
+                fi = dict(imgs[index])
+                fi["path"] = result.path
+                fi["fallback"] = failed
+                if reason:
+                    fi["fail_reason"] = reason
+                elif "fail_reason" in fi:
+                    del fi["fail_reason"]
+                imgs[index] = fi
+            # 主体写回 SB.scenes / P.scenes；wrap 过的完整提示词写回 P.prompts
+            if sbo is not None:
+                scs = list(sbo.get("scenes") or [])
+                if 0 <= sidx < len(scs):
+                    scs[sidx] = {**scs[sidx], "desc_prompt": subject}
+                    sbo["scenes"] = scs
+            if po is not None:
+                pl = list(po.get("prompts") or [])
+                if index < len(pl):
+                    pl[index] = {**pl[index], "prompt": _wrap(style, subject)}
+                    po["prompts"] = pl
+                pscs = list(po.get("scenes") or [])
+                if 0 <= sidx < len(pscs):
+                    pscs[sidx] = {**pscs[sidx], "desc_prompt": subject}
+                    po["scenes"] = pscs
+            out.append({"index": index, "failed": failed, "reason": reason})
+        if eo is not None and imgs is not None:
+            eo["images"] = imgs
+            e2.output = eo
+        if sb2 and sbo is not None:
+            sb2.output = sbo
+        if p2 and po is not None:
+            p2.output = po
+        db.commit()
+        final_imgs = imgs if imgs is not None else images
+
+    for r in out:
+        r["image"] = final_imgs[r["index"]]
+    return {"results": out, "count": len(out)}
 
 
 @router.post("/tasks/{task_id}/step/{module}/rerun", response_model=TaskOut)

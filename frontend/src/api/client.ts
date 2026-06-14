@@ -184,6 +184,14 @@ export const api = {
       `/tasks/${id}/images/${index}/retry`, {
         method: 'POST', body: JSON.stringify({ prompt: prompt ?? null }),
       }),
+  // 多张图一起重新组图：传选中的图片下标，后端合并成一次组图请求生成（省请求、
+  // 风格统一、人物一致）。返回每张的结果（是否仍失败、原因、最新图）。
+  batchRetryImages: (id: string, indices: number[]) =>
+    request<{ count: number; results: { index: number; failed: boolean
+      reason?: string | null; image: GeneratedImage }[] }>(
+      `/tasks/${id}/images/batch-retry`, {
+        method: 'POST', body: JSON.stringify({ indices }),
+      }),
   // 单步重跑：清掉该步及下游产物，从该步重算（上游走缓存）。
   rerunStep: (id: string, module: string) =>
     request<TaskOut>(`/tasks/${id}/step/${module}/rerun`, { method: 'POST' }),
