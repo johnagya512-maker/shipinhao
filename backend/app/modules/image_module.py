@@ -268,15 +268,14 @@ def render_images_grouped(provider, api_key, tasks, model=None,
     if cur:
         groups.append((cur, cur_ref))
 
-    for indices, ref in groups:
+    def _do_group(indices, ref):
+        """处理一个批次：单张走单图；多张合并提示词走组图，整批失败回退逐张。"""
         if len(indices) == 1:
-            # 单张直接走单图（封面等），无需组图
             i = indices[0]
             p, st, op, sd, rf = tasks[i]
             results[i] = _gen_with_fallback(provider, api_key, p, st, op, sd, model,
                                             aspect_ratio, rf)
-            continue
-        # 合并该批提示词：编号列出各镜头（用各自 prompt 主体）
+            return
         sub_prompts = [tasks[i][0] for i in indices]
         merged = (f"请生成 {len(indices)} 张风格统一的竖版画面，像同一支短片的连续分镜，"
                   f"分别为：" + " ".join(f"{k+1}.{sp}" for k, sp in enumerate(sub_prompts)))
@@ -290,9 +289,14 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError:
-            # 整批组图失败 → 回退逐张（各自原 prompt），保证出片
             for i in indices:
                 p, st, op, sd, rf = tasks[i]
                 results[i] = _gen_with_fallback(provider, api_key, p, st, op, sd,
                                                 model, aspect_ratio, rf)
+
+    # 多批并发跑（每批一次组图请求），把串行等待压成并行，明显提速。
+    from concurrent.futures import ThreadPoolExecutor
+    workers = max(1, min(len(groups), 4))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(lambda g: _do_group(g[0], g[1]), groups))
     return results
