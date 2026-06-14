@@ -122,6 +122,7 @@ export interface TaskDetail {
   paused_at?: string | null
   aspect_ratio?: string | null
   reference_image?: string | null
+  cost_breakdown?: { module: string; name: string; cost: number }[]
   error_code?: string | null
   error_message?: string | null
   created_at: string

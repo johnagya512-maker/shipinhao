@@ -422,6 +422,19 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
               .filter_by(task_id=task_id)
               .order_by(ModuleResult.module).all())
 
+    # 成本明细：按模块聚合该任务的真实记账（cost_logs），供前端"成本明细"展示。
+    from app.models import CostLog
+    from sqlalchemy import func as _func
+    _MOD_NAME = {"A": "文案清洗", "B": "智能改写", "S2": "结构拆解", "D": "图书识别",
+                 "CP": "人物反推", "SB": "画面脚本", "H": "合规审查", "E": "配图生成",
+                 "T": "配音合成", "F": "分句分段", "G": "视频合成"}
+    cost_rows = (db.query(CostLog.module, _func.sum(CostLog.cost))
+                   .filter(CostLog.task_id == task_id)
+                   .group_by(CostLog.module).all())
+    cost_breakdown = [{"module": m, "name": _MOD_NAME.get(m, m), "cost": round(float(c or 0), 4)}
+                      for m, c in cost_rows if (c or 0) > 0]
+    cost_breakdown.sort(key=lambda x: -x["cost"])
+
     def _duration(r):
         if r.started_at and r.finished_at:
             return round((r.finished_at - r.started_at).total_seconds(), 1)
@@ -458,6 +471,7 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
             "short_title": getattr(task, "short_title", None),
             "hashtags": getattr(task, "hashtags", None),
             "error_code": task.error_code, "error_message": task.error_message,
+            "cost_breakdown": cost_breakdown,
             "created_at": task.created_at, "updated_at": task.updated_at,
         },
         "modules": [

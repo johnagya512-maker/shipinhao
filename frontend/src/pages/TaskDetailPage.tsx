@@ -234,6 +234,18 @@ export default function TaskDetailPage() {
             <div className="flex justify-between"><span className="text-slate-500">赛道</span><span className="font-medium">{task.track}</span></div>
             <div className="flex justify-between"><span className="text-slate-500">受众</span><span className="font-medium">{task.target_audience}</span></div>
             <div className="flex justify-between"><span className="text-slate-500">累计成本</span><span className="font-medium">{task.total_cost.toFixed(4)} 元</span></div>
+            {task.cost_breakdown && task.cost_breakdown.length > 0 && (
+              <div className="pt-1.5 mt-1 border-t border-slate-700/60 space-y-1">
+                <div className="text-[11px] text-slate-500">成本明细（按环节）</div>
+                {task.cost_breakdown.map((c) => (
+                  <div key={c.module} className="flex justify-between text-[12px]">
+                    <span className="text-slate-400">{c.name}</span>
+                    <span className="text-slate-300 font-mono">{c.cost.toFixed(4)} 元</span>
+                  </div>
+                ))}
+                <div className="text-[10px] text-slate-600 pt-0.5">配音用免费 Edge TTS，不计费</div>
+              </div>
+            )}
             {task.error_message && (
               <div className="text-red-400 text-xs pt-1 border-t border-slate-700/60">{task.error_code}: {task.error_message}</div>
             )}
