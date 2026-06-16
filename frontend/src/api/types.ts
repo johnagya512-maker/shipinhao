@@ -142,6 +142,7 @@ export interface ConfigOut {
   llm_api_key_mask: string
   image_provider: string
   image_api_key_mask: string
+  image_model?: string
   collect_provider: string
   collect_api_key_mask: string
   asr_provider: string
@@ -168,6 +169,7 @@ export interface ConfigUpdate {
   llm_api_key?: string
   image_provider?: string
   image_api_key?: string
+  image_model?: string
   collect_provider?: string
   collect_api_key?: string
   asr_provider?: string

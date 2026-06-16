@@ -168,6 +168,17 @@ export default function ConfigPage() {
             onBlur={(e) => saveField('image_api_key', e.target.value)} />
         </label>
         <label className="block">
+          <span className="text-sm text-slate-400">模型名</span>
+          <input type="text" className="field"
+            placeholder={cfg.image_model || 'doubao-seedream-4-5-251128'}
+            value={form.image_model ?? ''}
+            onChange={(e) => set({ image_model: e.target.value })}
+            onBlur={(e) => saveField('image_model', e.target.value)} />
+          <span className="block text-[11px] text-slate-500 mt-1">
+            填中转站支持的模型 ID，如 doubao-seedream-4-5-251128（默认）。留空用默认。
+          </span>
+        </label>
+        <label className="block">
           <span className="text-sm text-slate-400">接口地址（中转站，可选）</span>
           <input type="text" className="field"
             placeholder={cfg.image_base_url || '留空走豆包官方；填中转站如 https://api.apicore.ai/v1/images/generations'}
