@@ -171,7 +171,8 @@ def run_pipeline(db: Session, task_id: str):
         if task.douyin_url:
             real_est = cost_svc.estimate_cost(task.transcript, task.modules, None,
                                               cfg.llm_provider, cfg.image_provider,
-                                              getattr(task, "image_gen_mode", "per_image"))
+                                              getattr(task, "image_gen_mode", "per_image"),
+                                              getattr(cfg, "image_unit_price", None))
             if real_est > float(task.cost_limit):
                 raise TaskAborted("E2002",
                                   f"采集转写后预估成本 {real_est} 元超过上限 {task.cost_limit} 元")
@@ -397,7 +398,8 @@ def run_pipeline(db: Session, task_id: str):
                         IMAGE_RETRY)
                 # 成本：九宫格模式一次请求出 9 张只算 1 张钱（image_billable_units 按 grid 标记
                 # 折算 ceil(张数/9)）；逐张/组图按实际张数。
-                img_cost = cost_svc.image_cost(images, cfg.image_provider)
+                img_cost = cost_svc.image_cost(images, cfg.image_provider,
+                                               getattr(cfg, "image_unit_price", None))
                 cost_svc.record_cost(db, task.id, "E", cfg.image_provider, img_cost)
                 task.total_cost = float(task.total_cost) + img_cost
                 db.commit()

@@ -84,7 +84,8 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
     # 成本预估校验（无逐字稿时按链接采集后的估值留待运行时校验，提交时用占位长度）
     est = cost_svc.estimate_cost(transcript or "x" * 500, body.modules, None,
                                  cfg.llm_provider, cfg.image_provider,
-                                 body.image_gen_mode or "per_image")
+                                 body.image_gen_mode or "per_image",
+                                 getattr(cfg, "image_unit_price", None))
     if est > body.cost_limit:
         raise HTTPException(402, detail=f"预估成本 {est} 元超过上限 {body.cost_limit} 元")
 
@@ -203,7 +204,8 @@ def estimate(body: TaskCreate, db: Session = Depends(get_db)):
     # transcript 可选：未填（走链接采集）时按占位长度估算上限。
     text = (body.transcript or "").strip() or "x" * 500
     est = cost_svc.estimate_cost(text, body.modules, None, provider_llm, provider_img,
-                                 body.image_gen_mode or "per_image")
+                                 body.image_gen_mode or "per_image",
+                                 getattr(cfg, "image_unit_price", None) if cfg else None)
     return EstimateOut(estimated_cost=est, daily_cap_reached=cost_svc.daily_cap_reached(db))
 
 
@@ -954,7 +956,8 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     # 计费：九宫格模式重新组图一次出 9 张只算 1 张钱（按 results 的 grid 标记折算 ceil/9）；
     # 逐张/普通组图按实际张数。
     provider = cfg.image_provider if cfg else "mock"
-    img_cost = cost_svc.image_cost(results, provider)
+    img_cost = cost_svc.image_cost(results, provider,
+                                   getattr(cfg, "image_unit_price", None) if cfg else None)
     cost_svc.record_cost(db, task_id, "E", provider, img_cost)
     task.total_cost = float(task.total_cost) + img_cost
     db.commit()

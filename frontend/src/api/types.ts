@@ -143,6 +143,7 @@ export interface ConfigOut {
   image_provider: string
   image_api_key_mask: string
   image_model?: string
+  image_unit_price?: number | null
   collect_provider: string
   collect_api_key_mask: string
   asr_provider: string
@@ -170,6 +171,7 @@ export interface ConfigUpdate {
   image_provider?: string
   image_api_key?: string
   image_model?: string
+  image_unit_price?: number | null
   collect_provider?: string
   collect_api_key?: string
   asr_provider?: string

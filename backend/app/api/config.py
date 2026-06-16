@@ -50,6 +50,7 @@ def _to_out(cfg: Config) -> ConfigOut:
         proxy_url=getattr(cfg, "proxy_url", None) or "",
         default_image_gen_mode=getattr(cfg, "default_image_gen_mode", None) or "per_image",
         image_base_url=getattr(cfg, "image_base_url", None) or "",
+        image_unit_price=(float(p) if (p := getattr(cfg, "image_unit_price", None)) is not None else None),
     )
 
 
@@ -157,6 +158,9 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
         cfg.default_image_gen_mode = body.default_image_gen_mode.strip() or "per_image"
     if body.image_base_url is not None:
         cfg.image_base_url = body.image_base_url.strip() or None
+    if body.image_unit_price is not None:
+        # <=0 视为清空（回退内置缺省价）
+        cfg.image_unit_price = body.image_unit_price if body.image_unit_price > 0 else None
     db.commit()
     return _to_out(cfg)
 

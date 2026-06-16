@@ -189,6 +189,18 @@ export default function ConfigPage() {
             填 OpenAI 兼容的中转站地址可降单价（逐张全分辨率、风格与参考图正常）。留空用官方。
           </span>
         </label>
+        <label className="block">
+          <span className="text-sm text-slate-400">配图单价（元/张，可选）</span>
+          <input type="number" step="0.01" min="0" className="field"
+            placeholder={cfg.image_unit_price != null ? String(cfg.image_unit_price) : '留空用内置缺省价（豆包0.25）；按中转站实价填，如 0.12'}
+            value={form.image_unit_price ?? ''}
+            onChange={(e) => set({ image_unit_price: e.target.value === '' ? null : Number(e.target.value) })}
+            onBlur={(e) => saveField('image_unit_price', e.target.value === '' ? null : Number(e.target.value))} />
+          <span className="block text-[11px] text-slate-500 mt-1">
+            成本核算与上限校验按此单价算（每次请求一张）。中转站实价比内置缺省价低很多，
+            填对才不会虚高误判超限。留空或填0用缺省价。九宫格按 ceil(张数/9) 折算请求数。
+          </span>
+        </label>
       </div>
 
       <div className="card space-y-4">

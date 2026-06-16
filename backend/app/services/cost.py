@@ -41,10 +41,11 @@ def estimate_image_count(transcript: str) -> int:
 
 def estimate_cost(transcript: str, modules: list[str], image_count: int | None,
                   llm_provider: str, image_provider: str,
-                  image_gen_mode: str = "per_image") -> float:
+                  image_gen_mode: str = "per_image",
+                  image_unit_price: float | None = None) -> float:
     """提交前预估成本（上限估计）。image_count 为 None 时按逐字稿长度动态推算。
-    配图默认逐张、按实际张数计费（与 orchestrator 实际生成一致）；image_gen_mode=grid
-    （已弃用的九宫格）才按 ceil(张数/9) 折算。"""
+    配图按实际生成模式计费：per_image 按实际张数、grid 按 ceil(张数/9) 折算请求数；
+    单价优先用 image_unit_price（中转站真实单价），为空/<=0 才回退内置 IMAGE_PRICE。"""
     if image_count is None:
         image_count = estimate_image_count(transcript)
     in_tokens = estimate_tokens(len(transcript))
@@ -61,14 +62,12 @@ def estimate_cost(transcript: str, modules: list[str], image_count: int | None,
         llm_cost += (in_tokens + out) / 1000 * unit
     img_cost = 0.0
     if "E" in modules:
-        # 逐张生图（当前默认）按实际张数计费——与 orchestrator 实际走 render_images 一致。
-        # 九宫格已弃用；仅当显式 image_gen_mode=grid 时才按 ceil(张数/9) 折算（保留兼容）。
         if image_gen_mode == "grid":
             import math
             billable = math.ceil(image_count / 9)
         else:
             billable = image_count
-        img_cost = billable * IMAGE_PRICE.get(image_provider, 0.10)
+        img_cost = billable * _image_unit(image_provider, image_unit_price)
     return round(llm_cost + img_cost, 4)
 
 
@@ -94,9 +93,19 @@ def image_billable_units(images: list) -> float:
     return math.ceil(grid_n / 9) + other_n
 
 
-def image_cost(images: list, provider: str) -> float:
-    """图片实际成本 = 计费单位数 × 单价。"""
-    return round(image_billable_units(images) * IMAGE_PRICE.get(provider, 0.1), 4)
+def _image_unit(provider: str, override: float | None = None) -> float:
+    """配图单价：优先用 override（中转站真实单价，>0 才算有效），否则回退内置缺省价。"""
+    try:
+        if override is not None and float(override) > 0:
+            return float(override)
+    except (TypeError, ValueError):
+        pass
+    return IMAGE_PRICE.get(provider, 0.10)
+
+
+def image_cost(images: list, provider: str, unit_price: float | None = None) -> float:
+    """图片实际成本 = 计费单位数 × 单价。unit_price 非空且>0 时用它（中转站真实单价）。"""
+    return round(image_billable_units(images) * _image_unit(provider, unit_price), 4)
 
 
 def record_cost(db: Session, task_id: str, module: str, provider: str, cost: float):

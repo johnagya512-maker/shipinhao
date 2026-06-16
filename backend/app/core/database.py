@@ -70,6 +70,8 @@ def _ensure_columns():
         ("configs", "proxy_url", "VARCHAR(200)"),
         ("configs", "default_image_gen_mode", "VARCHAR(12) DEFAULT 'per_image'"),
         ("configs", "image_base_url", "VARCHAR(300)"),
+        ("configs", "image_model", "VARCHAR(80) DEFAULT 'doubao-seedream-4-5-251128'"),
+        ("configs", "image_unit_price", "NUMERIC(8,4)"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

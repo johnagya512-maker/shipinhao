@@ -142,6 +142,10 @@ class Config(Base):
     # 绘图接口地址覆盖：填了就用它替代豆包官方火山方舟地址，用于接 OpenAI 兼容的中转站
     # （如 APICore，单价更低）。形如 https://api.apicore.ai/v1/images/generations。空=官方。
     image_base_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # 配图单价（元/张/次请求）。写死的内置单价(豆包0.25等)只是缺省兜底；接中转站后
+    # 实际单价不同(如兔子API约0.12)，填这里让成本核算/上限校验按真实单价算，不再虚高。
+    # <=0 或空=用内置缺省价。九宫格按 ceil(张数/9) 折算请求数后再乘此单价。
+    image_unit_price: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
     daily_cost_cap: Mapped[float] = mapped_column(Numeric(8, 2), default=100)
     concurrency: Mapped[int] = mapped_column(Integer, default=3)
     # 任务级并发：同时执行的任务数上限（与 concurrency 的图片级并发相乘 ≈ 总图片请求量）。

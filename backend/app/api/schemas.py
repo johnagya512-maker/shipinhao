@@ -128,6 +128,7 @@ class ConfigUpdate(BaseModel):
     proxy_url: str | None = None
     default_image_gen_mode: str | None = None
     image_base_url: str | None = None
+    image_unit_price: float | None = Field(default=None, ge=0)
 
 
 class ConfigOut(BaseModel):
@@ -156,6 +157,7 @@ class ConfigOut(BaseModel):
     proxy_url: str = ""
     default_image_gen_mode: str = "per_image"
     image_base_url: str = ""
+    image_unit_price: float | None = None
 
 
 class EstimateOut(BaseModel):
