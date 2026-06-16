@@ -11,9 +11,10 @@ LLM_PRICE = {
     "qwen": 0.002,
     "doubao": 0.001,
 }
-# 配图单价（元/张），按供应商。
+# 配图单价（元/张），按供应商。九宫格模式按「请求单位数」计费——一次请求出 9 张只算
+# 1 张钱（见 image_billable_units 的 ceil(张数/9) 折算），省约 89%；逐张/普通组图按实际张数。
 IMAGE_PRICE = {
-    "doubao": 0.10,
+    "doubao": 0.25,
     "kling": 0.30,
     "tongyi": 0.20,
 }
@@ -39,8 +40,11 @@ def estimate_image_count(transcript: str) -> int:
 
 
 def estimate_cost(transcript: str, modules: list[str], image_count: int | None,
-                  llm_provider: str, image_provider: str) -> float:
-    """提交前预估成本（上限估计）。image_count 为 None 时按逐字稿长度动态推算。"""
+                  llm_provider: str, image_provider: str,
+                  image_gen_mode: str = "per_image") -> float:
+    """提交前预估成本（上限估计）。image_count 为 None 时按逐字稿长度动态推算。
+    配图默认逐张、按实际张数计费（与 orchestrator 实际生成一致）；image_gen_mode=grid
+    （已弃用的九宫格）才按 ceil(张数/9) 折算。"""
     if image_count is None:
         image_count = estimate_image_count(transcript)
     in_tokens = estimate_tokens(len(transcript))
@@ -57,13 +61,42 @@ def estimate_cost(transcript: str, modules: list[str], image_count: int | None,
         llm_cost += (in_tokens + out) / 1000 * unit
     img_cost = 0.0
     if "E" in modules:
-        img_cost = image_count * IMAGE_PRICE.get(image_provider, 0.10)
+        # 逐张生图（当前默认）按实际张数计费——与 orchestrator 实际走 render_images 一致。
+        # 九宫格已弃用；仅当显式 image_gen_mode=grid 时才按 ceil(张数/9) 折算（保留兼容）。
+        if image_gen_mode == "grid":
+            import math
+            billable = math.ceil(image_count / 9)
+        else:
+            billable = image_count
+        img_cost = billable * IMAGE_PRICE.get(image_provider, 0.10)
     return round(llm_cost + img_cost, 4)
 
 
 def actual_llm_cost(tokens_in: int, tokens_out: int, provider: str) -> float:
     unit = LLM_PRICE.get(provider, 0.001)
     return round((tokens_in + tokens_out) / 1000 * unit, 4)
+
+
+def image_billable_units(images: list) -> float:
+    """按计费口径折算图片「请求单位数」。
+    九宫格模式（image 带 grid=True）：一次请求出 9 张只算 1 张钱 → 按 ceil(grid张数/9) 计；
+    普通逐张/组图：每张算 1 个单位。images 可以是 dict 列表（E 产物）或带 .meta 的 ImageResult。
+    """
+    import math
+    grid_n = other_n = 0
+    for im in images:
+        meta = im if isinstance(im, dict) else getattr(im, "meta", {})
+        is_grid = bool((meta or {}).get("grid"))
+        if is_grid:
+            grid_n += 1
+        else:
+            other_n += 1
+    return math.ceil(grid_n / 9) + other_n
+
+
+def image_cost(images: list, provider: str) -> float:
+    """图片实际成本 = 计费单位数 × 单价。"""
+    return round(image_billable_units(images) * IMAGE_PRICE.get(provider, 0.1), 4)
 
 
 def record_cost(db: Session, task_id: str, module: str, provider: str, cost: float):

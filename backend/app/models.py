@@ -50,6 +50,8 @@ class Task(Base):
     draft_template: Mapped[str] = mapped_column(String(20), default="classic")
     # 二创方式：same_topic（拆爆款结构骨架 → 按骨架重写）/ none（不拆结构直接改写）
     creation_mode: Mapped[str] = mapped_column(String(16), default="same_topic")
+    # 生图模式：per_image（逐张，画质优先）/ grid（九宫格省成本，一次出9张切割，省约89%）
+    image_gen_mode: Mapped[str] = mapped_column(String(12), default="per_image")
     # 处理模式：full_auto（完整跑）/ semi_auto（不改写，仅分句）/ direct（不改写、机械切分）
     processing_mode: Mapped[str] = mapped_column(String(12), default="full_auto")
     # 暂停确认：none（不停）/ key_nodes（关键节点）/ every_step（每步）/ custom（自定义步骤）
@@ -137,10 +139,15 @@ class Config(Base):
     # 出站代理：访问境外接口（如 TikHub 采集）走代理。形如 http://127.0.0.1:7890。
     # 为空则直连。仅作用于采集/ASR 下载等出站请求，不影响国内接口。
     proxy_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # 绘图接口地址覆盖：填了就用它替代豆包官方火山方舟地址，用于接 OpenAI 兼容的中转站
+    # （如 APICore，单价更低）。形如 https://api.apicore.ai/v1/images/generations。空=官方。
+    image_base_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
     daily_cost_cap: Mapped[float] = mapped_column(Numeric(8, 2), default=100)
     concurrency: Mapped[int] = mapped_column(Integer, default=3)
     # 任务级并发：同时执行的任务数上限（与 concurrency 的图片级并发相乘 ≈ 总图片请求量）。
     max_concurrent_tasks: Mapped[int] = mapped_column(Integer, default=3)
+    # 新建任务默认生图模式：per_image（逐张）/ grid（九宫格省成本）
+    default_image_gen_mode: Mapped[str] = mapped_column(String(12), default="per_image")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 

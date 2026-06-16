@@ -33,6 +33,7 @@ export interface TaskCreate {
   enable_animations?: boolean
   draft_template?: string
   creation_mode?: string
+  image_gen_mode?: string
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]
@@ -121,6 +122,7 @@ export interface TaskDetail {
   pause_steps?: string[] | null
   paused_at?: string | null
   aspect_ratio?: string | null
+  image_gen_mode?: string
   reference_image?: string | null
   cost_breakdown?: { module: string; name: string; cost: number }[]
   error_code?: string | null
@@ -156,6 +158,8 @@ export interface ConfigOut {
   task_storage_dir: string
   bgm_dir: string
   proxy_url: string
+  default_image_gen_mode?: string
+  image_base_url?: string
 }
 
 export interface ConfigUpdate {
@@ -179,6 +183,8 @@ export interface ConfigUpdate {
   task_storage_dir?: string
   bgm_dir?: string
   proxy_url?: string
+  default_image_gen_mode?: string
+  image_base_url?: string
 }
 
 export interface QueueStats {

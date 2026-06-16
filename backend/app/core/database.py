@@ -61,12 +61,15 @@ def _ensure_columns():
         ("tasks", "long_title", "VARCHAR(200)"),
         ("tasks", "short_title", "VARCHAR(50)"),
         ("tasks", "hashtags", "JSON"),
+        ("tasks", "image_gen_mode", "VARCHAR(12) DEFAULT 'per_image'"),
         ("configs", "task_storage_dir", "VARCHAR(500)"),
         ("configs", "bgm_dir", "VARCHAR(500)"),
         ("configs", "vision_model", "VARCHAR(80) DEFAULT 'doubao-seed-1-6-250615'"),
         ("configs", "max_concurrent_tasks", "INTEGER DEFAULT 3"),
         ("configs", "tts_favorites", "JSON"),
         ("configs", "proxy_url", "VARCHAR(200)"),
+        ("configs", "default_image_gen_mode", "VARCHAR(12) DEFAULT 'per_image'"),
+        ("configs", "image_base_url", "VARCHAR(300)"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

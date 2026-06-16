@@ -50,6 +50,8 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   // 多选「一起重新组图」：selected 记录勾选的分镜下标；batchRunning 标记组图请求进行中
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [batchRunning, setBatchRunning] = useState(false)
+  // 点击缩略图放大查看：lightbox 存当前放大的图片 URL（null = 关闭）
+  const [lightbox, setLightbox] = useState<string | null>(null)
   // 并发重试时读取最新 scenes（避免闭包拿到旧值）
   const scenesRef = useRef(scenes)
   useEffect(() => { scenesRef.current = scenes }, [scenes])
@@ -57,10 +59,21 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   // 后端分镜变化(且本地未编辑)时同步下来
   useEffect(() => { if (!dirty) setScenes(serverScenes) }, [serverScenes, dirty])
 
+  // 放大查看时按 Esc 关闭灯箱
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightbox(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox])
+
   // 把绘图供应商的英文/原始报错翻成人话
   function humanReason(raw?: string | null): string {
     if (!raw) return '生成失败，可再试一次或调整提示词'
     const s = String(raw)
+    // 豆包九宫格模式禁用了逐张单图重试：引导用户用「一起重新组图」（勾选多张一次重生）。
+    if (/E_GRID_ONLY/.test(s))
+      return '豆包为九宫格省成本模式，单张换图已关闭。请勾选要重做的图，用下方「一起重新组图」一次重生'
     if (/sensitive|审核|拒绝|reject/i.test(s))
       return '提示词被内容审核拦截，请改写画面描述（避开敏感/暴力/政治字眼）后重试'
     if (/限流|429|rate/i.test(s)) return '触发限流，稍等片刻再重试'
@@ -201,7 +214,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     <div>
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm text-slate-400">
-          共 {scenes.length} 个分镜 · 编辑后保存，或单张换图；勾选多张可「一起重新组图」（省请求、风格统一）
+          共 {scenes.length} 个分镜 · 编辑后保存，或单张换图；勾选多张可「一起重新组图」（同批生成，风格统一、人物一致）
           {(retrying.size > 0 || queued.size > 0) && (
             <span className="ml-2 text-brand-400">
               · 重新生成中 {retrying.size}
@@ -218,7 +231,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
           <button onClick={runBatchRetry} disabled={selected.size === 0 || batchRunning}
             className="px-4 py-1.5 rounded-lg text-sm font-medium bg-brand-600 text-white
               hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            title="把选中的图合并成一次组图请求重新生成（省请求、风格统一、人物一致）">
+            title="把选中的图合并成一次组图请求重新生成（同批生成→风格统一、人物镜头带参考图→主角一致；按张计费，组图不省钱）">
             {batchRunning ? '组图生成中…'
               : selected.size > 0 ? `一起重新组图（${selected.size}）` : '一起重新组图'}
           </button>
@@ -251,7 +264,10 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
               {/* 缩略图区 */}
               <div className="relative aspect-[9/16] bg-slate-950/60 flex items-center justify-center">
                 {src && !failed
-                  ? <img src={src} alt={`分镜${i + 1}`} className="w-full h-full object-cover" />
+                  ? <img src={src} alt={`分镜${i + 1}`}
+                      onClick={() => setLightbox(src)}
+                      className="w-full h-full object-cover cursor-zoom-in"
+                      title="点击放大查看" />
                   : <span className={`text-xs ${failed ? 'text-red-400' : 'text-slate-600'}`}>
                       {failed ? '生成失败' : '未生成'}
                     </span>}
@@ -324,6 +340,22 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
           )
         })}
       </div>
+
+      {/* 点击缩略图放大：全屏遮罩，点任意处或按钮关闭 */}
+      {lightbox && (
+        <div onClick={() => setLightbox(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 cursor-zoom-out">
+          <img src={lightbox} alt="放大查看"
+            className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()} />
+          <button onClick={() => setLightbox(null)}
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20
+              text-white text-xl flex items-center justify-center transition-colors"
+            title="关闭（或点击空白处 / 按 Esc）">
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   )
 }

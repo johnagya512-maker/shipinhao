@@ -170,7 +170,8 @@ def run_pipeline(db: Session, task_id: str):
         # 超限则在烧 A/B 等 LLM 成本前快速失败（避免半途触发运行时闸门）。
         if task.douyin_url:
             real_est = cost_svc.estimate_cost(task.transcript, task.modules, None,
-                                              cfg.llm_provider, cfg.image_provider)
+                                              cfg.llm_provider, cfg.image_provider,
+                                              getattr(task, "image_gen_mode", "per_image"))
             if real_est > float(task.cost_limit):
                 raise TaskAborted("E2002",
                                   f"采集转写后预估成本 {real_est} 元超过上限 {task.cost_limit} 元")
@@ -368,39 +369,46 @@ def run_pipeline(db: Session, task_id: str):
                                      "scenes": aligned_scenes})
                 _maybe_pause(db, task, "P")
 
-            # Step4 批量生图（"E"）。豆包 Seedream 走组图（一次出多张，省~89%成本+人物一致+
-            # 风格统一）；其他供应商回退逐张并发。
+            # Step4 批量生图（"E"）：按任务的生图模式分流——
+            #   per_image（逐张，画质优先）：每张单独出图，正确套用所选画风、人物镜头走图生图
+            #     （传人物参考图保持主角一致），失败逐张占位、不影响整批。画质最稳，成本按张算。
+            #   grid（九宫格省成本）：每 ≤9 张走「3×3 模板图生图」一次出 1 张大图本地切割
+            #     （按 1 张计费，省约 89%），风格由统一圣经管。竖版需中心裁切，清晰度略降。
+            #     失败整组占位、不回退逐张（控成本），用户可在画廊手动重新组图。
+            mode = (getattr(task, "image_gen_mode", None) or "per_image")
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
-                _is_doubao = "seedream" in (cfg.image_model or "").lower() or \
-                             "doubao" in (cfg.image_model or "").lower()
-                if _is_doubao:
+                if mode == "grid":
+                    grid_style = tracks.get_style(task.image_style, task.track)
                     images, _ = with_retry(
                         lambda: im.render_images_grouped(cfg.image_provider, img_key, prompts_list,
                                                          model=cfg.image_model,
-                                                         aspect_ratio=task.aspect_ratio),
+                                                         aspect_ratio=task.aspect_ratio,
+                                                         grid_mode=True, style=grid_style,
+                                                         base_url=getattr(cfg, "image_base_url", None)),
                         IMAGE_RETRY)
                 else:
                     images, _ = with_retry(
                         lambda: im.render_images(cfg.image_provider, img_key, prompts_list,
                                                  model=cfg.image_model,
                                                  concurrency=cfg.concurrency,
-                                                 aspect_ratio=task.aspect_ratio),
+                                                 aspect_ratio=task.aspect_ratio,
+                                                 base_url=getattr(cfg, "image_base_url", None)),
                         IMAGE_RETRY)
-                # 成本：组图按实际请求批数计（每批≤9 张算一次），逐张按张数计。
-                if _is_doubao:
-                    import math
-                    n_req = max(1, math.ceil(len(images) / im.GROUP_MAX))
-                    img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * n_req
-                else:
-                    img_cost = cost_svc.IMAGE_PRICE.get(cfg.image_provider, 0.1) * len(images)
+                # 成本：九宫格模式一次请求出 9 张只算 1 张钱（image_billable_units 按 grid 标记
+                # 折算 ceil(张数/9)）；逐张/组图按实际张数。
+                img_cost = cost_svc.image_cost(images, cfg.image_provider)
                 cost_svc.record_cost(db, task.id, "E", cfg.image_provider, img_cost)
                 task.total_cost = float(task.total_cost) + img_cost
                 db.commit()
                 _save_result(db, task.id, "E", "success",
                              output={"images": [{"path": r.path, "sub_type": r.sub_type,
                                                  "suggested_duration": r.suggested_duration,
-                                                 "fallback": bool((r.meta or {}).get("fallback"))}
+                                                 "fallback": bool((r.meta or {}).get("fallback")),
+                                                 "grid": bool((r.meta or {}).get("grid")),
+                                                 # 失败图保留原因（审核拒绝/超时等），供画廊显示，不再空白
+                                                 **({"fail_reason": (r.meta or {}).get("reason")}
+                                                    if (r.meta or {}).get("fallback") else {})}
                                                 for r in images]},
                              cost=img_cost)
                 _check_limits(db, task, started)

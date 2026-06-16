@@ -167,6 +167,17 @@ export default function ConfigPage() {
             onChange={(e) => set({ image_api_key: e.target.value })}
             onBlur={(e) => saveField('image_api_key', e.target.value)} />
         </label>
+        <label className="block">
+          <span className="text-sm text-slate-400">接口地址（中转站，可选）</span>
+          <input type="text" className="field"
+            placeholder={cfg.image_base_url || '留空走豆包官方；填中转站如 https://api.apicore.ai/v1/images/generations'}
+            value={form.image_base_url ?? ''}
+            onChange={(e) => set({ image_base_url: e.target.value })}
+            onBlur={(e) => saveField('image_base_url', e.target.value)} />
+          <span className="block text-[11px] text-slate-500 mt-1">
+            填 OpenAI 兼容的中转站地址可降单价（逐张全分辨率、风格与参考图正常）。留空用官方。
+          </span>
+        </label>
       </div>
 
       <div className="card space-y-4">

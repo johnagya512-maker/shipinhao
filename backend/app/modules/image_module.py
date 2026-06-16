@@ -86,7 +86,8 @@ def _wrap(style: dict, subject: str) -> str:
 
 
 def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
-                       suggested_duration, model, aspect_ratio="9:16", ref_uri=None):
+                       suggested_duration, model, aspect_ratio="9:16", ref_uri=None,
+                       base_url=None):
     """生成单张：可重试错误(超时/限流/审核误判)退避重试，耗尽则降级占位图。
     单张失败不中断整批，保证链路产出（PRD 11.2 必选模块尽量不整体失败）。"""
     from app.modules.retry import with_retry
@@ -94,7 +95,7 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
         result, _ = with_retry(
             lambda: generate_image(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
-                                   ref_uri=ref_uri),
+                                   ref_uri=ref_uri, base_url=base_url),
             IMG_RETRY)
         return result
     except ImageError as e:
@@ -227,15 +228,16 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
 
 
 def render_images(provider, api_key, tasks, model=None, concurrency=5,
-                  aspect_ratio="9:16"):
+                  aspect_ratio="9:16", base_url=None):
     """Step 4「批量生图」：按 build_image_prompts 产出的任务列表并发生成。
-    单张失败降级占位图，不中断整批。保持任务列表顺序返回。"""
+    单张失败降级占位图，不中断整批。保持任务列表顺序返回。
+    base_url 非空时所有请求打中转站（OpenAI 兼容），用于降单价。"""
     from concurrent.futures import ThreadPoolExecutor
     results: list = [None] * len(tasks)
     workers = max(1, min(concurrency, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_gen_with_fallback, provider, api_key, p, st, op, sd, model,
-                          aspect_ratio, rf): idx
+                          aspect_ratio, rf, base_url): idx
                 for idx, (p, st, op, sd, rf) in enumerate(tasks)}
         for fut in futs:
             results[futs[fut]] = fut.result()  # 单张失败会抛不可重试错误，向上传递
@@ -245,37 +247,92 @@ def render_images(provider, api_key, tasks, model=None, concurrency=5,
 # 豆包组图单次上限
 GROUP_MAX = 9
 
+# 九宫格省成本模式：固定风格圣经（一条视频所有图共享同一套色彩/光线/镜头/气质，
+# 像同一支短片的连续分镜）。作为九宫格 prompt 的统一前缀。
+GRID_STYLE_BIBLE = (
+    "固定美术方向：明亮电影感真实摄影，安静、克制、有知识短视频质感。"
+    "固定色彩：暖白、浅木色、柔和灰蓝、低饱和绿色，少量温暖阳光点缀。"
+    "固定光线：窗边自然光、清晨或傍晚柔光，阴影干净，整体曝光偏明亮。"
+    "固定镜头：35mm/50mm 人文镜头语言，主体明确，背景简洁。"
+    "人物气质：普通成年人，安静、理性、克制，优先背影、侧影、手部动作和生活场景。"
+    "所有画面必须共享同一套色彩、光线、镜头、人物气质、材质和时代感，"
+    "像同一支短片的连续分镜，而不是不相关的图。"
+    "避免医院、病房、手术、器官、伤口、监护仪等画面，病痛用生活化隐喻表达。"
+)
+
+
+def build_grid_prompt(cell_briefs: list, style_bible: str | None = None) -> str:
+    """把 N 格画面 brief 拼成九宫格图生图 prompt（配合 3×3 白线模板参考图）。
+    模型会在模板的灰色格子里按编号填画面。brief 应是裸主体描述（不含风格三层包裹）。
+    style_bible 非空时用它作统一风格说明（来自用户所选画风）；为空回退内置 GRID_STYLE_BIBLE。"""
+    lines = "\n".join(f"{i+1}. {b}" for i, b in enumerate(cell_briefs))
+    bible = (style_bible or "").strip() or GRID_STYLE_BIBLE
+    return (
+        "参考图是一张 3×3 九宫格模板，由白色分隔线划分成 9 个完全等大的灰色格子。\n"
+        "请严格保持参考图的网格结构和白色格线位置不变，只在每个灰色格子里填入对应编号的"
+        "照片画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
+        + bible + "\n\n"
+        "九格画面（从左到右、从上到下）：\n" + lines + "\n\n"
+        "不要在图片里放任何文字。不要输出解释。"
+    )
+
+
+def _style_bible(style: dict | None) -> str:
+    """把用户所选画风的 prefix/suffix 拼成九宫格统一风格说明。
+    九宫格 image 槽被 3×3 模板占用，无法逐格套三层 wrap，只能把画风浓缩成一句统一前缀，
+    让全部 9 格共享同一画风（也保证风格统一）。style 为空/无前后缀则返回空（回退内置圣经）。"""
+    if not style:
+        return ""
+    pre = (style.get("prefix") or "").strip().strip("，,")
+    suf = (style.get("suffix") or "").strip().strip("，,")
+    parts = [p for p in (pre, suf) if p]
+    if not parts:
+        return ""
+    return ("固定美术方向（所有 9 格必须共享同一画风、像同一支短片的连续分镜）："
+            + "；".join(parts) + "。")
+
+
+def _strip_wrap(style: dict, full_prompt: str) -> str:
+    """从 wrap 过的完整 prompt 剥出裸主体（去掉风格三层 prefix/suffix）。
+    九宫格统一用 GRID_STYLE_BIBLE 管风格，不需要逐格再套三层。"""
+    pre, suf = style.get("prefix", ""), style.get("suffix", "")
+    s = full_prompt
+    if pre and s.startswith(pre):
+        s = s[len(pre):]
+    if suf and s.endswith(suf):
+        s = s[:len(s) - len(suf)]
+    return s.strip() or full_prompt
+
 
 def render_images_grouped(provider, api_key, tasks, model=None,
-                          aspect_ratio="9:16"):
-    """组图模式批量生图：把 tasks 按「是否带参考图」分组、每组≤9 张，一次请求出多张。
-    省约 89% 成本（N 张 → ceil(N/9) 次请求），同批同次生成→风格统一，带参考图→人物一致。
-    每个 task 五元组 (prompt, sub_type, out_path, duration, ref_uri)；
-    prompt 已是套风格的完整提示词，组图时合并为「请生成 N 张，分别为：1.xx 2.xx ...」。
-    任一批组图失败 → 该批回退逐张 render，不中断出片。返回顺序与 tasks 一致。"""
-    from app.services.image import generate_images_batch, ImageError
+                          aspect_ratio="9:16", grid_mode=False, style=None,
+                          base_url=None):
+    """组图模式批量生图：把 tasks 按「是否带参考图」分组、每组≤9 张。
+    每个 task 五元组 (prompt, sub_type, out_path, duration, ref_uri)；prompt 已是套风格的完整提示词。
+    grid_mode=True：每组用「3×3 模板图生图」一次出 1 张大图本地切 9 张（按 1 张计费，省 89%）。
+      失败即判败 → 整组占位图，等用户在画廊手动重新组图；绝不回退 auto 组图或逐张
+      （一次九宫格失败若降级逐张会放大成最多 9 次请求，成本失控，已彻底屏蔽）。
+    grid_mode=False：每组合并 prompt 走 auto 组图（按张计费），失败同样占位、不逐张降级。
+    返回顺序与 tasks 一致。"""
+    from app.services.image import (generate_images_batch, generate_grid_image, ImageError)
     results = [None] * len(tasks)
-    # 分组：相邻、同 ref_uri（None 或同一张）的归一组，每组≤GROUP_MAX
-    groups = []  # [(indices, ref_uri)]
-    cur, cur_ref = [], "__init__"
+    from collections import OrderedDict
+    by_ref = OrderedDict()  # ref_uri -> [task index...]，保留首次出现顺序
     for i, (_p, _st, _op, _sd, rf) in enumerate(tasks):
-        if rf != cur_ref or len(cur) >= GROUP_MAX:
-            if cur:
-                groups.append((cur, cur_ref))
-            cur, cur_ref = [i], rf
-        else:
-            cur.append(i)
-    if cur:
-        groups.append((cur, cur_ref))
+        by_ref.setdefault(rf, []).append(i)
+    groups = []  # [(indices, ref_uri)]
+    for rf, idxs in by_ref.items():
+        for s in range(0, len(idxs), GROUP_MAX):
+            groups.append((idxs[s:s + GROUP_MAX], rf))
 
-    def _do_group(indices, ref):
-        """处理一个批次：单张走单图；多张合并提示词走组图，整批失败回退逐张。"""
-        if len(indices) == 1:
-            i = indices[0]
-            p, st, op, sd, rf = tasks[i]
-            results[i] = _gen_with_fallback(provider, api_key, p, st, op, sd, model,
-                                            aspect_ratio, rf)
-            return
+    def _fill_placeholder(indices, reason):
+        """整组判败：每格写占位图，等用户在画廊手动重新组图。绝不逐张补图（控成本）。"""
+        for i in indices:
+            _p, st, op, sd, _rf = tasks[i]
+            results[i] = placeholder_result(op, st, sd, reason=reason)
+
+    def _batch_only(indices, ref):
+        """auto 组图：一次请求出多张。失败即整组判败占位，绝不回退逐张。"""
         sub_prompts = [tasks[i][0] for i in indices]
         merged = (f"请生成 {len(indices)} 张风格统一的竖版画面，像同一支短片的连续分镜，"
                   f"分别为：" + " ".join(f"{k+1}.{sp}" for k, sp in enumerate(sub_prompts)))
@@ -285,14 +342,33 @@ def render_images_grouped(provider, api_key, tasks, model=None,
         try:
             batch = generate_images_batch(provider, api_key, merged, sub_types,
                                           out_paths, durations, model=model,
-                                          aspect_ratio=aspect_ratio, ref_uri=ref)
+                                          aspect_ratio=aspect_ratio, ref_uri=ref,
+                                          base_url=base_url)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
-        except ImageError:
-            for i in indices:
-                p, st, op, sd, rf = tasks[i]
-                results[i] = _gen_with_fallback(provider, api_key, p, st, op, sd,
-                                                model, aspect_ratio, rf)
+        except ImageError as e:
+            _fill_placeholder(indices, f"组图失败: {str(e)[:80]}")
+
+    def _do_group(indices, ref):
+        """处理一个批次：单张也走九宫格/组图一次请求；失败即判败占位，绝不逐张降级。"""
+        if grid_mode:
+            # 九宫格：剥出裸 brief（统一用风格圣经管风格，不逐格套三层）。
+            briefs = [_strip_wrap(style or {}, tasks[i][0]) for i in indices]
+            cell_prompt = build_grid_prompt(briefs, style_bible=_style_bible(style))
+            sub_types = [tasks[i][1] for i in indices]
+            out_paths = [tasks[i][2] for i in indices]
+            durations = [tasks[i][3] for i in indices]
+            try:
+                grid = generate_grid_image(provider, api_key, cell_prompt, sub_types,
+                                           out_paths, durations, model=model,
+                                           aspect_ratio=aspect_ratio, base_url=base_url)
+                for k, i in enumerate(indices):
+                    results[i] = grid[k]
+            except ImageError as e:
+                # 九宫格失败即判败：占位图，等用户手动重新组图。绝不回退组图/逐张（控成本）。
+                _fill_placeholder(indices, f"九宫格失败: {str(e)[:80]}")
+            return
+        _batch_only(indices, ref)
 
     # 多批并发跑（每批一次组图请求），把串行等待压成并行，明显提速。
     from concurrent.futures import ThreadPoolExecutor

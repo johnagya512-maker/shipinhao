@@ -143,6 +143,7 @@ export default function TaskCreatePage() {
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
+    image_gen_mode: 'per_image',
     processing_mode: 'full_auto', pause_mode: 'key_nodes', pause_steps: [],
   }
   function loadDraft(): { form: TaskCreate; previewScript: string; inputMode: 'transcript' | 'douyin'; parseMeta: ParseMeta | null } {
@@ -692,6 +693,34 @@ export default function TaskCreatePage() {
               )
             })}
           </div>
+        </div>
+
+        <div className={dimImg}>
+          <span className="text-sm text-slate-400">生图模式</span>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {[
+              { key: 'per_image', name: '逐张生成', desc: '每张单独出图，画质最稳，成本按张算' },
+              { key: 'grid', name: '九宫格省成本', desc: '一次出9张切割，省约89%成本，风格统一' },
+            ].map((m) => {
+              const on = (form.image_gen_mode || 'per_image') === m.key
+              return (
+                <button key={m.key} type="button" onClick={() => set({ image_gen_mode: m.key })}
+                  className={`text-left px-3 py-2 rounded-xl border transition-colors ${
+                    on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
+                       : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                  }`}>
+                  <span className={`text-[13px] font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</span>
+                  <span className="block text-[10px] text-slate-500">{m.desc}</span>
+                </button>
+              )
+            })}
+          </div>
+          {form.image_gen_mode === 'grid' && (
+            <p className="mt-2 text-[11px] text-amber-400/90">
+              九宫格把一张大图切成9格：横版(16:9)画质足够；竖版(9:16)需从每格中心裁切，
+              清晰度略降但通常可用。在意画质可改回逐张生成。
+            </p>
+          )}
         </div>
 
         <div>

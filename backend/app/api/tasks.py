@@ -83,7 +83,8 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
 
     # 成本预估校验（无逐字稿时按链接采集后的估值留待运行时校验，提交时用占位长度）
     est = cost_svc.estimate_cost(transcript or "x" * 500, body.modules, None,
-                                 cfg.llm_provider, cfg.image_provider)
+                                 cfg.llm_provider, cfg.image_provider,
+                                 body.image_gen_mode or "per_image")
     if est > body.cost_limit:
         raise HTTPException(402, detail=f"预估成本 {est} 元超过上限 {body.cost_limit} 元")
 
@@ -100,6 +101,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         enable_subtitles=body.enable_subtitles, enable_animations=body.enable_animations,
         draft_template=body.draft_template or "classic",
         creation_mode=body.creation_mode or "same_topic",
+        image_gen_mode=body.image_gen_mode or "per_image",
         processing_mode=body.processing_mode, pause_mode=body.pause_mode,
         pause_steps=body.pause_steps or None,
         status="pending",
@@ -200,7 +202,8 @@ def estimate(body: TaskCreate, db: Session = Depends(get_db)):
     provider_img = cfg.image_provider if cfg else "doubao"
     # transcript 可选：未填（走链接采集）时按占位长度估算上限。
     text = (body.transcript or "").strip() or "x" * 500
-    est = cost_svc.estimate_cost(text, body.modules, None, provider_llm, provider_img)
+    est = cost_svc.estimate_cost(text, body.modules, None, provider_llm, provider_img,
+                                 body.image_gen_mode or "per_image")
     return EstimateOut(estimated_cost=est, daily_cap_reached=cost_svc.daily_cap_reached(db))
 
 
@@ -666,7 +669,17 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, detail="任务不存在")
+    # 单图重试同样消耗绘图额度，先校验每日成本上限（与初次生图一致）
+    if cost_svc.daily_cap_reached(db):
+        raise HTTPException(429, detail="E_DAILY_CAP: 今日成本已达上限，明日再试或上调上限")
     cfg = db.query(Config).first()
+    # 豆包只走九宫格出图，逐张单图重试已屏蔽（避免逐张放大成本）。请用画廊「勾选多张
+    # 一起重新组图」，一次九宫格请求重生这几张，按 1 张计费。
+    _is_doubao = "seedream" in ((cfg.image_model if cfg else "") or "").lower() or \
+                 "doubao" in ((cfg.image_model if cfg else "") or "").lower()
+    if _is_doubao:
+        raise HTTPException(400, detail="E_GRID_ONLY: 豆包为九宫格省成本模式，"
+                                        "请勾选要重做的图用「一起重新组图」，不支持单张换图")
     e = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
     p = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
     sb = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
@@ -713,7 +726,8 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
                                   sub_type, out_path, img.get("suggested_duration", 6),
                                   model=cfg.image_model if cfg else None,
                                   aspect_ratio=task.aspect_ratio or "9:16",
-                                  ref_uri=ref_uri)
+                                  ref_uri=ref_uri,
+                                  base_url=getattr(cfg, "image_base_url", None) if cfg else None)
 
     try:
         result = _gen(subject)
@@ -799,6 +813,13 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
         db.commit()
         img = final_img
 
+    # 计费：单图重试一次 = 一张绘图请求，按单价记入成本（与初次生图同口径）。
+    provider = cfg.image_provider if cfg else "mock"
+    img_cost = cost_svc.IMAGE_PRICE.get(provider, 0.1)
+    cost_svc.record_cost(db, task_id, "E", provider, img_cost)
+    task.total_cost = float(task.total_cost) + img_cost
+    db.commit()
+
     # 返回：是否仍失败、原因、是否做过安全改写、改写后的主体（前端回填到输入框）
     return {"index": index, "image": img, "failed": failed, "reason": reason,
             "rewritten": rewritten, "new_prompt": subject if rewritten else None}
@@ -817,6 +838,9 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, detail="任务不存在")
+    # 重试同样消耗绘图额度，先校验每日成本上限（与初次生图一致）
+    if cost_svc.daily_cap_reached(db):
+        raise HTTPException(429, detail="E_DAILY_CAP: 今日成本已达上限，明日再试或上调上限")
     cfg = db.query(Config).first()
     e = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
     p = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
@@ -865,10 +889,14 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         tasks.append((text, img.get("sub_type", "content"), Path(img["path"]),
                       img.get("suggested_duration", 6), item_ref))
 
-    # 组图生成（锁外，慢且不碰共享数据）
+    # 组图生成（锁外，慢且不碰共享数据）。豆包一律走九宫格（省成本），失败即占位、不逐张降级。
+    _is_doubao = "seedream" in ((cfg.image_model if cfg else "") or "").lower() or \
+                 "doubao" in ((cfg.image_model if cfg else "") or "").lower()
+    _grid = _is_doubao
     results = render_images_grouped(cfg.image_provider if cfg else "mock", img_key,
                                     tasks, model=cfg.image_model if cfg else None,
-                                    aspect_ratio=task.aspect_ratio or "9:16")
+                                    aspect_ratio=task.aspect_ratio or "9:16",
+                                    grid_mode=_grid, style=style)
 
     # 回写：read-modify-write E/P/SB，必须在 per-task 锁内重读最新产物再改选中的几张，
     # 避免与并发的单图重试互相覆盖（丢失更新）。
@@ -891,6 +919,7 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
                 fi = dict(imgs[index])
                 fi["path"] = result.path
                 fi["fallback"] = failed
+                fi["grid"] = bool(result.meta.get("grid"))  # 供计费按 ceil/9 折算
                 if reason:
                     fi["fail_reason"] = reason
                 elif "fail_reason" in fi:
@@ -922,9 +951,17 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         db.commit()
         final_imgs = imgs if imgs is not None else images
 
+    # 计费：九宫格模式重新组图一次出 9 张只算 1 张钱（按 results 的 grid 标记折算 ceil/9）；
+    # 逐张/普通组图按实际张数。
+    provider = cfg.image_provider if cfg else "mock"
+    img_cost = cost_svc.image_cost(results, provider)
+    cost_svc.record_cost(db, task_id, "E", provider, img_cost)
+    task.total_cost = float(task.total_cost) + img_cost
+    db.commit()
+
     for r in out:
         r["image"] = final_imgs[r["index"]]
-    return {"results": out, "count": len(out)}
+    return {"results": out, "count": len(out), "cost": round(img_cost, 4)}
 
 
 @router.post("/tasks/{task_id}/step/{module}/rerun", response_model=TaskOut)

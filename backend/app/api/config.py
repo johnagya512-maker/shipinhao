@@ -48,6 +48,8 @@ def _to_out(cfg: Config) -> ConfigOut:
         task_storage_dir=cfg.task_storage_dir or "",
         bgm_dir=cfg.bgm_dir or "",
         proxy_url=getattr(cfg, "proxy_url", None) or "",
+        default_image_gen_mode=getattr(cfg, "default_image_gen_mode", None) or "per_image",
+        image_base_url=getattr(cfg, "image_base_url", None) or "",
     )
 
 
@@ -151,6 +153,10 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
         cfg.bgm_dir = body.bgm_dir.strip() or None
     if body.proxy_url is not None:
         cfg.proxy_url = body.proxy_url.strip() or None
+    if body.default_image_gen_mode is not None:
+        cfg.default_image_gen_mode = body.default_image_gen_mode.strip() or "per_image"
+    if body.image_base_url is not None:
+        cfg.image_base_url = body.image_base_url.strip() or None
     db.commit()
     return _to_out(cfg)
 

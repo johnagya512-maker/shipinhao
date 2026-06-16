@@ -182,15 +182,19 @@ export const api = {
     request<{ index: number; image: GeneratedImage; failed: boolean; reason?: string | null
       rewritten?: boolean; new_prompt?: string | null }>(
       `/tasks/${id}/images/${index}/retry`, {
+        // 单张生图可能较慢（含审核改写重试），给 3 分钟，别用默认 120s
         method: 'POST', body: JSON.stringify({ prompt: prompt ?? null }),
+        signal: AbortSignal.timeout(180_000),
       }),
   // 多张图一起重新组图：传选中的图片下标，后端合并成一次组图请求生成（省请求、
-  // 风格统一、人物一致）。返回每张的结果（是否仍失败、原因、最新图）。
+  // 风格统一、人物一致）。后端按 ref 把图合并成最多两组、各一次请求出多张并发下载，
+  // 不随张数线性变慢，固定给 5 分钟超时（默认 120s 不够组图出图+下载）。
   batchRetryImages: (id: string, indices: number[]) =>
-    request<{ count: number; results: { index: number; failed: boolean
+    request<{ count: number; cost?: number; results: { index: number; failed: boolean
       reason?: string | null; image: GeneratedImage }[] }>(
       `/tasks/${id}/images/batch-retry`, {
         method: 'POST', body: JSON.stringify({ indices }),
+        signal: AbortSignal.timeout(300_000),
       }),
   // 单步重跑：清掉该步及下游产物，从该步重算（上游走缓存）。
   rerunStep: (id: string, module: string) =>
