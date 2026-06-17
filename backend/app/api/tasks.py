@@ -815,12 +815,14 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
         db.commit()
         img = final_img
 
-    # 计费：单图重试一次 = 一张绘图请求，按单价记入成本（与初次生图同口径）。
+    # 计费（重算而非累加）：单图重试替换该张图后，E 成本重算为当前完整 E 产物的实际成本，
+    # 不叠加历史。这样反复重试同一张不会把 total_cost 越滚越高误判超限（成本=最终得到的图）。
     provider = cfg.image_provider if cfg else "mock"
-    img_cost = cost_svc.IMAGE_PRICE.get(provider, 0.1)
-    cost_svc.record_cost(db, task_id, "E", provider, img_cost)
-    task.total_cost = float(task.total_cost) + img_cost
-    db.commit()
+    e_now = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
+    cur_imgs = (e_now.output or {}).get("images", []) if e_now else []
+    e_cost = cost_svc.image_cost(cur_imgs, provider,
+                                 getattr(cfg, "image_unit_price", None) if cfg else None)
+    cost_svc.rebill_module(db, task, "E", provider, e_cost)
 
     # 返回：是否仍失败、原因、是否做过安全改写、改写后的主体（前端回填到输入框）
     return {"index": index, "image": img, "failed": failed, "reason": reason,
@@ -953,18 +955,17 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         db.commit()
         final_imgs = imgs if imgs is not None else images
 
-    # 计费：九宫格模式重新组图一次出 9 张只算 1 张钱（按 results 的 grid 标记折算 ceil/9）；
-    # 逐张/普通组图按实际张数。
+    # 计费（重算而非累加）：E 成本始终等于当前完整产物 final_imgs 的实际成本，
+    # 重新组图替换旧图、不叠加历史账，避免反复重组把 total_cost 越滚越高误判超限。
+    # 九宫格按 grid 标记折算 ceil(张数/9)、一次请求出9张只算1张钱；逐张按实际张数。
     provider = cfg.image_provider if cfg else "mock"
-    img_cost = cost_svc.image_cost(results, provider,
-                                   getattr(cfg, "image_unit_price", None) if cfg else None)
-    cost_svc.record_cost(db, task_id, "E", provider, img_cost)
-    task.total_cost = float(task.total_cost) + img_cost
-    db.commit()
+    e_cost = cost_svc.image_cost(final_imgs, provider,
+                                 getattr(cfg, "image_unit_price", None) if cfg else None)
+    total = cost_svc.rebill_module(db, task, "E", provider, e_cost)
 
     for r in out:
         r["image"] = final_imgs[r["index"]]
-    return {"results": out, "count": len(out), "cost": round(img_cost, 4)}
+    return {"results": out, "count": len(out), "cost": round(e_cost, 4), "total_cost": round(total, 4)}
 
 
 @router.post("/tasks/{task_id}/step/{module}/rerun", response_model=TaskOut)

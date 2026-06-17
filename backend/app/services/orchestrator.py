@@ -396,13 +396,11 @@ def run_pipeline(db: Session, task_id: str):
                                                  aspect_ratio=task.aspect_ratio,
                                                  base_url=getattr(cfg, "image_base_url", None)),
                         IMAGE_RETRY)
-                # 成本：九宫格模式一次请求出 9 张只算 1 张钱（image_billable_units 按 grid 标记
-                # 折算 ceil(张数/9)）；逐张/组图按实际张数。
+                # 成本（重算而非累加，与画廊重试/重组同口径）：E 成本恒等于当前产物实际成本。
+                # 九宫格一次请求出 9 张只算 1 张钱（按 grid 标记折算 ceil(张数/9)）；逐张按实际张数。
                 img_cost = cost_svc.image_cost(images, cfg.image_provider,
                                                getattr(cfg, "image_unit_price", None))
-                cost_svc.record_cost(db, task.id, "E", cfg.image_provider, img_cost)
-                task.total_cost = float(task.total_cost) + img_cost
-                db.commit()
+                cost_svc.rebill_module(db, task, "E", cfg.image_provider, img_cost)
                 _save_result(db, task.id, "E", "success",
                              output={"images": [{"path": r.path, "sub_type": r.sub_type,
                                                  "suggested_duration": r.suggested_duration,
