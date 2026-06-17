@@ -19,9 +19,12 @@ class ImageResult:
 
 
 class ImageError(Exception):
-    def __init__(self, message: str, retryable: bool = True):
+    def __init__(self, message: str, retryable: bool = True, audit: bool = False):
         super().__init__(message)
         self.retryable = retryable
+        # audit=True：内容审核拦截（输入文案/输出图片敏感）。原样重试无用, 但 LLM 改写可救,
+        # 故上层降级占位图(带审核 reason)交给改写补救, 而非当作终极错误直接抛。
+        self.audit = audit
 
 
 # 竖版 9:16（默认）
@@ -151,9 +154,11 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         # 有随机性，标记可重试让上层 re-roll。
         low = body.lower()
         if "inputtext" in low and "sensitive" in low:
-            raise ImageError(f"配图输入文案被审核拒绝(不可重试，请改描述): {body}", retryable=False)
+            # 输入文案敏感：原样重发必再被拒(retryable=False不盲目重试), 但标 audit=True
+            # 让上层降级占位+LLM改写补救(改个说法就能过)——这才是输入敏感的正确解法。
+            raise ImageError(f"配图输入文案被审核拒绝(可改写): {body}", retryable=False, audit=True)
         if "SensitiveContent" in body or "sensitive" in low:
-            raise ImageError(f"配图被内容审核拒绝(可重试): {body}", retryable=True)
+            raise ImageError(f"配图被内容审核拒绝(可重试): {body}", retryable=True, audit=True)
         # 其他 4xx（model 不对 / 参数不符等）透出真实报错，不可重试。
         raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
 
@@ -275,7 +280,7 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
     if resp.status_code >= 400:
         body = resp.text[:300]
         if "sensitive" in body.lower() or "SensitiveContent" in body:
-            raise ImageError(f"九宫格被内容审核拒绝(可重试): {body}", retryable=True)
+            raise ImageError(f"九宫格被内容审核拒绝(可改写): {body}", retryable=True, audit=True)
         raise ImageError(f"九宫格被拒 {resp.status_code}: {body}", retryable=True)
     data = resp.json().get("data") or []
     if not data or not data[0].get("url"):

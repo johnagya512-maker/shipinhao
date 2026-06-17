@@ -124,10 +124,11 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
             IMG_RETRY)
         return result
     except ImageError as e:
-        # 不可重试错误（Key 无效等）直接抛；可重试但耗尽 → 降级占位图
-        if not getattr(e, "retryable", False):
-            raise
-        return placeholder_result(out_path, sub_type, suggested_duration, reason=str(e)[:120])
+        # 审核类失败(audit=True, 含输入文案敏感): 降级占位图带审核 reason, 交给上层 LLM 改写补救
+        # (改个说法就能过), 不直接抛。真·不可救(Key无效/model错等, 非audit且不可重试): 抛出。
+        if getattr(e, "audit", False) or getattr(e, "retryable", False):
+            return placeholder_result(out_path, sub_type, suggested_duration, reason=str(e)[:120])
+        raise
 
 
 def run_images(provider, api_key, book_info, segments, out_dir: Path,
