@@ -379,6 +379,7 @@ def run_pipeline(db: Session, task_id: str):
             mode = (getattr(task, "image_gen_mode", None) or "per_image")
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
+                _img_proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
                 if mode == "grid":
                     grid_style = tracks.get_style(task.image_style, task.track)
                     images, _ = with_retry(
@@ -386,7 +387,8 @@ def run_pipeline(db: Session, task_id: str):
                                                          model=cfg.image_model,
                                                          aspect_ratio=task.aspect_ratio,
                                                          grid_mode=True, style=grid_style,
-                                                         base_url=getattr(cfg, "image_base_url", None)),
+                                                         base_url=getattr(cfg, "image_base_url", None),
+                                                         proxy=_img_proxy),
                         IMAGE_RETRY)
                 else:
                     images, _ = with_retry(
@@ -394,7 +396,8 @@ def run_pipeline(db: Session, task_id: str):
                                                  model=cfg.image_model,
                                                  concurrency=cfg.concurrency,
                                                  aspect_ratio=task.aspect_ratio,
-                                                 base_url=getattr(cfg, "image_base_url", None)),
+                                                 base_url=getattr(cfg, "image_base_url", None),
+                                                 proxy=_img_proxy),
                         IMAGE_RETRY)
                 # 成本（重算而非累加，与画廊重试/重组同口径）：E 成本恒等于当前产物实际成本。
                 # 九宫格一次请求出 9 张只算 1 张钱（按 grid 标记折算 ceil(张数/9)）；逐张按实际张数。

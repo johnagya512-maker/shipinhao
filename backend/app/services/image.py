@@ -101,7 +101,7 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    out_path: Path, suggested_duration: int,
                    model: str | None = None, timeout: float = 60.0,
                    aspect_ratio: str = "9:16", ref_uri: str | None = None,
-                   base_url: str | None = None) -> ImageResult:
+                   base_url: str | None = None, proxy: str | None = None) -> ImageResult:
     """生成单张配图。无 Key 或 provider=mock 时走占位图。
     ref_uri 非空时走图生图（把参考图作为 image 传入），用于人物镜头保持主角一致性
     （同一个人、不同场景——提示词须明确"保持面部不变、改变场景姿势"，见 build_image_prompts）；
@@ -128,7 +128,10 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         if ref_uri:
             # 图生图：传参考图保持人物一致性（Seedream 4.x 支持 image 入参，实测有效）
             payload["image"] = ref_uri
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        _kw = {"timeout": timeout}
+        if proxy:
+            _kw["proxy"] = proxy
+        resp = httpx.post(url, json=payload, headers=headers, **_kw)
     except httpx.TimeoutException as e:
         raise ImageError(f"配图超时: {e}", retryable=True)
     except httpx.RequestError as e:
@@ -154,7 +157,7 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
 
     img_url = resp.json()["data"][0]["url"]
-    img_bytes = httpx.get(img_url, timeout=timeout).content
+    img_bytes = httpx.get(img_url, **_kw).content
     out_path.write_bytes(img_bytes)
     # 统一缩放到目标比例尺寸
     _normalize(out_path, size=(w, h))
@@ -216,7 +219,8 @@ def _split_grid(grid_path: Path, out_paths: list, sub_types: list, durations: li
 def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
                         sub_types: list, out_paths: list, durations: list,
                         model: str | None = None, timeout: float = 180.0,
-                        aspect_ratio: str = "9:16", base_url: str | None = None) -> list:
+                        aspect_ratio: str = "9:16", base_url: str | None = None,
+                        proxy: str | None = None) -> list:
     """九宫格省成本：传 3×3 模板作参考图，一次生成 1 张规整大图（按 1 张计费），本地切 ≤9 张。
     cell_prompt 已是拼好的九格 brief（含风格圣经）。失败抛 ImageError，由调用方回退组图/逐张。
     mock 模式直接逐格占位。out_paths 长度 ≤9。"""
@@ -243,8 +247,11 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
                "response_format": "url", "stream": False, "watermark": False}
     if model:
         payload["model"] = model
+    _kw = {"timeout": timeout}
+    if proxy:
+        _kw["proxy"] = proxy
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        resp = httpx.post(url, json=payload, headers=headers, **_kw)
     except httpx.TimeoutException as e:
         raise ImageError(f"九宫格超时: {e}", retryable=True)
     except httpx.RequestError as e:
@@ -263,7 +270,7 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         raise ImageError("九宫格未返回图片", retryable=True)
     raw = out_paths[0].parent / "_grid_raw.png"
     try:
-        raw.write_bytes(httpx.get(data[0]["url"], timeout=timeout).content)
+        raw.write_bytes(httpx.get(data[0]["url"], **_kw).content)
     except Exception as e:
         raise ImageError(f"九宫格下载失败: {e}", retryable=True)
     res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio)
@@ -277,7 +284,7 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
                           sub_types: list, out_paths: list, durations: list,
                           model: str | None = None, timeout: float = 180.0,
                           aspect_ratio: str = "9:16", ref_uri: str | None = None,
-                          base_url: str | None = None) -> list:
+                          base_url: str | None = None, proxy: str | None = None) -> list:
     """组图：一次请求生成多张（豆包 sequential_image_generation）。返回 ImageResult 列表。
     一次最多 BATCH_MAX 张；同批同次生成 → 风格统一；传 ref_uri → 多张保持同一个人。
     返回数量不足时：缺的那几张占位兜底（不自动单图补，避免多花请求；用户可在画廊多选后
@@ -304,8 +311,11 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
         payload["model"] = model
     if ref_uri:
         payload["image"] = ref_uri
+    _kw = {"timeout": timeout}
+    if proxy:
+        _kw["proxy"] = proxy
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        resp = httpx.post(url, json=payload, headers=headers, **_kw)
     except httpx.TimeoutException as e:
         raise ImageError(f"组图超时: {e}", retryable=True)
     except httpx.RequestError as e:
@@ -329,7 +339,7 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
     def _fetch(i, op):
         if i < len(data) and data[i].get("url"):
             try:
-                img_bytes = httpx.get(data[i]["url"], timeout=timeout).content
+                img_bytes = httpx.get(data[i]["url"], **_kw).content
                 op.write_bytes(img_bytes)
                 _normalize(op, size=(w, h))
                 return ImageResult(str(op), sub_types[i], durations[i], {})

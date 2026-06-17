@@ -729,7 +729,8 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
                                   model=cfg.image_model if cfg else None,
                                   aspect_ratio=task.aspect_ratio or "9:16",
                                   ref_uri=ref_uri,
-                                  base_url=getattr(cfg, "image_base_url", None) if cfg else None)
+                                  base_url=getattr(cfg, "image_base_url", None) if cfg else None,
+                                  proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None)
 
     try:
         result = _gen(subject)
@@ -900,7 +901,9 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     results = render_images_grouped(cfg.image_provider if cfg else "mock", img_key,
                                     tasks, model=cfg.image_model if cfg else None,
                                     aspect_ratio=task.aspect_ratio or "9:16",
-                                    grid_mode=_grid, style=style)
+                                    grid_mode=_grid, style=style,
+                                    base_url=getattr(cfg, "image_base_url", None) if cfg else None,
+                                    proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None)
 
     # 回写：read-modify-write E/P/SB，必须在 per-task 锁内重读最新产物再改选中的几张，
     # 避免与并发的单图重试互相覆盖（丢失更新）。

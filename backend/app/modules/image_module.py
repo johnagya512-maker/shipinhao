@@ -87,7 +87,7 @@ def _wrap(style: dict, subject: str) -> str:
 
 def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
                        suggested_duration, model, aspect_ratio="9:16", ref_uri=None,
-                       base_url=None):
+                       base_url=None, proxy=None):
     """生成单张：可重试错误(超时/限流/审核误判)退避重试，耗尽则降级占位图。
     单张失败不中断整批，保证链路产出（PRD 11.2 必选模块尽量不整体失败）。"""
     from app.modules.retry import with_retry
@@ -95,7 +95,7 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
         result, _ = with_retry(
             lambda: generate_image(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
-                                   ref_uri=ref_uri, base_url=base_url),
+                                   ref_uri=ref_uri, base_url=base_url, proxy=proxy),
             IMG_RETRY)
         return result
     except ImageError as e:
@@ -107,7 +107,8 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
 
 def run_images(provider, api_key, book_info, segments, out_dir: Path,
                image_count=5, track="character_story", image_style=None, model=None,
-               concurrency=5, aspect_ratio="9:16", character_desc=None, ref_uri=None):
+               concurrency=5, aspect_ratio="9:16", character_desc=None, ref_uri=None,
+               proxy=None):
     """生成 1 封面 + N 内容 + 1 结尾。按赛道主体 + 画风三层包裹。
     角色一致性：有参考图(ref_uri)时人物镜头走图生图(同一个人、不同场景)，
     否则靠提示词里的人物特征文字(character_desc)锚定；空镜/物件画面紧贴文案、不带人物。
@@ -117,7 +118,7 @@ def run_images(provider, api_key, book_info, segments, out_dir: Path,
                                 track=track, image_style=image_style,
                                 character_desc=character_desc, ref_uri=ref_uri)
     return render_images(provider, api_key, tasks, model=model, concurrency=concurrency,
-                         aspect_ratio=aspect_ratio)
+                         aspect_ratio=aspect_ratio, proxy=proxy)
 
 
 _SHOT_VARIATIONS = [
@@ -228,16 +229,17 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
 
 
 def render_images(provider, api_key, tasks, model=None, concurrency=5,
-                  aspect_ratio="9:16", base_url=None):
+                  aspect_ratio="9:16", base_url=None, proxy=None):
     """Step 4「批量生图」：按 build_image_prompts 产出的任务列表并发生成。
     单张失败降级占位图，不中断整批。保持任务列表顺序返回。
-    base_url 非空时所有请求打中转站（OpenAI 兼容），用于降单价。"""
+    base_url 非空时所有请求打中转站（OpenAI 兼容），用于降单价。
+    proxy 非空时所有请求走代理（中转站如 tu-zi.com 需代理才能访问）。"""
     from concurrent.futures import ThreadPoolExecutor
     results: list = [None] * len(tasks)
     workers = max(1, min(concurrency, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_gen_with_fallback, provider, api_key, p, st, op, sd, model,
-                          aspect_ratio, rf, base_url): idx
+                          aspect_ratio, rf, base_url, proxy): idx
                 for idx, (p, st, op, sd, rf) in enumerate(tasks)}
         for fut in futs:
             results[futs[fut]] = fut.result()  # 单张失败会抛不可重试错误，向上传递
@@ -306,7 +308,7 @@ def _strip_wrap(style: dict, full_prompt: str) -> str:
 
 def render_images_grouped(provider, api_key, tasks, model=None,
                           aspect_ratio="9:16", grid_mode=False, style=None,
-                          base_url=None):
+                          base_url=None, proxy=None):
     """组图模式批量生图：把 tasks 按「是否带参考图」分组、每组≤9 张。
     每个 task 五元组 (prompt, sub_type, out_path, duration, ref_uri)；prompt 已是套风格的完整提示词。
     grid_mode=True：每组用「3×3 模板图生图」一次出 1 张大图本地切 9 张（按 1 张计费，省 89%）。
@@ -343,7 +345,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             batch = generate_images_batch(provider, api_key, merged, sub_types,
                                           out_paths, durations, model=model,
                                           aspect_ratio=aspect_ratio, ref_uri=ref,
-                                          base_url=base_url)
+                                          base_url=base_url, proxy=proxy)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError as e:
@@ -361,7 +363,8 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             try:
                 grid = generate_grid_image(provider, api_key, cell_prompt, sub_types,
                                            out_paths, durations, model=model,
-                                           aspect_ratio=aspect_ratio, base_url=base_url)
+                                           aspect_ratio=aspect_ratio, base_url=base_url,
+                                           proxy=proxy)
                 for k, i in enumerate(indices):
                     results[i] = grid[k]
             except ImageError as e:
