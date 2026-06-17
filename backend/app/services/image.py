@@ -202,16 +202,24 @@ def _split_grid(grid_path: Path, out_paths: list, sub_types: list, durations: li
     GW, GH = img.size
     rows, cols = GRID_RC
     cw, ch = GW // cols, GH // rows
+    # 每格向内收缩裁边：模型画的白色分隔线有宽度、且 9 格不完全等大，硬按 1/3 均分会切到
+    # 白线或邻格（表现为成片边缘有白边/画面偏格）。向内收 ~7% 裁掉外圈白线区，保证画面干净。
+    inset_x = int(cw * 0.07)
+    inset_y = int(ch * 0.07)
     res = []
     for i, (op, st, du) in enumerate(zip(out_paths, sub_types, durations)):
         if i >= GRID_CELLS:
             break
         r, c = i // cols, i % cols
-        cell = img.crop((c * cw, r * ch, c * cw + cw, r * ch + ch))
+        # 先按格定位，四边各向内收 inset，避开白色分隔线
+        x0, y0 = c * cw + inset_x, r * ch + inset_y
+        x1, y1 = c * cw + cw - inset_x, r * ch + ch - inset_y
+        cell = img.crop((x0, y0, x1, y1))
         if (aspect_ratio or "9:16") == "9:16":
-            tw = int(ch * 9 / 16)
-            left = max(0, (cw - tw) // 2)
-            cell = cell.crop((left, 0, left + tw, ch))
+            ccw, cch = cell.size
+            tw = int(cch * 9 / 16)
+            left = max(0, (ccw - tw) // 2)
+            cell = cell.crop((left, 0, min(left + tw, ccw), cch))
         cell = cell.resize((w, h), Image.LANCZOS)
         if grayscale:
             cell = cell.convert("L").convert("RGB")
