@@ -80,12 +80,17 @@ def image_billable_units(images: list) -> float:
     """按计费口径折算图片「请求单位数」。
     九宫格模式（image 带 grid=True）：一次请求出 9 张只算 1 张钱 → 按 ceil(grid张数/9) 计；
     普通逐张/组图：每张算 1 个单位。images 可以是 dict 列表（E 产物）或带 .meta 的 ImageResult。
+    占位图（fallback=True，审核拒绝/失败降级而来）不计费——中转站对失败请求收 $0，
+    实测每条 SensitiveContentDetected 等失败请求账单都是 0.00000，不应算进成本。
     """
     import math
     grid_n = other_n = 0
     for im in images:
         meta = im if isinstance(im, dict) else getattr(im, "meta", {})
-        is_grid = bool((meta or {}).get("grid"))
+        meta = meta or {}
+        if meta.get("fallback"):
+            continue  # 占位图=失败降级，中转站不收费，跳过
+        is_grid = bool(meta.get("grid"))
         if is_grid:
             grid_n += 1
         else:
