@@ -67,12 +67,27 @@ def call_llm(provider: str, model: str, api_key: str, prompt: str,
 
 
 def call_vision(provider: str, model: str, api_key: str, prompt: str,
-                image_data_uri: str, timeout: float = 60.0, proxy: str | None = None) -> LLMResult:
+                image_data_uri: str, timeout: float = 60.0, proxy: str | None = None,
+                base_url: str | None = None) -> LLMResult:
     """多模态调用：看图 + 文字提示，返回文本。走 OpenAI 兼容的 content 数组格式
     （text + image_url）。豆包视觉模型与绘图模型同在火山方舟，可复用 image_api_key。
     image_data_uri 形如 data:image/png;base64,xxx。
-    proxy 非空时走代理（豆包 ark 域名在受限网络需代理，否则 WinError 10054 断连）。"""
-    url = LLM_ENDPOINTS.get(provider)
+    proxy 非空时走代理（豆包 ark 域名在受限网络需代理，否则 WinError 10054 断连）。
+    base_url 非空时走中转站：传的是绘图端点(.../v1/images/generations)，内部推导成
+    chat 端点(.../v1/chat/completions)。否则用 image_api_key 打官方会 401（中转站 key
+    不被官方认）。"""
+    if base_url and base_url.strip():
+        # 中转站绘图端点 → 推导 chat/completions（视觉模型走 OpenAI 兼容 chat 接口）
+        bu = base_url.strip()
+        if "/images/generations" in bu:
+            url = bu.replace("/images/generations", "/chat/completions")
+        elif "/chat/completions" in bu:
+            url = bu
+        else:
+            # 只给了根地址，补 chat 端点
+            url = bu.rstrip("/") + "/chat/completions"
+    else:
+        url = LLM_ENDPOINTS.get(provider)
     if not url:
         raise LLMError(f"未知 LLM 供应商: {provider}", retryable=False)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}

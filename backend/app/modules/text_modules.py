@@ -308,13 +308,15 @@ def _detect_template_tail(scenes, min_batch=4, tail_len=12) -> str | None:
     return None
 
 
-def run_character_profile(provider, model, key, image_data_uri, proxy=None):
+def run_character_profile(provider, model, key, image_data_uri, proxy=None, base_url=None):
     """反推主角参考图特征：用视觉模型看一次参考图，生成一段稳定外貌特征文字，
     用于后续「需要人物出场」的画面文字锚定角色一致性。返回 {"profile": str}, r。
     失败由调用方兜底（回退到通用一致性短语）。
-    proxy 非空时视觉模型请求走代理（豆包 ark 域名受限网络需代理）。"""
+    proxy 非空时视觉模型请求走代理（豆包 ark 域名受限网络需代理）。
+    base_url 非空时走中转站（否则中转站 key 打官方会 401）。"""
     from app.services.llm import call_vision
-    r = call_vision(provider, model, key, prompts.CHARACTER_PROFILE, image_data_uri, proxy=proxy)
+    r = call_vision(provider, model, key, prompts.CHARACTER_PROFILE, image_data_uri,
+                    proxy=proxy, base_url=base_url)
     profile = r.text.strip().strip('"').strip()
     return {"profile": profile}, r
 
