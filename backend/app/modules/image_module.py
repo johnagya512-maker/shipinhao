@@ -79,6 +79,17 @@ _SAFE_IMAGERY = {
 }
 
 
+def is_monochrome_style(style: dict | None) -> bool:
+    """判断是否纯黑白风格（需本地强制转灰度）。
+    黑白纪实等风格走 API 时，模型常不听'黑白'文字（尤其图生图：彩色人物参考图的视觉信号
+    压倒文字），仍出彩色。唯一可靠解法是出图后本地强制转灰度。
+    只认明确的纯黑白（prefix 含'黑白'）；水墨带淡彩是其特色，不强制。"""
+    if not style:
+        return False
+    pre = (style.get("prefix") or "")
+    return "黑白" in pre
+
+
 def _sanitize_imagery(text: str) -> str:
     """把画面描述里的违禁意象替换成安全替代意象。长词优先，避免子串误伤。"""
     for bad in sorted(_SAFE_IMAGERY, key=len, reverse=True):
@@ -100,7 +111,7 @@ def _wrap(style: dict, subject: str) -> str:
 
 def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
                        suggested_duration, model, aspect_ratio="9:16", ref_uri=None,
-                       base_url=None, proxy=None):
+                       base_url=None, proxy=None, grayscale=False):
     """生成单张：可重试错误(超时/限流/审核误判)退避重试，耗尽则降级占位图。
     单张失败不中断整批，保证链路产出（PRD 11.2 必选模块尽量不整体失败）。"""
     from app.modules.retry import with_retry
@@ -108,7 +119,8 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
         result, _ = with_retry(
             lambda: generate_image(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
-                                   ref_uri=ref_uri, base_url=base_url, proxy=proxy),
+                                   ref_uri=ref_uri, base_url=base_url, proxy=proxy,
+                                   grayscale=grayscale),
             IMG_RETRY)
         return result
     except ImageError as e:
@@ -131,7 +143,8 @@ def run_images(provider, api_key, book_info, segments, out_dir: Path,
                                 track=track, image_style=image_style,
                                 character_desc=character_desc, ref_uri=ref_uri)
     return render_images(provider, api_key, tasks, model=model, concurrency=concurrency,
-                         aspect_ratio=aspect_ratio, proxy=proxy)
+                         aspect_ratio=aspect_ratio, proxy=proxy,
+                         grayscale=is_monochrome_style(tracks.get_style(image_style, track) if image_style else None))
 
 
 _SHOT_VARIATIONS = [
@@ -242,17 +255,18 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
 
 
 def render_images(provider, api_key, tasks, model=None, concurrency=5,
-                  aspect_ratio="9:16", base_url=None, proxy=None):
+                  aspect_ratio="9:16", base_url=None, proxy=None, grayscale=False):
     """Step 4「批量生图」：按 build_image_prompts 产出的任务列表并发生成。
     单张失败降级占位图，不中断整批。保持任务列表顺序返回。
     base_url 非空时所有请求打中转站（OpenAI 兼容），用于降单价。
-    proxy 非空时所有请求走代理（中转站如 tu-zi.com 需代理才能访问）。"""
+    proxy 非空时所有请求走代理（中转站如 tu-zi.com 需代理才能访问）。
+    grayscale=True 时所有图本地强制转黑白（黑白风格模型常不听文字、图生图照彩色参考出彩色）。"""
     from concurrent.futures import ThreadPoolExecutor
     results: list = [None] * len(tasks)
     workers = max(1, min(concurrency, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_gen_with_fallback, provider, api_key, p, st, op, sd, model,
-                          aspect_ratio, rf, base_url, proxy): idx
+                          aspect_ratio, rf, base_url, proxy, grayscale): idx
                 for idx, (p, st, op, sd, rf) in enumerate(tasks)}
         for fut in futs:
             results[futs[fut]] = fut.result()  # 单张失败会抛不可重试错误，向上传递
@@ -346,6 +360,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
     grid_mode=False：每组合并 prompt 走 auto 组图（按张计费），失败同样占位、不逐张降级。
     返回顺序与 tasks 一致。"""
     from app.services.image import (generate_images_batch, generate_grid_image, ImageError)
+    _gray = is_monochrome_style(style)  # 黑白风格：出图后本地强制转灰度
     results = [None] * len(tasks)
     from collections import OrderedDict
     by_ref = OrderedDict()  # ref_uri -> [task index...]，保留首次出现顺序
@@ -374,7 +389,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             batch = generate_images_batch(provider, api_key, merged, sub_types,
                                           out_paths, durations, model=model,
                                           aspect_ratio=aspect_ratio, ref_uri=ref,
-                                          base_url=base_url, proxy=proxy)
+                                          base_url=base_url, proxy=proxy, grayscale=_gray)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError as e:
@@ -393,7 +408,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                 grid = generate_grid_image(provider, api_key, cell_prompt, sub_types,
                                            out_paths, durations, model=model,
                                            aspect_ratio=aspect_ratio, base_url=base_url,
-                                           proxy=proxy)
+                                           proxy=proxy, grayscale=_gray)
                 for k, i in enumerate(indices):
                     results[i] = grid[k]
             except ImageError as e:

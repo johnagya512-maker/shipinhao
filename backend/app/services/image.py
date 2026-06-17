@@ -101,7 +101,8 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    out_path: Path, suggested_duration: int,
                    model: str | None = None, timeout: float = 60.0,
                    aspect_ratio: str = "9:16", ref_uri: str | None = None,
-                   base_url: str | None = None, proxy: str | None = None) -> ImageResult:
+                   base_url: str | None = None, proxy: str | None = None,
+                   grayscale: bool = False) -> ImageResult:
     """生成单张配图。无 Key 或 provider=mock 时走占位图。
     ref_uri 非空时走图生图（把参考图作为 image 传入），用于人物镜头保持主角一致性
     （同一个人、不同场景——提示词须明确"保持面部不变、改变场景姿势"，见 build_image_prompts）；
@@ -159,8 +160,8 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
     img_url = resp.json()["data"][0]["url"]
     img_bytes = httpx.get(img_url, **_kw).content
     out_path.write_bytes(img_bytes)
-    # 统一缩放到目标比例尺寸
-    _normalize(out_path, size=(w, h))
+    # 统一缩放到目标比例尺寸（黑白风格强制转灰度）
+    _normalize(out_path, size=(w, h), grayscale=grayscale)
     return ImageResult(str(out_path), sub_type, suggested_duration, {})
 
 
@@ -192,10 +193,10 @@ def _make_grid_template(path: Path, canvas: int = GRID_CANVAS, line: int = GRID_
 
 
 def _split_grid(grid_path: Path, out_paths: list, sub_types: list, durations: list,
-                aspect_ratio: str = "9:16") -> list:
+                aspect_ratio: str = "9:16", grayscale: bool = False) -> list:
     """把一张规整 3×3 大图切成 ≤9 张单图，写到各 out_path，返回 ImageResult 列表。
     竖版(9:16)：每格中心裁出 9:16 再归一化；其它比例：每格直接归一化。
-    out_paths 不足 9 个时只切前 len(out_paths) 格。"""
+    out_paths 不足 9 个时只切前 len(out_paths) 格。grayscale=True 时每格强制转黑白。"""
     w, h = _dims_for(aspect_ratio)
     img = Image.open(grid_path).convert("RGB")
     GW, GH = img.size
@@ -211,7 +212,10 @@ def _split_grid(grid_path: Path, out_paths: list, sub_types: list, durations: li
             tw = int(ch * 9 / 16)
             left = max(0, (cw - tw) // 2)
             cell = cell.crop((left, 0, left + tw, ch))
-        cell.resize((w, h), Image.LANCZOS).save(op, "PNG")
+        cell = cell.resize((w, h), Image.LANCZOS)
+        if grayscale:
+            cell = cell.convert("L").convert("RGB")
+        cell.save(op, "PNG")
         res.append(ImageResult(str(op), st, du, {"grid": True}))
     return res
 
@@ -220,7 +224,7 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
                         sub_types: list, out_paths: list, durations: list,
                         model: str | None = None, timeout: float = 180.0,
                         aspect_ratio: str = "9:16", base_url: str | None = None,
-                        proxy: str | None = None) -> list:
+                        proxy: str | None = None, grayscale: bool = False) -> list:
     """九宫格省成本：传 3×3 模板作参考图，一次生成 1 张规整大图（按 1 张计费），本地切 ≤9 张。
     cell_prompt 已是拼好的九格 brief（含风格圣经）。失败抛 ImageError，由调用方回退组图/逐张。
     mock 模式直接逐格占位。out_paths 长度 ≤9。"""
@@ -273,7 +277,7 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         raw.write_bytes(httpx.get(data[0]["url"], **_kw).content)
     except Exception as e:
         raise ImageError(f"九宫格下载失败: {e}", retryable=True)
-    res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio)
+    res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
     for tmp in (tpl_path, raw):
         try: tmp.unlink()
         except Exception: pass
@@ -284,7 +288,8 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
                           sub_types: list, out_paths: list, durations: list,
                           model: str | None = None, timeout: float = 180.0,
                           aspect_ratio: str = "9:16", ref_uri: str | None = None,
-                          base_url: str | None = None, proxy: str | None = None) -> list:
+                          base_url: str | None = None, proxy: str | None = None,
+                          grayscale: bool = False) -> list:
     """组图：一次请求生成多张（豆包 sequential_image_generation）。返回 ImageResult 列表。
     一次最多 BATCH_MAX 张；同批同次生成 → 风格统一；传 ref_uri → 多张保持同一个人。
     返回数量不足时：缺的那几张占位兜底（不自动单图补，避免多花请求；用户可在画廊多选后
@@ -341,7 +346,7 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
             try:
                 img_bytes = httpx.get(data[i]["url"], **_kw).content
                 op.write_bytes(img_bytes)
-                _normalize(op, size=(w, h))
+                _normalize(op, size=(w, h), grayscale=grayscale)
                 return ImageResult(str(op), sub_types[i], durations[i], {})
             except Exception:
                 pass
@@ -372,8 +377,9 @@ def _endpoint(provider: str, base_url_override: str | None = None) -> str:
     return eps[provider]
 
 
-def _normalize(path: Path, size: tuple[int, int] = (WIDTH, HEIGHT)):
-    """缩放并居中裁剪到目标尺寸。"""
+def _normalize(path: Path, size: tuple[int, int] = (WIDTH, HEIGHT), grayscale: bool = False):
+    """缩放并居中裁剪到目标尺寸。grayscale=True 时强制转黑白
+    （黑白风格下模型常不听文字、图生图更会照彩色参考出彩色，本地转灰度是唯一可靠解）。"""
     target_w, target_h = size
     img = Image.open(path).convert("RGB")
     src_ratio = img.width / img.height
@@ -388,4 +394,6 @@ def _normalize(path: Path, size: tuple[int, int] = (WIDTH, HEIGHT)):
     left = (new_w - target_w) // 2
     top = (new_h - target_h) // 2
     img = img.crop((left, top, left + target_w, top + target_h))
+    if grayscale:
+        img = img.convert("L").convert("RGB")  # 转灰度再回RGB(保持3通道, 下游统一)
     img.save(path, "PNG")

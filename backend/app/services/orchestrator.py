@@ -144,7 +144,8 @@ def _rescue_failed_images(db, task, cfg, img_key, images, prompts_list, proxy, s
                                               Path(out_path) if not isinstance(out_path, Path) else out_path,
                                               duration, cfg.image_model,
                                               aspect_ratio=task.aspect_ratio, ref_uri=ref_uri,
-                                              base_url=getattr(cfg, "image_base_url", None), proxy=proxy)
+                                              base_url=getattr(cfg, "image_base_url", None), proxy=proxy,
+                                              grayscale=im.is_monochrome_style(style))
             except Exception:
                 break
             base = safe_subj
@@ -452,7 +453,9 @@ def run_pipeline(db: Session, task_id: str):
                                                  concurrency=cfg.concurrency,
                                                  aspect_ratio=task.aspect_ratio,
                                                  base_url=getattr(cfg, "image_base_url", None),
-                                                 proxy=_img_proxy),
+                                                 proxy=_img_proxy,
+                                                 grayscale=im.is_monochrome_style(
+                                                     tracks.get_style(task.image_style, task.track))),
                         IMAGE_RETRY)
                 # 失败补救（逐张模式）：审核拦截的占位图，自动用 LLM 递进改写提示词重生，
                 # 不必等用户手动在画廊点重试。九宫格是整组一张图、改写需整体重组，此处只救逐张

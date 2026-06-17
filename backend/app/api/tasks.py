@@ -666,7 +666,7 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     再带退避重试(应对内容审核误判的随机性)；仍失败则透出真实原因到该图。"""
     from app.core.security import decrypt
     from app.services.image import ImageError
-    from app.modules.image_module import _gen_with_fallback, _sanitize_imagery, _wrap
+    from app.modules.image_module import _gen_with_fallback, _sanitize_imagery, _wrap, is_monochrome_style
     from app.modules import tracks
     task = db.get(Task, task_id)
     if not task:
@@ -730,7 +730,8 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
                                   aspect_ratio=task.aspect_ratio or "9:16",
                                   ref_uri=ref_uri,
                                   base_url=getattr(cfg, "image_base_url", None) if cfg else None,
-                                  proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None)
+                                  proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
+                                  grayscale=is_monochrome_style(style))
 
     try:
         result = _gen(subject)
