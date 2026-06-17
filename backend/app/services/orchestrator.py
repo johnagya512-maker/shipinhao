@@ -106,6 +106,61 @@ def _save_result(db: Session, task_id: str, module: str, status: str,
     return mr
 
 
+def _rescue_failed_images(db, task, cfg, img_key, images, prompts_list, proxy, started):
+    """逐张模式失败补救：对被内容审核拦截的占位图，自动用 LLM 递进改写提示词重生。
+    最多改写 2 次（一次比一次激进，逐步抛弃敏感元素）；非审核类失败（Key 无效等）不改写。
+    源头已用 SB 强化 + 词典预净化消掉大部分敏感，这里兜底救漏网的，不必等用户手动重试。
+    返回更新后的 images 列表（救回的替换占位图，救不回的保持占位）。"""
+    style = tracks.get_style(task.image_style, task.track)
+    llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+
+    def _is_audit(rsn):
+        return rsn and ("sensitive" in rsn.lower() or "审核" in rsn or "拒绝" in rsn)
+
+    for i, r in enumerate(images):
+        meta = r.meta or {}
+        if not meta.get("fallback") or not _is_audit(meta.get("reason")):
+            continue  # 只救审核失败的；非审核失败/成功图跳过
+        if i >= len(prompts_list):
+            continue
+        _wrapped, sub_type, out_path, duration, ref_uri = prompts_list[i]
+        # 裸主体：从 wrap 过的 prompt 剥出（去风格三层），作为 LLM 改写基底
+        base = im._strip_wrap(style, _wrapped)
+        for attempt in range(1, 3):
+            try:
+                safe_subj, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
+                                                   llm_key, base, attempt=attempt)
+                safe_subj = im._sanitize_imagery(safe_subj)
+            except Exception:
+                break  # LLM 改写失败，保持占位
+            if not safe_subj or safe_subj == base:
+                continue
+            text = im._wrap(style, safe_subj)
+            if ref_uri:
+                text = im._wrap(style, f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
+                                       f"但改为以下全新画面（不同的姿势、表情、构图）：{safe_subj}")
+            try:
+                new_r = im._gen_with_fallback(cfg.image_provider, img_key, text, sub_type,
+                                              Path(out_path) if not isinstance(out_path, Path) else out_path,
+                                              duration, cfg.image_model,
+                                              aspect_ratio=task.aspect_ratio, ref_uri=ref_uri,
+                                              base_url=getattr(cfg, "image_base_url", None), proxy=proxy)
+            except Exception:
+                break
+            base = safe_subj
+            nm = new_r.meta or {}
+            if not nm.get("fallback"):
+                images[i] = new_r  # 救回成功
+                break
+            if not _is_audit(nm.get("reason")):
+                break  # 换成非审核错误，停止
+        try:
+            _check_limits(db, task, started)  # 改写重生也耗时，复查超时/成本上限
+        except TaskAborted:
+            break
+    return images
+
+
 def _check_limits(db: Session, task: Task, started: float):
     """超时与成本上限检查（PRD 11.2）。"""
     if time.time() - started > task.time_limit:
@@ -399,6 +454,12 @@ def run_pipeline(db: Session, task_id: str):
                                                  base_url=getattr(cfg, "image_base_url", None),
                                                  proxy=_img_proxy),
                         IMAGE_RETRY)
+                # 失败补救（逐张模式）：审核拦截的占位图，自动用 LLM 递进改写提示词重生，
+                # 不必等用户手动在画廊点重试。九宫格是整组一张图、改写需整体重组，此处只救逐张
+                # （画质优先模式，最该救）；九宫格失败仍占位，用户可在画廊手动重新组图。
+                if mode != "grid":
+                    images = _rescue_failed_images(db, task, cfg, img_key, images,
+                                                   prompts_list, _img_proxy, started)
                 # 成本（重算而非累加，与画廊重试/重组同口径）：E 成本恒等于当前产物实际成本。
                 # 九宫格一次请求出 9 张只算 1 张钱（按 grid 标记折算 ceil(张数/9)）；逐张按实际张数。
                 img_cost = cost_svc.image_cost(images, cfg.image_provider,
