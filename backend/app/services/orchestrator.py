@@ -383,7 +383,8 @@ def run_pipeline(db: Session, task_id: str):
                         cp_out = _llm_step(db, task, cfg, llm_key, "CP",
                                            lambda: tm.run_character_profile(
                                                cfg.image_provider, cfg.vision_model,
-                                               img_key, ref_uri),
+                                               img_key, ref_uri,
+                                               proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None),
                                            started)
                         character_desc = (cp_out.get("profile") or "").strip() or None
                     except Exception as e:

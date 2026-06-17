@@ -67,10 +67,11 @@ def call_llm(provider: str, model: str, api_key: str, prompt: str,
 
 
 def call_vision(provider: str, model: str, api_key: str, prompt: str,
-                image_data_uri: str, timeout: float = 60.0) -> LLMResult:
+                image_data_uri: str, timeout: float = 60.0, proxy: str | None = None) -> LLMResult:
     """多模态调用：看图 + 文字提示，返回文本。走 OpenAI 兼容的 content 数组格式
     （text + image_url）。豆包视觉模型与绘图模型同在火山方舟，可复用 image_api_key。
-    image_data_uri 形如 data:image/png;base64,xxx。"""
+    image_data_uri 形如 data:image/png;base64,xxx。
+    proxy 非空时走代理（豆包 ark 域名在受限网络需代理，否则 WinError 10054 断连）。"""
     url = LLM_ENDPOINTS.get(provider)
     if not url:
         raise LLMError(f"未知 LLM 供应商: {provider}", retryable=False)
@@ -83,8 +84,11 @@ def call_vision(provider: str, model: str, api_key: str, prompt: str,
         ]}],
         "temperature": 0.3,
     }
+    _kw = {"timeout": timeout}
+    if proxy:
+        _kw["proxy"] = proxy
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        resp = httpx.post(url, json=payload, headers=headers, **_kw)
     except httpx.TimeoutException as e:
         raise LLMError(f"视觉模型超时: {e}", retryable=True)
     except httpx.RequestError as e:
