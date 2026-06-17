@@ -894,10 +894,11 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         tasks.append((text, img.get("sub_type", "content"), Path(img["path"]),
                       img.get("suggested_duration", 6), item_ref))
 
-    # 组图生成（锁外，慢且不碰共享数据）。豆包一律走九宫格（省成本），失败即占位、不逐张降级。
-    _is_doubao = "seedream" in ((cfg.image_model if cfg else "") or "").lower() or \
-                 "doubao" in ((cfg.image_model if cfg else "") or "").lower()
-    _grid = _is_doubao
+    # 组图生成（锁外，慢且不碰共享数据）。是否走九宫格尊重建任务时选的 image_gen_mode：
+    # grid→九宫格(省成本)，per_image→逐张重组(画质优先/黑白等强约束更稳)。
+    # 之前无脑按模型名强制九宫格，导致选了逐张的任务重组时被塞进九宫格、黑白失效又易连带失败。
+    _mode = (getattr(task, "image_gen_mode", None) or "per_image")
+    _grid = (_mode == "grid")
     results = render_images_grouped(cfg.image_provider if cfg else "mock", img_key,
                                     tasks, model=cfg.image_model if cfg else None,
                                     aspect_ratio=task.aspect_ratio or "9:16",

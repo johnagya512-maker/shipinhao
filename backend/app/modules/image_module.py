@@ -81,8 +81,14 @@ def _sanitize_imagery(text: str) -> str:
 
 
 def _wrap(style: dict, subject: str) -> str:
-    """用画风三层包裹主体描述，生成最终绘图 prompt。"""
-    return f"{style['prefix']}{subject}{style['suffix']}"
+    """用画风三层包裹主体描述，生成最终绘图 prompt。
+    豆包 Seedream 不支持独立 negative_prompt 参数，故把画风的 negative 词转成正文禁止句追加，
+    否则「黑白纪实」等强色彩约束会失效（实测选黑白仍出彩色）。"""
+    neg = (style.get("negative") or "").strip().strip("，,")
+    base = f"{style['prefix']}{subject}{style['suffix']}"
+    if neg:
+        base += f"。严格避免以下元素：{neg}"
+    return base
 
 
 def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
@@ -280,25 +286,41 @@ def build_grid_prompt(cell_briefs: list, style_bible: str | None = None) -> str:
 
 
 def _style_bible(style: dict | None) -> str:
-    """把用户所选画风的 prefix/suffix 拼成九宫格统一风格说明。
+    """把用户所选画风的 prefix/suffix/negative 拼成九宫格统一风格说明。
     九宫格 image 槽被 3×3 模板占用，无法逐格套三层 wrap，只能把画风浓缩成一句统一前缀，
-    让全部 9 格共享同一画风（也保证风格统一）。style 为空/无前后缀则返回空（回退内置圣经）。"""
+    让全部 9 格共享同一画风（也保证风格统一）。style 为空/无前后缀则返回空（回退内置圣经）。
+    强色彩约束（黑白/水墨等，negative 含"彩色"）会把"纯单色、禁止彩色"提到最前重复强调——
+    九宫格是图生图，画风词权重被网格模板冲淡，不强调会失效（实测选黑白仍出彩色）。"""
     if not style:
         return ""
     pre = (style.get("prefix") or "").strip().strip("，,")
     suf = (style.get("suffix") or "").strip().strip("，,")
+    neg = (style.get("negative") or "").strip().strip("，,")
     parts = [p for p in (pre, suf) if p]
     if not parts:
         return ""
-    return ("固定美术方向（所有 9 格必须共享同一画风、像同一支短片的连续分镜）："
-            + "；".join(parts) + "。")
+    head = ""
+    # 黑白/单色类强约束：negative 里点名"彩色"时，开头硬性强调，压住图生图的彩色倾向
+    if "彩色" in neg or "黑白" in pre or "水墨" in pre or "单色" in pre:
+        head = "【强制】整幅图必须是纯单色（黑白/水墨）画面，绝对不能出现任何彩色。"
+    bible = ("固定美术方向（所有 9 格必须共享同一画风、像同一支短片的连续分镜）："
+             + "；".join(parts) + "。")
+    if neg:
+        bible += f"严格避免：{neg}。"
+    return head + bible
 
 
 def _strip_wrap(style: dict, full_prompt: str) -> str:
-    """从 wrap 过的完整 prompt 剥出裸主体（去掉风格三层 prefix/suffix）。
-    九宫格统一用 GRID_STYLE_BIBLE 管风格，不需要逐格再套三层。"""
+    """从 wrap 过的完整 prompt 剥出裸主体（去掉风格三层 prefix/suffix + negative 禁止句）。
+    九宫格统一用 style_bible 管风格，不需要逐格再套三层。"""
     pre, suf = style.get("prefix", ""), style.get("suffix", "")
+    neg = (style.get("negative") or "").strip().strip("，,")
     s = full_prompt
+    # 先剥 _wrap 追加的 negative 禁止句（在最末），再剥 prefix/suffix
+    if neg:
+        tail = f"。严格避免以下元素：{neg}"
+        if s.endswith(tail):
+            s = s[:len(s) - len(tail)]
     if pre and s.startswith(pre):
         s = s[len(pre):]
     if suf and s.endswith(suf):
