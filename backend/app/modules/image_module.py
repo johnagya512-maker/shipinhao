@@ -351,7 +351,7 @@ def _strip_wrap(style: dict, full_prompt: str) -> str:
 
 def render_images_grouped(provider, api_key, tasks, model=None,
                           aspect_ratio="9:16", grid_mode=False, style=None,
-                          base_url=None, proxy=None):
+                          base_url=None, proxy=None, rewrite_fn=None):
     """组图模式批量生图：把 tasks 按「是否带参考图」分组、每组≤9 张。
     每个 task 五元组 (prompt, sub_type, out_path, duration, ref_uri)；prompt 已是套风格的完整提示词。
     grid_mode=True：每组用「3×3 模板图生图」一次出 1 张大图本地切 9 张（按 1 张计费，省 89%）。
@@ -396,24 +396,44 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             _fill_placeholder(indices, f"组图失败: {str(e)[:80]}")
 
     def _do_group(indices, ref):
-        """处理一个批次：单张也走九宫格/组图一次请求；失败即判败占位，绝不逐张降级。"""
+        """处理一个批次：单张也走九宫格/组图一次请求；失败即判败占位，绝不逐张降级。
+        九宫格被内容审核拒时：若提供 rewrite_fn，自动 LLM 改写整批裸 brief 后重发（最多2次，
+        递进激进），仍败才占位。9 格拼一个 prompt、1 格踩雷整组被拒，故整批改写是九宫格的解药。"""
         if grid_mode:
             # 九宫格：剥出裸 brief（统一用风格圣经管风格，不逐格套三层）。
             briefs = [_strip_wrap(style or {}, tasks[i][0]) for i in indices]
-            cell_prompt = build_grid_prompt(briefs, style_bible=_style_bible(style))
             sub_types = [tasks[i][1] for i in indices]
             out_paths = [tasks[i][2] for i in indices]
             durations = [tasks[i][3] for i in indices]
-            try:
-                grid = generate_grid_image(provider, api_key, cell_prompt, sub_types,
-                                           out_paths, durations, model=model,
-                                           aspect_ratio=aspect_ratio, base_url=base_url,
-                                           proxy=proxy, grayscale=_gray)
-                for k, i in enumerate(indices):
-                    results[i] = grid[k]
-            except ImageError as e:
-                # 九宫格失败即判败：占位图，等用户手动重新组图。绝不回退组图/逐张（控成本）。
-                _fill_placeholder(indices, f"九宫格失败: {str(e)[:80]}")
+
+            def _is_audit(msg):
+                m = (msg or "").lower()
+                return "sensitive" in m or "审核" in m or "拒绝" in m or "451" in m
+
+            last_err = ""
+            for attempt in range(0, 3):  # 第0次原始, 1/2次递进改写
+                if attempt > 0:
+                    if not rewrite_fn:
+                        break  # 无改写能力, 直接占位
+                    try:
+                        briefs = [rewrite_fn(b, attempt) for b in briefs]
+                        briefs = [_sanitize_imagery(b) for b in briefs]
+                    except Exception:
+                        break
+                cell_prompt = build_grid_prompt(briefs, style_bible=_style_bible(style))
+                try:
+                    grid = generate_grid_image(provider, api_key, cell_prompt, sub_types,
+                                               out_paths, durations, model=model,
+                                               aspect_ratio=aspect_ratio, base_url=base_url,
+                                               proxy=proxy, grayscale=_gray)
+                    for k, i in enumerate(indices):
+                        results[i] = grid[k]
+                    return  # 成功
+                except ImageError as e:
+                    last_err = str(e)
+                    if not _is_audit(last_err):
+                        break  # 非审核类(超时/Key等), 改写无用, 直接占位
+            _fill_placeholder(indices, f"九宫格失败: {last_err[:80]}")
             return
         _batch_only(indices, ref)
 

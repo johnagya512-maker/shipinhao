@@ -438,13 +438,22 @@ def run_pipeline(db: Session, task_id: str):
                 _img_proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
                 if mode == "grid":
                     grid_style = tracks.get_style(task.image_style, task.track)
+                    # 九宫格失败补救：整组被审核拒时, 用 LLM 把每格裸 brief 改写成安全版重发。
+                    def _grid_rewrite(brief, attempt):
+                        try:
+                            safe, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
+                                                          llm_key, brief, attempt=attempt)
+                            return safe or brief
+                        except Exception:
+                            return brief
                     images, _ = with_retry(
                         lambda: im.render_images_grouped(cfg.image_provider, img_key, prompts_list,
                                                          model=cfg.image_model,
                                                          aspect_ratio=task.aspect_ratio,
                                                          grid_mode=True, style=grid_style,
                                                          base_url=getattr(cfg, "image_base_url", None),
-                                                         proxy=_img_proxy),
+                                                         proxy=_img_proxy,
+                                                         rewrite_fn=_grid_rewrite),
                         IMAGE_RETRY)
                 else:
                     images, _ = with_retry(

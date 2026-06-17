@@ -900,12 +900,23 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     # 之前无脑按模型名强制九宫格，导致选了逐张的任务重组时被塞进九宫格、黑白失效又易连带失败。
     _mode = (getattr(task, "image_gen_mode", None) or "per_image")
     _grid = (_mode == "grid")
+    # 九宫格失败补救：整组被审核拒时, LLM 改写每格裸 brief 重发（与编排器同口径）。
+    from app.modules import text_modules as _tm
+    _llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+    def _grid_rewrite(brief, attempt):
+        try:
+            safe, _ = _tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
+                                           _llm_key, brief, attempt=attempt)
+            return safe or brief
+        except Exception:
+            return brief
     results = render_images_grouped(cfg.image_provider if cfg else "mock", img_key,
                                     tasks, model=cfg.image_model if cfg else None,
                                     aspect_ratio=task.aspect_ratio or "9:16",
                                     grid_mode=_grid, style=style,
                                     base_url=getattr(cfg, "image_base_url", None) if cfg else None,
-                                    proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None)
+                                    proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
+                                    rewrite_fn=_grid_rewrite if _llm_key else None)
 
     # 回写：read-modify-write E/P/SB，必须在 per-task 锁内重读最新产物再改选中的几张，
     # 避免与并发的单图重试互相覆盖（丢失更新）。
