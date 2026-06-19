@@ -37,6 +37,7 @@ export interface TaskCreate {
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]
+  edited_script?: string   // 预览二创后用户编辑确认的定稿；非空则后端跳过清洗+改写直接用
 }
 
 export interface TaskOut {

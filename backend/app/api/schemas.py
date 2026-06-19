@@ -32,6 +32,9 @@ class TaskCreate(BaseModel):
     creation_mode: str = "same_topic"    # same_topic(拆结构二创) | none(不拆直接改写)
     image_gen_mode: str = "grid"    # grid(九宫格省成本,默认) | per_image(逐张,画质优先)
     processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
+    # 预览二创后用户编辑确认的定稿文案。非空时：作为最终文案，跳过 A 清洗 + B 改写
+    # （走 direct 模式直接用），保证「所见即所得」、并省两次 LLM 调用。
+    edited_script: str | None = None
     pause_mode: str = "key_nodes"        # none | key_nodes | every_step | custom
     pause_steps: list[str] = Field(default_factory=list)  # custom 模式勾选的步骤
 

@@ -333,7 +333,12 @@ export default function TaskCreatePage() {
     if (!hasInput()) { setError('请填写视频链接或逐字稿'); return }
     setSubmitting(true); setError(null)
     try {
-      const task = await api.createTask(form)
+      // 预览过二创且未走「不改文案」：把编辑后的预览文案作为成片定稿一并提交，
+      // 后端据此跳过 A 清洗 + B 改写，直接用这份稿往下走（所见即所得，省两次 LLM）。
+      const payload: TaskCreate = (previewScript.trim() && !noRewrite)
+        ? { ...form, edited_script: previewScript.trim() }
+        : form
+      const task = await api.createTask(payload)
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* 忽略 */ }
       nav(`/tasks/${task.id}`)
     } catch (e) {
@@ -512,16 +517,17 @@ export default function TaskCreatePage() {
           )}
           {analyzeErr && <p className="mt-1 text-[11px] text-red-400">{analyzeErr}</p>}
 
-          {/* 预览成品：二创后的完整文案（主），结构骨架折叠为次要信息。不改文案模式不显示。 */}
+          {/* 预览成品：二创后的完整文案，可直接编辑，编辑后的就是成片定稿。不改文案模式不显示。 */}
           {previewScript && !noRewrite && (
             <div className="mt-2 rounded-xl bg-slate-900/60 border border-brand-500/30 p-3">
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[12px] font-medium text-brand-300">✨ 二创文案预览</span>
-                <span className="text-[10px] text-slate-600">仅预览，正式生成以任务为准</span>
+                <span className="text-[12px] font-medium text-brand-300">✨ 二创文案（可编辑，即成片定稿）</span>
+                <span className="text-[10px] text-emerald-400/80">改完直接生成，不再重写</span>
               </div>
-              <textarea rows={10} readOnly value={previewScript}
-                className="w-full text-sm bg-slate-950/50 border border-slate-700 rounded-lg p-2.5 text-slate-200 leading-relaxed outline-none resize-y" />
-              <p className="mt-1 text-[10px] text-slate-600">{previewScript.length} 字 · 不满意可换「改写强度/视角」或重新预览，满意了点下方「开始生成」。</p>
+              <textarea rows={10} value={previewScript}
+                onChange={(e) => setPreviewScript(e.target.value)}
+                className="w-full text-sm bg-slate-950/50 border border-slate-700 rounded-lg p-2.5 text-slate-200 leading-relaxed outline-none resize-y focus:border-brand-500" />
+              <p className="mt-1 text-[10px] text-slate-600">{previewScript.length} 字 · 可直接修改这段文案，满意后点下方「开始生成」——成片就用你这份定稿，不再重新清洗改写。</p>
               {structure && (structure.why_viral || (structure.structure?.length ?? 0) > 0) && (
                 <details className="mt-2">
                   <summary className="text-[11px] text-slate-500 cursor-pointer hover:text-slate-300">查看拆解的爆款结构 ▾</summary>

@@ -81,6 +81,15 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
     if not transcript and douyin_url and not has_collect:
         raise HTTPException(400, detail="E6001: 未配置采集/ASR Key，无法自动提取逐字稿，请手动粘贴")
 
+    # 预览二创定稿：用户在预览框编辑确认的文案，作为最终成片文案直接使用，
+    # 跳过 A 清洗 + B 改写（走 direct 模式），保证所见即所得、省两次 LLM。
+    edited = (body.edited_script or "").strip()
+    _processing_mode = body.processing_mode
+    if edited:
+        transcript = edited
+        douyin_url = ""          # 已有定稿文案，无需再采集/ASR
+        _processing_mode = "direct"
+
     # 成本预估校验（无逐字稿时按链接采集后的估值留待运行时校验，提交时用占位长度）
     est = cost_svc.estimate_cost(transcript or "x" * 500, body.modules, None,
                                  cfg.llm_provider, cfg.image_provider,
@@ -103,7 +112,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         draft_template=body.draft_template or "classic",
         creation_mode=body.creation_mode or "same_topic",
         image_gen_mode=body.image_gen_mode or "per_image",
-        processing_mode=body.processing_mode, pause_mode=body.pause_mode,
+        processing_mode=_processing_mode, pause_mode=body.pause_mode,
         pause_steps=body.pause_steps or None,
         status="pending",
     )
