@@ -47,20 +47,28 @@ class TTSError(Exception):
 
 
 def _synth_volcano(text: str, api_key: str, voice: str | None,
-                   appid: str | None, timeout: float, speed: float = 1.0) -> bytes:
+                   appid: str | None, timeout: float, speed: float = 1.0,
+                   emotion: str | None = None, emotion_scale: float = 4.0) -> bytes:
     """火山引擎大模型 TTS 单段合成，返回 mp3 字节。
 
     鉴权：Authorization 头为 "Bearer;${access_token}"（Bearer 与 token 以分号分隔）。
     appid 必填；app.token 无实际鉴权作用，可传任意非空串（此处复用 access_token）。
+    emotion 非空时启用情感（enable_emotion+emotion+emotion_scale），让多情感音色有起伏、
+    不平读；仅多情感音色(*_emo_*)支持，普通音色传了会被忽略或报错，故由 voices.emotion_for 决定。
     """
     if not appid:
         raise TTSError("E6207: 火山 TTS 需配置 appid（在配置页填写）")
     headers = {"Authorization": f"Bearer;{api_key}"}
+    audio = {"voice_type": voice or VOLCANO_DEFAULT_VOICE,
+             "encoding": "mp3", "speed_ratio": _clamp_speed(speed)}
+    if emotion:
+        audio["enable_emotion"] = True
+        audio["emotion"] = emotion
+        audio["emotion_scale"] = max(1.0, min(5.0, float(emotion_scale)))
     payload = {
         "app": {"appid": appid, "token": api_key, "cluster": VOLCANO_CLUSTER},
         "user": {"uid": "shipinhao"},
-        "audio": {"voice_type": voice or VOLCANO_DEFAULT_VOICE,
-                  "encoding": "mp3", "speed_ratio": _clamp_speed(speed)},
+        "audio": audio,
         "request": {"reqid": uuid.uuid4().hex, "text": text, "operation": "query"},
     }
     try:
@@ -197,10 +205,11 @@ def _clamp_speed(speed) -> float:
 
 
 def _synth_one(text: str, provider: str, api_key: str, voice: str | None,
-               appid: str | None, model: str | None, timeout: float, speed: float = 1.0) -> bytes:
-    """合成单段，按供应商分发，返回音频字节。"""
+               appid: str | None, model: str | None, timeout: float, speed: float = 1.0,
+               emotion: str | None = None) -> bytes:
+    """合成单段，按供应商分发，返回音频字节。emotion 仅火山多情感音色生效。"""
     if provider == "volcano":
-        return _synth_volcano(text, api_key, voice, appid, timeout, speed)
+        return _synth_volcano(text, api_key, voice, appid, timeout, speed, emotion=emotion)
     if provider == "siliconflow":
         return _synth_siliconflow(text, api_key, voice, model, timeout, speed)
     if provider == "yuntts_edge":
@@ -250,15 +259,21 @@ def _split_long(text: str, limit: int = _TTS_MAX_CHARS) -> list[str]:
 
 def synthesize(segments: list[dict], provider: str, api_key: str | None,
                out_dir: Path, voice: str | None = None, appid: str | None = None,
-               model: str | None = None, timeout: float = 120.0, speed: float = 1.0) -> TTSResult:
+               model: str | None = None, timeout: float = 120.0, speed: float = 1.0,
+               emotion: str | None = None) -> TTSResult:
     """把分段文本逐段合成，拼接为单一音频文件。
 
     segments: [{"text": "..."}, ...]（复用 F 模块产物）
     api_key 为空 → 抛 TTSUnavailable，编排降级为手动上传音频。
+    emotion 非空时火山多情感音色启用情绪（不平读）；未显式传则按所选音色自动推断。
     返回 TTSResult，audio_path 指向拼接后的整段音频。
     """
     if not api_key and provider != "edge_local":
         raise TTSUnavailable("未配置 TTS API Key")
+    # 未显式指定情感时，按所选音色自动带上其默认情感（多情感音色才有，普通音色为 None）。
+    if emotion is None:
+        from app.services import voices as voices_svc
+        emotion = voices_svc.emotion_for(voice)
 
     # 过滤：排除空白段、纯标点碎片段（火山对纯标点报 3011 No readable text）；
     # 再把超长段二次切分到 TTS 安全长度（超长会被合成成大段静音）。
@@ -288,7 +303,7 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
         for text in pieces:
             p = out_dir / f"seg_{piece_idx:03d}.mp3"
             _synth_one_checked(text, provider, api_key, voice, appid, model,
-                               timeout, speed, p)
+                               timeout, speed, p, emotion=emotion)
             # 每段单独去残留长静音（火山偶发的尾部静音填充），保证段时长真实、与字幕对齐。
             # 不在拼接后整条去静音——那会打乱"段时长↔字幕"的对应关系，导致字幕错位。
             _remove_long_silence(p)
@@ -345,8 +360,10 @@ def synth_preview(provider: str, api_key: str | None, voice: str | None = None,
     """试听：合成一句短文本，返回 mp3 字节（不落盘），供前端直接播放。"""
     if not api_key and provider != "edge_local":
         raise TTSUnavailable("未配置 TTS API Key")
+    from app.services import voices as voices_svc
     audio = _synth_one("你好，这是配音试听效果。", provider, api_key, voice,
-                       appid, model, timeout, speed)
+                       appid, model, timeout, speed,
+                       emotion=voices_svc.emotion_for(voice))
     if not audio:
         raise TTSError("E6209: TTS 返回空音频")
     return audio
@@ -398,7 +415,7 @@ def _silence_ratio(path: Path) -> float:
 
 
 def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
-                       timeout, speed, out_path: Path) -> None:
+                       timeout, speed, out_path: Path, emotion: str | None = None) -> None:
     """合成单段并写盘；若产出异常音频（火山偶发返回不完整/大段静音），自动重试，最多 4 次。
     取多次结果里"最接近正常语速"的一版，避免坏结果进成品。
 
@@ -411,7 +428,8 @@ def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
     expect = len(text) / 5.0  # 正常时长估计（5 字/秒）
     best = None              # (越小越好的偏差, 音频字节)
     for attempt in range(4):
-        audio = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed)
+        audio = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed,
+                           emotion=emotion)
         out_path.write_bytes(audio)
         dur = _probe_duration(out_path)
         cps = (len(text) / dur) if dur > 0 else 999

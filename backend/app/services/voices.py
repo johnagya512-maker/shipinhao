@@ -49,12 +49,12 @@ VOICE_LIBRARY = [
     {"id": "zh_male_yuangulaoyeye_moon_bigtts", "name": "粤语老爷", "tag": "粤语·港味", "category": "dialect"},
 
     # ── 多情感 ──
-    {"id": "zh_female_roumeinvyou_emo_v2_mars_bigtts", "name": "柔美女友", "tag": "可调情绪", "category": "emotion"},
-    {"id": "zh_male_beijingxiaoye_emo_mars_bigtts", "name": "北京小爷", "tag": "可调情绪", "category": "emotion"},
-    {"id": "zh_female_jiaohuanvsheng_emo_mars_bigtts", "name": "娇憨女声", "tag": "可调情绪", "category": "emotion"},
-    {"id": "zh_male_yangguangqingnian_emo_v2_mars_bigtts", "name": "阳光青年(情感)", "tag": "可调情绪", "category": "emotion"},
-    {"id": "zh_female_meilinvyou_emo_v2_mars_bigtts", "name": "魅力女友(情感)", "tag": "可调情绪", "category": "emotion"},
-    {"id": "zh_male_junlangnanyou_emo_v2_mars_bigtts", "name": "俊朗男友", "tag": "可调情绪", "category": "emotion"},
+    {"id": "zh_female_roumeinvyou_emo_v2_mars_bigtts", "name": "柔美女友", "tag": "可调情绪", "category": "emotion", "emotion": "tender"},
+    {"id": "zh_male_beijingxiaoye_emo_mars_bigtts", "name": "北京小爷", "tag": "可调情绪", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_female_jiaohuanvsheng_emo_mars_bigtts", "name": "娇憨女声", "tag": "可调情绪", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_male_yangguangqingnian_emo_v2_mars_bigtts", "name": "阳光青年(情感)", "tag": "可调情绪", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_female_meilinvyou_emo_v2_mars_bigtts", "name": "魅力女友(情感)", "tag": "可调情绪", "category": "emotion", "emotion": "tender"},
+    {"id": "zh_male_junlangnanyou_emo_v2_mars_bigtts", "name": "俊朗男友", "tag": "可调情绪", "category": "emotion", "emotion": "tender"},
 
     # ── 视频配音 / 解说旁白（扩充）──
     {"id": "zh_male_changtianyi_mars_bigtts", "name": "长天意", "tag": "纪录片·大气旁白", "category": "narration"},
@@ -121,8 +121,11 @@ EDGE_VOICE_LIBRARY = [
     # 方言
     {"id": "zh-CN-shaanxi-XiaoniNeural", "name": "晓妮", "tag": "陕西·方言", "category": "dialect"},
     {"id": "zh-HK-HiuMaanNeural", "name": "曉曼", "tag": "粤语·女声", "category": "dialect"},
+    {"id": "zh-HK-HiuGaaiNeural", "name": "曉佳", "tag": "粤语·女声", "category": "dialect"},
     {"id": "zh-HK-WanLungNeural", "name": "雲龍", "tag": "粤语·男声", "category": "dialect"},
     {"id": "zh-TW-HsiaoChenNeural", "name": "曉臻", "tag": "台湾·女声", "category": "dialect"},
+    {"id": "zh-TW-HsiaoYuNeural", "name": "曉雨", "tag": "台湾·女声", "category": "dialect"},
+    {"id": "zh-TW-YunJheNeural", "name": "雲哲", "tag": "台湾·男声", "category": "dialect"},
 ]
 
 
@@ -132,6 +135,18 @@ def library_for(provider: str | None):
     if provider in ("yuntts_edge", "edge_local"):
         return EDGE_VOICE_LIBRARY, False
     return VOICE_LIBRARY, True
+
+
+# voice_id → 该音色支持的默认 emotion（仅火山多情感音色有；其余 None）。
+# 供 TTS 合成时自动带上 enable_emotion+emotion，让声音有情绪起伏而非平读。
+_VOICE_EMOTION = {v["id"]: v["emotion"] for v in VOICE_LIBRARY if v.get("emotion")}
+
+
+def emotion_for(voice_id: str | None) -> str | None:
+    """返回该音色的默认 emotion（火山多情感音色），非情感音色返回 None。"""
+    if not voice_id:
+        return None
+    return _VOICE_EMOTION.get(voice_id)
 
 
 # ── 按账号探活：音色授权是按火山账号的，库里是候选清单，实际可用性需用当前凭证试合成 ──
