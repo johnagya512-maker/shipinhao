@@ -84,6 +84,19 @@ TEMPLATES: dict[str, dict] = {
 
 DEFAULT_TEMPLATE = "classic"
 
+# 全局默认字幕样式：所有模板统一套用，省得每次在剪映里手动调位置/字体/描边。
+# position_y：剪映竖屏坐标，0=画面正中，负=下移，正=上移；-0.72≈下三分之一(短视频惯例)。
+# font：剪映字体枚举中文名（pyJianYingDraft.FontType 成员），缺字体时自动回退默认字体。
+# size：剪映字号刻度(非磅)；color/border：RGB 0~1。模板自带 subtitle 的字段会覆盖这里同名项。
+DEFAULT_SUBTITLE = {
+    "size": 8.0,
+    "color": (1.0, 1.0, 1.0),
+    "border": (0.0, 0.0, 0.0),
+    "position_y": -0.72,
+    "font": "思源中宋",
+    "align": 1,
+}
+
 
 def list_templates() -> list[dict]:
     """前端渲染用：返回 [{key, name, desc}]，保持定义顺序。"""
@@ -119,5 +132,10 @@ def pick_transition(template_key: str, seed: int, index: int) -> str | None:
 
 
 def subtitle_style(template_key: str) -> dict | None:
-    """字幕样式参数 dict；默认样式返回 None。"""
-    return _get(template_key)["subtitle"]
+    """字幕样式参数 dict。以全局 DEFAULT_SUBTITLE 打底（统一位置/字体/描边，
+    免得每次在剪映手动调），模板自带 subtitle 的同名字段覆盖默认值。"""
+    conf = _get(template_key)["subtitle"]
+    merged = dict(DEFAULT_SUBTITLE)
+    if conf:
+        merged.update(conf)
+    return merged

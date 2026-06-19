@@ -94,7 +94,7 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
     # 字幕轨
     if enable_subtitles and segments:
         import re as _re
-        style, border = _subtitle_style(draft, tpl.subtitle_style(tmpl))
+        style, border, sub_extra = _subtitle_style(draft, tpl.subtitle_style(tmpl))
         if aligned:
             # 分镜对齐：第 i 段字幕直接用第 i 张图的时间区间（== 第 i 段配音）。
             # 每段文字按 ≤12 字切成多条短字幕，在该分镜区间内按字数比例平分。
@@ -106,7 +106,7 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
                     continue
                 seg_start_us, seg_end_us = img_starts[idx]
                 _emit_caption_chunks(script, text, seg_start_us, seg_end_us,
-                                     style, border)
+                                     style, border, sub_extra)
         else:
             # 老逻辑：字幕按各段配音真实时长对齐（与图片轨各算各的）。
             sub_segs = [s for s in segments
@@ -120,16 +120,27 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
                 if seg_end_us <= seg_start_us:
                     seg_end_us = seg_start_us + 1
                 _emit_caption_chunks(script, s["text"], seg_start_us, seg_end_us,
-                                     style, border)
+                                     style, border, sub_extra)
 
     return round(audio_total, 2), dropped
 
 
-def _emit_caption_chunks(script, text, seg_start_us, seg_end_us, style, border):
+def _emit_caption_chunks(script, text, seg_start_us, seg_end_us, style, border, extra=None):
     """把一段字幕文字按 ≤12 字切成多条短字幕，在 [seg_start_us, seg_end_us] 区间内
     按字数比例平分。用整数微秒累进、下一条紧接上一条结束，避免取整后端点重叠
-    （剪映字幕轨不允许重叠，会抛 SegmentOverlap）。"""
+    （剪映字幕轨不允许重叠，会抛 SegmentOverlap）。
+    extra: {font, position_y} —— 字体与垂直位置（统一默认，免得每次在剪映手动调）。"""
     from pyJianYingDraft import TextSegment, Timerange
+    extra = extra or {}
+    # 垂直位置：把 position_y 包成 ClipSettings(transform_y)。剪映 y 负=下移。
+    clip = None
+    if extra.get("position_y") is not None:
+        try:
+            from pyJianYingDraft import ClipSettings
+            clip = ClipSettings(transform_y=float(extra["position_y"]))
+        except Exception:
+            clip = None
+    font = extra.get("font")
     caps = _split_caption(text, max_chars=12)
     total_chars = sum(len(c) for c in caps) or 1
     span = seg_end_us - seg_start_us
@@ -144,6 +155,10 @@ def _emit_caption_chunks(script, text, seg_start_us, seg_end_us, style, border):
             kw["style"] = style
         if border is not None:
             kw["border"] = border
+        if font is not None:
+            kw["font"] = font
+        if clip is not None:
+            kw["clip_settings"] = clip
         script.add_segment(TextSegment(cap, Timerange(cur, du), **kw), "subtitle")
         cur = nxt
 
@@ -329,9 +344,10 @@ def _apply_transition(seg, draft, name):
 
 
 def _subtitle_style(draft, conf):
-    """模板字幕样式 dict → (TextStyle|None, TextBorder|None)。conf 为空返回 (None,None)。"""
+    """模板字幕样式 dict → (TextStyle|None, TextBorder|None, extra)。conf 为空返回 (None,None,{})。
+    extra 携带 font(FontType|None) 和 position_y(float|None)，由调用方构造 TextSegment 时用。"""
     if not conf:
-        return None, None
+        return None, None, {}
     style = border = None
     try:
         skw = {}
@@ -351,4 +367,14 @@ def _subtitle_style(draft, conf):
             border = draft.TextBorder(color=tuple(conf["border"]))
     except Exception:
         border = None
-    return style, border
+    # 字体：按中文枚举名取 FontType，缺字体/版本差异时回退默认（不阻断）。
+    extra = {}
+    fname = conf.get("font")
+    if fname:
+        try:
+            extra["font"] = getattr(draft.FontType, fname)
+        except Exception:
+            extra["font"] = None
+    if conf.get("position_y") is not None:
+        extra["position_y"] = float(conf["position_y"])
+    return style, border, extra
