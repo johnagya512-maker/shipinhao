@@ -51,6 +51,7 @@ def _to_out(cfg: Config) -> ConfigOut:
         default_image_gen_mode=getattr(cfg, "default_image_gen_mode", None) or "per_image",
         image_base_url=getattr(cfg, "image_base_url", None) or "",
         image_unit_price=(float(p) if (p := getattr(cfg, "image_unit_price", None)) is not None else None),
+        image_presets=getattr(cfg, "image_presets", None) or [],
     )
 
 
@@ -161,6 +162,8 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
     if body.image_unit_price is not None:
         # <=0 视为清空（回退内置缺省价）
         cfg.image_unit_price = body.image_unit_price if body.image_unit_price > 0 else None
+    if body.image_presets is not None:
+        cfg.image_presets = body.image_presets
     db.commit()
     return _to_out(cfg)
 

@@ -30,7 +30,7 @@ class TaskCreate(BaseModel):
     enable_animations: bool = True
     draft_template: str = "classic"      # none|classic|narration|lively|cinematic|random
     creation_mode: str = "same_topic"    # same_topic(拆结构二创) | none(不拆直接改写)
-    image_gen_mode: str = "per_image"    # per_image(逐张,画质优先) | grid(九宫格省成本)
+    image_gen_mode: str = "grid"    # grid(九宫格省成本,默认) | per_image(逐张,画质优先)
     processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
     pause_mode: str = "key_nodes"        # none | key_nodes | every_step | custom
     pause_steps: list[str] = Field(default_factory=list)  # custom 模式勾选的步骤
@@ -61,8 +61,11 @@ class ImageRetryRequest(BaseModel):
 
 class ImageBatchRetryRequest(BaseModel):
     """多张图一起重新组图：传选中的图片下标（封面0、内容图1..、cta末尾）。
-    选中的图合并成一次组图请求生成 → 省请求、风格统一、人物一致。"""
+    选中的图合并成一次组图请求生成 → 省请求、风格统一、人物一致。
+    gen_mode 可选当场指定本次重组方式（grid 九宫格省成本 / per_image 逐张画质优先）；
+    不传则跟随建任务时选的 image_gen_mode。"""
     indices: list[int]
+    gen_mode: str | None = None
 
 
 class StepRerunRequest(BaseModel):
@@ -129,6 +132,8 @@ class ConfigUpdate(BaseModel):
     default_image_gen_mode: str | None = None
     image_base_url: str | None = None
     image_unit_price: float | None = Field(default=None, ge=0)
+    # 配图预设快照列表 [{name, model, base_url, unit_price}, ...]，整列覆盖式保存。
+    image_presets: list[dict] | None = None
 
 
 class ConfigOut(BaseModel):
@@ -158,6 +163,7 @@ class ConfigOut(BaseModel):
     default_image_gen_mode: str = "per_image"
     image_base_url: str = ""
     image_unit_price: float | None = None
+    image_presets: list[dict] = []
 
 
 class EstimateOut(BaseModel):

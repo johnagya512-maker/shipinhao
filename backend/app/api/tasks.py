@@ -132,23 +132,31 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
     if not llm_key:
         raise HTTPException(status_code=400, detail="未配置大模型 API Key，无法生成")
     prov, model = cfg.llm_provider, cfg.llm_model
-    # creation_mode=none 时不拆结构，直接改写；否则先拆骨架再按骨架改写。
+    _mode = body.get("creation_mode") or "same_topic"
+    # lite=手册轻量改写（不拆结构）；none=不拆直接改写；其余=先拆爆款骨架再按骨架重写。
     # 接入 with_retry：第三方网关 504/超时自动重试，和正式任务一致。
     structure = {}
     try:
-        if (body.get("creation_mode") or "same_topic") != "none":
-            (s_out, _s), _ = with_retry(
-                lambda: tm.run_structure(prov, model, llm_key, text), 2)
-            structure = s_out.get("structure") or {}
-        (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
-            prov, model, llm_key, text,
-            target_audience=body.get("target_audience") or "50+女性",
-            title=body.get("title"),
-            track=body.get("track") or "character_story",
-            monetization_mode=body.get("monetization_mode") or "revenue_share",
-            rewrite_strength=body.get("rewrite_strength") or "medium",
-            narrative_perspective=body.get("narrative_perspective") or "auto",
-            structure_guide=structure or None), 2)
+        if _mode == "lite":
+            (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
+                prov, model, llm_key, text,
+                target_audience=body.get("target_audience") or "50+女性",
+                title=body.get("title"), lite=True,
+                keyword=body.get("keyword") or "", author=body.get("author") or ""), 2)
+        else:
+            if _mode != "none":
+                (s_out, _s), _ = with_retry(
+                    lambda: tm.run_structure(prov, model, llm_key, text), 2)
+                structure = s_out.get("structure") or {}
+            (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
+                prov, model, llm_key, text,
+                target_audience=body.get("target_audience") or "50+女性",
+                title=body.get("title"),
+                track=body.get("track") or "character_story",
+                monetization_mode=body.get("monetization_mode") or "revenue_share",
+                rewrite_strength=body.get("rewrite_strength") or "medium",
+                narrative_perspective=body.get("narrative_perspective") or "auto",
+                structure_guide=structure or None), 2)
     except LLMError as e:
         raise HTTPException(status_code=502, detail=f"二创生成失败：{e}"[:200])
     except Exception as e:
@@ -644,9 +652,10 @@ def _resolve_subject(index, sidx, body_prompt, p, sb, style):
 
 
 def _is_char_shot(index, sidx, p, sb):
-    """该图是否人物镜头：优先看 P.prompts[i].has_char；其次 SB.scenes 的 has_character；
-    封面(index==0)默认是人物镜头。决定重试是否带参考图保持主角一致。"""
-    is_char = (index == 0)
+    """该图是否人物镜头：优先看 P.prompts[i].has_char；其次 SB.scenes 的 has_character。
+    图片与分镜一一对应(image[i]=scene[i])，按该分镜的标记决定，不再因"封面"特殊默认人物。
+    决定重试是否带参考图保持主角一致。"""
+    is_char = False
     if p and p.output:
         pl = p.output.get("prompts") or []
         if index < len(pl) and "has_char" in pl[index]:
@@ -675,13 +684,8 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     if cost_svc.daily_cap_reached(db):
         raise HTTPException(429, detail="E_DAILY_CAP: 今日成本已达上限，明日再试或上调上限")
     cfg = db.query(Config).first()
-    # 豆包只走九宫格出图，逐张单图重试已屏蔽（避免逐张放大成本）。请用画廊「勾选多张
-    # 一起重新组图」，一次九宫格请求重生这几张，按 1 张计费。
-    _is_doubao = "seedream" in ((cfg.image_model if cfg else "") or "").lower() or \
-                 "doubao" in ((cfg.image_model if cfg else "") or "").lower()
-    if _is_doubao:
-        raise HTTPException(400, detail="E_GRID_ONLY: 豆包为九宫格省成本模式，"
-                                        "请勾选要重做的图用「一起重新组图」，不支持单张换图")
+    # 单张重试 = 只重生这一张、按 1 张计费，不会放大成本，故豆包也放开（之前误屏蔽了）。
+    # 想省成本、风格统一可改用「一起重新组图」；想精修某一张就用这里的单张换图。
     e = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
     p = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
     sb = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
@@ -694,7 +698,7 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     sub_type = img.get("sub_type", "content")
     # 该任务的统一画风（三层包裹），保证重试图与其它图风格一致。
     style = tracks.get_style(task.image_style, task.track)
-    sidx = index - 1  # 内容图在 scenes 里的下标 = 图片下标 - 1（封面占 0）
+    sidx = index  # 图片与分镜严格一一对应：image[i]=scene[i]（不再有独立封面占下标0）
 
     # 取「裸主体」(不含风格包裹)：优先请求里的新词，否则用 SB.scenes 的 desc_prompt。
     # 注意 P.prompts[i].prompt 是 wrap 过的完整提示词，不能直接当主体（会双重套风格）。
@@ -745,32 +749,36 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     def _is_audit(rsn):
         return rsn and ("sensitive" in rsn.lower() or "审核" in rsn or "拒绝" in rsn)
 
-    # 若失败原因是内容审核拦截：自动用 LLM 把「主体」改写成安全版本，再套同一风格生成。
-    # 这才是真正的「重新生成提示词并重试」——只重试同一句对被审核拦的词没用。
-    # 最多改写 3 次，一次比一次激进（逐步抛弃地图/政治/暴力等触发元素）。
+    # 手动点重试 = 用户主动的一次操作，目标「点一次就出图」，但要尽量【保住人物和剧情】，
+    # 不能一上来就降级成空镜（书桌/窗景那种没人物没情节、和文案脱节的画面）。
+    # 故走【阶梯式】改写：第1级含蓄改写(保留人物/场景/情绪，只柔化敏感词) → 仍被拦升第2级
+    # (换掉敏感物件，人物场景还在) → 最后才第3级(纯安全空镜兜底，几乎必过)。
+    # 大多数被拦画面第1级就能过审且保住剧情；只有真·反复过不了审才退化成空镜。
+    # 用户主动触发、最多3级有硬上限，不同于已砍掉的「后台偷偷反复烧」。
     if failed and _is_audit(reason):
         from app.modules import text_modules as tm
         llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
-        base = subject
-        for attempt in range(1, 4):
-            try:
-                safe_subj, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
-                                                   llm_key, base, attempt=attempt)
-                safe_subj = _sanitize_imagery(safe_subj)
-            except Exception as ex:
-                reason = reason or f"提示词安全改写失败：{ex}"
-                break
-            if not safe_subj or safe_subj == subject:
-                base = safe_subj or base
-                continue
-            result = _gen(safe_subj)
-            subject = safe_subj
-            rewritten = True
-            failed = bool(result.meta.get("fallback"))
-            reason = result.meta.get("reason") if failed else None
-            if not failed or not _is_audit(reason):
-                break  # 成功，或换成了非审核类错误，停止改写
-            base = safe_subj  # 仍被审核拦，基于这版继续更激进改写
+        if llm_key:
+            base = subject
+            for attempt in range(1, 4):  # 1→2→3 递进，保人物剧情优先，空镜兜底
+                try:
+                    safe_subj, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
+                                                       llm_key, base, attempt=attempt)
+                    safe_subj = _sanitize_imagery(safe_subj)
+                except Exception as ex:
+                    reason = reason or f"提示词安全改写失败：{ex}"
+                    break
+                if not safe_subj or safe_subj == base:
+                    base = safe_subj or base
+                    continue
+                result = _gen(safe_subj)
+                subject = safe_subj
+                rewritten = True
+                failed = bool(result.meta.get("fallback"))
+                reason = result.meta.get("reason") if failed else None
+                if not failed or not _is_audit(reason):
+                    break  # 成功，或换成非审核类错误，停止升级
+                base = safe_subj  # 仍被审核拦，基于这版继续更激进改写
 
     # 回存：裸主体写回 SB.scenes 和 P.scenes（画廊读这个显示）；
     # wrap 过的完整提示词写回 P.prompts（流水线/再生成读这个）。保持两处一致。
@@ -878,7 +886,7 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     tasks, subjects = [], {}
     for index in sel:
         img = images[index]
-        sidx = index - 1  # 内容图在 scenes 的下标 = 图片下标 - 1（封面占 0）
+        sidx = index  # 图片与分镜严格一一对应：image[i]=scene[i]
         subject = _resolve_subject(index, sidx, None, p, sb, style)
         if not subject:
             raise HTTPException(400, detail=f"第 {index} 张缺少提示词，无法生成")
@@ -898,13 +906,22 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     # 组图生成（锁外，慢且不碰共享数据）。是否走九宫格尊重建任务时选的 image_gen_mode：
     # grid→九宫格(省成本)，per_image→逐张重组(画质优先/黑白等强约束更稳)。
     # 之前无脑按模型名强制九宫格，导致选了逐张的任务重组时被塞进九宫格、黑白失效又易连带失败。
-    _mode = (getattr(task, "image_gen_mode", None) or "per_image")
+    # 出图方式：本次请求显式指定的 gen_mode 优先，否则跟随建任务时选的 image_gen_mode。
+    # 让用户在画廊当场切换——九宫格省钱、逐张画质优先(黑白等强约束更稳)。
+    _mode = (body.gen_mode or getattr(task, "image_gen_mode", None) or "per_image")
+    if _mode not in ("grid", "per_image"):
+        _mode = "per_image"
     _grid = (_mode == "grid")
-    # 九宫格失败补救：整组被审核拒时, LLM 改写每格裸 brief 重发（与编排器同口径）。
+    # 手动重组 = 用户主动的一次操作，目标「点一次就出图」，但要尽量【保住人物和剧情】。
+    # 九宫格/组图被审核拦截时，按 render_images_grouped 内部的阶梯(attempt=1→2)逐级改写：
+    # 第1级含蓄改写保留人物场景 → 仍被拦才第2级换敏感物件。不一上来就降级成空镜，
+    # 避免画面和文案脱节。有硬上限(内部最多2次改写)，是用户触发的救援，
+    # 不同于已砍掉的「后台首次生成偷偷反复烧」。无 LLM Key 则不改写。
     from app.modules import text_modules as _tm
     _llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
     def _grid_rewrite(brief, attempt):
         try:
+            # 用传入的真实 attempt，走阶梯式改写（保人物剧情优先），不一步跳到空镜。
             safe, _ = _tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
                                            _llm_key, brief, attempt=attempt)
             return safe or brief
@@ -931,7 +948,7 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         sbo = dict(sb2.output) if sb2 and sb2.output else None
         for k, index in enumerate(sel):
             result = results[k]
-            sidx = index - 1
+            sidx = index
             subject = subjects[index]
             failed = bool(result.meta.get("fallback"))
             reason = result.meta.get("reason") if failed else None

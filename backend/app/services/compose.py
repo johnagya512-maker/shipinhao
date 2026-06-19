@@ -21,7 +21,10 @@ def _get_output(db: Session, task_id: str, module: str):
 
 
 def _load_assets(db: Session, task_id: str):
-    """取 E、F 产物，返回 (image_paths, weights, segments)。"""
+    """取 E、F、T 产物，返回 (image_paths, weights, segments, seg_durations)。
+    字幕/配音分段【优先用 T 产物的分镜分段】(seg_texts，与图片同源 → 图-字-音三轨一一对齐)，
+    并带上每个分镜的真实配音时长 seg_durations（让图片轨/字幕轨共用同一套分镜时间）。
+    T 缺失或无分镜分段（老任务/手动上传音频）时回退 F 的 segments、seg_durations 为 None。"""
     e_out = _get_output(db, task_id, "E")
     f_out = _get_output(db, task_id, "F")
     if not e_out or not f_out:
@@ -29,7 +32,18 @@ def _load_assets(db: Session, task_id: str):
     images = e_out["images"]
     image_paths = [img["path"] for img in images]
     weights = [float(img.get("suggested_duration", 5)) for img in images]
-    return image_paths, weights, f_out["segments"]
+
+    t_out = _get_output(db, task_id, "T")
+    seg_texts = (t_out or {}).get("seg_texts") if t_out else None
+    seg_durations = (t_out or {}).get("seg_durations") if t_out else None
+    if seg_texts and (t_out or {}).get("seg_source") == "scene":
+        # 分镜源：字幕分段=分镜 cap，与图片一一对应。
+        segments = [{"text": t} for t in seg_texts]
+    else:
+        # 回退老路：F 的口播分段（手动上传音频、SB 失败等）。
+        segments = f_out["segments"]
+        seg_durations = None
+    return image_paths, weights, segments, seg_durations
 
 
 def compose_video(db: Session, task_id: str, audio_path: str,
@@ -41,11 +55,11 @@ def compose_video(db: Session, task_id: str, audio_path: str,
     if not task:
         raise ValueError("任务不存在")
 
-    image_paths, weights, segments = _load_assets(db, task_id)
+    image_paths, weights, segments, seg_durations = _load_assets(db, task_id)
 
     if output_mode == "jianying":
         return _compose_jianying(db, task, task_id, image_paths, weights, segments,
-                                 audio_path, enable_subtitles, enable_animations)
+                                 audio_path, enable_subtitles, enable_animations, seg_durations)
     return _compose_mp4(db, task, task_id, image_paths, weights, segments,
                         audio_path, enable_subtitles, enable_animations, bgm_path)
 
@@ -67,7 +81,7 @@ def _finish(db, task, task_id, asset_type, file_path, mime, meta, output):
 
 
 def _compose_jianying(db, task, task_id, image_paths, weights, segments,
-                      audio_path, subs, anim) -> dict:
+                      audio_path, subs, anim, seg_durations=None) -> dict:
     draft_dir = storage_root(db) / task_id / "jianying"
     cfg = db.get(Config, 1)
     jianying_dir = (cfg.jianying_draft_dir or "").strip() if cfg else ""
@@ -84,7 +98,8 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
                                     draft_name=name, enable_subtitles=subs,
                                     enable_animations=anim,
                                     jianying_dir=jianying_dir or None,
-                                    template=template, seed=seed)
+                                    template=template, seed=seed,
+                                    seg_durations=seg_durations)
     try:
         r = _try_build(draft_name)
     except Exception as e:

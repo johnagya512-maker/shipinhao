@@ -176,24 +176,26 @@ export const api = {
     request<TaskOut>(`/tasks/${id}/scenes`, {
       method: 'PATCH', body: JSON.stringify({ scenes }),
     }),
-  // 单张图重试：只重生成第 index 张，可带新提示词。失败返回原因；
-  // 若被审核拦截会自动改写提示词重试，rewritten=true 时 new_prompt 是改写后的词。
+  // 单张图重试：只重生成第 index 张，可带新提示词。一次高质量尝试，失败返回原因，
+  // 不在后台自动改写重生——是否再试、是否改文案由用户决定。
   retryImage: (id: string, index: number, prompt?: string) =>
     request<{ index: number; image: GeneratedImage; failed: boolean; reason?: string | null
       rewritten?: boolean; new_prompt?: string | null }>(
       `/tasks/${id}/images/${index}/retry`, {
-        // 单张生图可能较慢（含审核改写重试），给 3 分钟，别用默认 120s
+        // 单张生图可能较慢，给 3 分钟，别用默认 120s
         method: 'POST', body: JSON.stringify({ prompt: prompt ?? null }),
         signal: AbortSignal.timeout(180_000),
       }),
   // 多张图一起重新组图：传选中的图片下标，后端合并成一次组图请求生成（省请求、
   // 风格统一、人物一致）。后端按 ref 把图合并成最多两组、各一次请求出多张并发下载，
   // 不随张数线性变慢，固定给 5 分钟超时（默认 120s 不够组图出图+下载）。
-  batchRetryImages: (id: string, indices: number[]) =>
+  // genMode 可当场指定本次出图方式（grid 九宫格省成本 / per_image 逐张画质优先）；
+  // 不传则跟随建任务时选的模式。
+  batchRetryImages: (id: string, indices: number[], genMode?: string) =>
     request<{ count: number; cost?: number; results: { index: number; failed: boolean
       reason?: string | null; image: GeneratedImage }[] }>(
       `/tasks/${id}/images/batch-retry`, {
-        method: 'POST', body: JSON.stringify({ indices }),
+        method: 'POST', body: JSON.stringify({ indices, gen_mode: genMode ?? null }),
         signal: AbortSignal.timeout(300_000),
       }),
   // 单步重跑：清掉该步及下游产物，从该步重算（上游走缓存）。

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -NoProfile -Command \"Stop-Process -Name 'shipinhao-backend','视频号图书带货AI' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2; robocopy 'D:\\\\chennigongzuoshi\\\\shipinhao\\\\desktop\\\\release\\\\win-unpacked' 'D:\\\\下载\\\\shipinhao-desktop' /MIR /NFL /NDL /NJH /NJS /NP | Out-Null; Start-Sleep -Seconds 1; exit 0\")",
+      "Bash(powershell -NoProfile -Command \"explorer.exe 'D:\\\\下载\\\\shipinhao-desktop\\\\视频号图书带货AI.exe'; exit 0\")",
+      "Bash(python -m py_compile app/services/orchestrator.py app/modules/text_modules.py app/modules/prompts.py app/services/tts.py app/services/compose.py app/modules/jianying.py app/modules/image_module.py app/api/tasks.py)"
+    ]
+  }
+}

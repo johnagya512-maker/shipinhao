@@ -41,9 +41,11 @@ def run_safe_rewrite(provider, model, key, prompt_text, attempt=1):
     return (new_prompt or prompt_text), r
 
 
-def run_clean(provider, model, key, transcript, keyword=None, title=None, author=None):
+def run_clean(provider, model, key, transcript, keyword=None, title=None, author=None,
+              protected_terms=None):
     prompt = _render(prompts.MODULE_A, transcript=transcript, keyword=keyword,
-                     title=title, author=author)
+                     title=title, author=author,
+                     protected_terms=protected_terms or "（无）")
     r: LLMResult = call_llm(provider, model, key, prompt)
     return {"cleaned_text": r.text.strip()}, r
 
@@ -138,11 +140,19 @@ def _structure_to_guide(structure: dict) -> str:
 def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性", title=None,
                 track="character_story", monetization_mode="revenue_share",
                 rewrite_strength="medium", narrative_perspective="auto",
-                structure_guide=None):
+                structure_guide=None, lite=False, keyword="", author="", rewrite_notes=""):
     """B 改写。按赛道选提示词；人物故事赛道按变现模式切换结尾引导。
     rewrite_strength/narrative_perspective 作为附加指令注入提示词尾部。
-    structure_guide（dict 骨架）非空时，要求改写严格复刻该爆款结构。"""
+    structure_guide（dict 骨架）非空时，要求改写严格复刻该爆款结构。
+    lite=True 走手册轻量改写版（MODULE_B_LITE）：只改正文主体、保留原稿爆点、不激进重写、
+    不杜撰，过查重即可；此模式忽略赛道/骨架/强度档（手册轻量流是单一通用提示词）。"""
     from app.modules import tracks
+    if lite:
+        prompt = _render(prompts.MODULE_B_LITE, cleaned_transcript=cleaned_text,
+                         keyword=keyword or "", title=title or "", author=author or "",
+                         rewrite_notes=rewrite_notes or "（无）")
+        r = call_llm(provider, model, key, prompt)
+        return {"script": r.text.strip()}, r
     extra = _rewrite_directives(rewrite_strength, narrative_perspective)
     tk = tracks.get_track(track)
     # 结尾引导按变现模式切换，所有赛道通用：创作分成=引爆互动；图书带货=带出书籍。
@@ -181,6 +191,17 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
     return {"script": r.text.strip()}, r
 
 
+def run_dedup(provider, model, key, cleaned_text, keyword="", title="", author="",
+              protected_terms=None):
+    """C 轻量去重微调（手册）：同号/矩阵号二次发布同一篇爆款前用，做克制微调避免判搬运。
+    不在主流水线，独立调用。保留爆点/节奏/事实，字数差异建议 ≤8%。返回 {"script": 微调后正文}。"""
+    prompt = _render(prompts.MODULE_C, cleaned_transcript=cleaned_text,
+                     keyword=keyword or "", title=title or "", author=author or "",
+                     protected_terms=protected_terms or "（无）")
+    r = call_llm(provider, model, key, prompt)
+    return {"script": r.text.strip()}, r
+
+
 # 改写强度 / 叙事视角 → 注入提示词的附加指令。
 _STRENGTH_TEXT = {
     "light": "改写力度轻：尽量保留原文措辞与结构，仅做必要的口播顺滑化。",
@@ -200,11 +221,35 @@ def _rewrite_directives(strength: str, perspective: str) -> str:
     return "\n".join(lines)
 
 
-def run_identify(provider, model, key, script_text, min_confidence=0.5):
-    prompt = _render(prompts.MODULE_D, script_text=script_text, min_confidence=min_confidence)
+def run_identify(provider, model, key, script_text, min_confidence=0.5,
+                 existing_title="", existing_author="", keyword="",
+                 source_title="", source_description=""):
+    """D 识别书籍。提示词按手册：单本输出 {book_title,book_author,confidence,evidence}，
+    作者带全角国别前缀、书名去书名号/营销词。
+    为兼容下游（pick_main_book / build_image_prompts 读 books 列表的 title/category），
+    把单本结果映射回 {"books":[{title,author,confidence,extracted_from,category}]}。"""
+    prompt = _render(prompts.MODULE_D, script_text=(script_text or "")[:2600],
+                     min_confidence=min_confidence,
+                     existing_title=existing_title or "", existing_author=existing_author or "",
+                     keyword=keyword or "", source_title=source_title or "",
+                     source_description=source_description or "")
     r = call_llm(provider, model, key, prompt)
     data = _extract_json(r.text)
-    return {"books": data.get("books", [])}, r
+    # 兼容两种返回：手册单本对象 / 旧多本数组。统一归一成 books 列表给下游。
+    if isinstance(data, dict) and "books" in data:
+        books = data.get("books") or []
+    else:
+        title = (data.get("book_title") or "").strip()
+        books = []
+        if title:
+            books = [{
+                "title": title,
+                "author": (data.get("book_author") or "").strip(),
+                "confidence": data.get("confidence", 0),
+                "extracted_from": (data.get("evidence") or "").strip(),
+                "category": "",
+            }]
+    return {"books": books}, r
 
 
 def run_split(provider, model, key, script_text, keyword=None, title=None, target_duration=26):
@@ -266,6 +311,115 @@ def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus=""
             diagnostic["fell_back"] = True
 
     return {"scenes": scenes, "diagnostic": diagnostic}, r
+
+
+def split_for_storyboard(script_text: str, target_chars: int = 40,
+                         max_chars: int = 60) -> list[str]:
+    """把文案按句子合并成约 target_chars 字一段的【原文切片】（一字不改），用于
+    "配音严格用原文"模式：配音/字幕念这些切片，SB 为每片配画面，按段一一对齐。
+    规则：先按句末标点切句，再贪心合并相邻短句到接近 target_chars；单句超 max_chars
+    才在次级标点（逗号等）处断。保证每段都是原文连续片段、不增删字。"""
+    import re as _re
+    text = (script_text or "").strip()
+    if not text:
+        return []
+    # 按句末标点切句（保留标点），跨行也算句界
+    raw = _re.split(r"(?<=[。！？!?…])", _re.sub(r"[\r\n]+", "", text))
+    sentences = [s.strip() for s in raw if s.strip()]
+    if not sentences:
+        sentences = [text]
+
+    # 单句过长：在次级标点处再切，避免一段太长
+    pieces: list[str] = []
+    for s in sentences:
+        if len(s) <= max_chars:
+            pieces.append(s)
+            continue
+        sub = _re.split(r"(?<=[，,、；;：:])", s)
+        buf = ""
+        for p in sub:
+            if not p:
+                continue
+            if len(buf) + len(p) <= max_chars:
+                buf += p
+            else:
+                if buf:
+                    pieces.append(buf)
+                buf = p
+        if buf:
+            pieces.append(buf)
+
+    # 贪心合并相邻短句到接近 target_chars（不超过 max_chars）
+    out: list[str] = []
+    buf = ""
+    for p in pieces:
+        if not buf:
+            buf = p
+        elif len(buf) + len(p) <= max_chars and len(buf) < target_chars:
+            buf += p
+        else:
+            out.append(buf)
+            buf = p
+    if buf:
+        out.append(buf)
+    return out
+
+
+def run_storyboard_for_segments(provider, model, key, segments, rewrite_focus="",
+                                character_desc=None):
+    """【配音严格用原文】模式的画面脚本：输入已切好的原文段列表，为每段配 desc_prompt。
+    cap 由程序强制填为原文段（LLM 不碰文案），保证配音/字幕念的就是你的原文、一字不改，
+    且画面与配音按段号一一对齐。
+    segments: [{"text": "原文段"}, ...]。返回 {"scenes":[{cap,desc_prompt,has_character}],...}, r。
+    LLM 输出数量/解析异常时兜底：用原文段做 cap、desc_prompt 兜底为原文截断。"""
+    texts = [str((s.get("text") if isinstance(s, dict) else s) or "").strip() for s in segments]
+    texts = [t for t in texts if t]
+    n = len(texts)
+    if n == 0:
+        return {"scenes": [], "diagnostic": {"fell_back": True}}, LLMResult(text="", tokens_in=0, tokens_out=0)
+
+    if character_desc:
+        char_clause = (f"主角形象统一为：{character_desc}。"
+                       "在 has_character=true 的段里，把这个主角特征自然融进 desc_prompt，"
+                       "保证是同一个人；不同段只变姿态/角度/环境/景别。")
+    else:
+        char_clause = "若有主角贯穿，保持其外貌在各段一致（同一发型/脸型/服饰风格），只变姿态角度环境。"
+
+    numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+    prompt = _render(prompts.MODULE_S_BY_SEG, n_scenes=n, rewrite_focus=rewrite_focus or "",
+                     char_clause=char_clause, numbered_segments=numbered)
+    r = call_llm(provider, model, key, prompt)
+
+    # 解析 LLM 的画面，按 seg 段号对齐回原文段；缺失的段用兜底画面。cap 一律用原文段。
+    desc_by_seg: dict[int, dict] = {}
+    try:
+        data = _extract_json(r.text)
+        for item in (data.get("scenes") or []):
+            if not isinstance(item, dict):
+                continue
+            seg = item.get("seg")
+            try:
+                idx = int(seg) - 1
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < n:
+                desc_by_seg[idx] = {
+                    "desc_prompt": str(item.get("desc_prompt") or "").strip(),
+                    "has_character": bool(item.get("has_character", True)),
+                }
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    scenes = []
+    for i, text in enumerate(texts):
+        d = desc_by_seg.get(i) or {}
+        dp = d.get("desc_prompt") or text[:40]  # LLM 漏配的段：用原文截断兜底，不留空
+        scenes.append({"id": i + 1, "cap": text,  # cap 强制=原文段，LLM 不碰
+                       "desc_prompt": dp,
+                       "has_character": d.get("has_character", True)})
+    fell_back = len(desc_by_seg) < n
+    return {"scenes": scenes, "diagnostic": {"fell_back": fell_back,
+                                             "missing": n - len(desc_by_seg)}}, r
 
 
 def _parse_scenes(raw) -> list[dict]:

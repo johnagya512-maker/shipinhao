@@ -50,6 +50,73 @@ def _dims_for(aspect_ratio: str | None) -> tuple[int, int]:
     return ASPECT_DIMS.get(aspect_ratio or "9:16", (WIDTH, HEIGHT))
 
 
+# ─── gpt-image 协议分支（与豆包并存，靠模型名分流）───
+# gpt-image 走 OpenAI 兼容协议（中转站如兔子 API），与豆包 Seedream 三处不同：
+# ① payload 字段不同（无 sequential_image_generation/watermark/stream）；
+# ② 尺寸只认固定档位（不能传 1536x2730 这种任意值）；
+# ③ 只回 base64（b64_json），不回 url，须本地解码而非再下载。
+# 图生图（ref_uri 人物一致性、九宫格模板参考图）gpt 走 /v1/images/edits（multipart），
+# 与豆包「JSON 里塞 base64」不兼容，故 gpt 分支暂不传参考图，降级为纯文生图。
+
+def _is_gpt(model: str | None) -> bool:
+    """模型名带 gpt/dall 即走 gpt-image 协议，否则走豆包。"""
+    return bool(model) and ("gpt" in model.lower() or "dall" in model.lower())
+
+
+# gpt-image 支持的尺寸档位（任意值会被拒）。竖版统一用 1024x1536，下游 _normalize 再裁。
+_GPT_SIZE = {"9:16": "1024x1536", "3:4": "1024x1536",
+             "16:9": "1536x1024", "1:1": "1024x1024"}
+
+
+def _gpt_size(aspect_ratio: str | None) -> str:
+    return _GPT_SIZE.get(aspect_ratio or "9:16", "1024x1536")
+
+
+def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
+                 model: str, timeout: float, proxy: str | None,
+                 label: str = "配图") -> list[bytes]:
+    """调 gpt-image 文生图，返回 n 张图的原始字节列表（base64 解码后）。
+    错误语义沿用 ImageError（含审核 audit 标记），与豆包分支保持一致。"""
+    import base64
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": model, "prompt": prompt, "size": size, "n": max(1, n)}
+    _kw = {"timeout": timeout}
+    if proxy:
+        _kw["proxy"] = proxy
+    try:
+        resp = httpx.post(url, json=payload, headers=headers, **_kw)
+    except httpx.TimeoutException as e:
+        raise ImageError(f"{label}超时: {e}", retryable=True)
+    except httpx.RequestError as e:
+        raise ImageError(f"{label}请求错误: {e}", retryable=True)
+    if resp.status_code == 401:
+        raise ImageError("绘图 API Key 无效", retryable=False)
+    if resp.status_code == 429:
+        raise ImageError(f"{label}限流", retryable=True)
+    if resp.status_code >= 500:
+        raise ImageError(f"{label}服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
+    if resp.status_code >= 400:
+        body = resp.text[:300]
+        low = body.lower()
+        # gpt 内容审核：moderation_blocked / safety system 等。可改写救回，标 audit。
+        if ("moderation" in low or "safety" in low or "content_policy" in low
+                or "sensitive" in low):
+            raise ImageError(f"{label}被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
+        raise ImageError(f"{label}被拒 {resp.status_code}: {body}", retryable=False)
+    data = resp.json().get("data") or []
+    out = []
+    for d in data:
+        b64 = d.get("b64_json")
+        if b64:
+            out.append(base64.b64decode(b64))
+        elif d.get("url"):
+            # 个别中转站 gpt 线路仍回 url，兜底下载
+            out.append(httpx.get(d["url"], **_kw).content)
+    if not out:
+        raise ImageError(f"{label}未返回图片", retryable=True)
+    return out
+
+
 def _placeholder(out_path: Path, label: str, color: tuple, size: tuple[int, int] = (WIDTH, HEIGHT)):
     """生成纯色占位图（mock 模式 / 无 Key 时）。"""
     img = Image.new("RGB", size, color)
@@ -120,6 +187,14 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
     # 真实供应商：此处仅给出统一调用骨架，具体协议按 provider 补全。
     try:
         url = _endpoint(provider, base_url)
+        # gpt-image 协议分支（模型名带 gpt/dall）：与豆包不同的 payload/尺寸/取图方式。
+        # gpt 图生图走 /v1/images/edits（multipart），此处暂不接，传了 ref_uri 也降级纯文生图。
+        if _is_gpt(model):
+            imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio), 1,
+                                model, timeout, proxy, label="配图")
+            out_path.write_bytes(imgs[0])
+            _normalize(out_path, size=(w, h), grayscale=grayscale)
+            return ImageResult(str(out_path), sub_type, suggested_duration, {})
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         # 豆包（火山方舟）Seedream 文生图：必须带 model（模型 ID / 接入点 ID）。
         # size 用明确像素，竖版 9:16 且需大于最小像素要求（边界值 3686400 实测不通过，留余量）；
@@ -158,7 +233,9 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
             # 让上层降级占位+LLM改写补救(改个说法就能过)——这才是输入敏感的正确解法。
             raise ImageError(f"配图输入文案被审核拒绝(可改写): {body}", retryable=False, audit=True)
         if "SensitiveContent" in body or "sensitive" in low:
-            raise ImageError(f"配图被内容审核拒绝(可重试): {body}", retryable=True, audit=True)
+            # 输出图片被审核拒绝：不在后台自动退避重试(retryable=False，不触发 IMG_RETRY 反复烧钱)，
+            # 标 audit=True 直接降级占位+原因，等用户在画廊手动「重新生成」。是否再花钱由用户决定。
+            raise ImageError(f"配图被内容审核拒绝(可手动重生): {body}", retryable=False, audit=True)
         # 其他 4xx（model 不对 / 参数不符等）透出真实报错，不可重试。
         raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
 
@@ -252,6 +329,28 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
             res.append(ImageResult(str(op), st, du, {"mock": True, "grid": True}))
         return res
 
+    # gpt-image 九宫格分支：gpt 图生图走 edits 端点，不吃豆包「模板参考图」那套，
+    # 故纯文字让它画规整 3×3（不传模板图），出 1 张正方形大图本地切 ≤9 张（仍按 1 张计费）。
+    # 注：gpt 文字画 3×3 规整度未经长期验证，切图可能偏格；不齐再考虑接 edits 端点。
+    if _is_gpt(model):
+        url = _endpoint(provider, base_url)
+        grid_prompt = (
+            "请把整张正方形图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
+            "用清晰的白色分隔线隔开。在每个格子里按从左到右、从上到下的编号填入"
+            "对应画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
+            + cell_prompt + "\n\n不要在图片里放任何文字说明。"
+        )
+        imgs = _gpt_request(url, api_key, grid_prompt, "1024x1024", 1,
+                            model, timeout, proxy, label="九宫格")
+        raw = out_paths[0].parent / "_grid_raw.png"
+        raw.write_bytes(imgs[0])
+        res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
+        try:
+            raw.unlink()
+        except Exception:
+            pass
+        return res
+
     import base64
     tpl_path = out_paths[0].parent / "_grid_template.png"
     _make_grid_template(tpl_path)
@@ -319,6 +418,26 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
         return res
 
     url = _endpoint(provider, base_url)
+    # gpt-image 组图分支：一次请求 n 张（gpt 单次 n 最多 10），返回 base64 逐张落盘。
+    # gpt 图生图走 edits 端点，此处不接，传了 ref_uri 也降级纯文生图（多张靠同 prompt 求近似一致）。
+    if _is_gpt(model):
+        try:
+            imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio),
+                                min(n, 10), model, timeout, proxy, label="组图")
+        except ImageError:
+            raise
+        res = []
+        for i, op in enumerate(out_paths):
+            if i < len(imgs):
+                op.write_bytes(imgs[i])
+                _normalize(op, size=(w, h), grayscale=grayscale)
+                res.append(ImageResult(str(op), sub_types[i], durations[i], {}))
+            else:
+                _placeholder(op, sub_types[i], (230, 230, 230), size=(w, h))
+                res.append(ImageResult(str(op), sub_types[i], durations[i],
+                                       {"fallback": True, "reason": "gpt组图返回数量不足"}))
+        return res
+
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {"prompt": prompt,
                "size": ASPECT_GEN_SIZE.get(aspect_ratio or "9:16", "1536x2730"),

@@ -22,7 +22,6 @@ from app.modules import tracks
 from app.modules.retry import with_retry
 
 LLM_RETRY = 2
-IMAGE_RETRY = 2
 
 
 class TaskAborted(Exception):
@@ -36,6 +35,11 @@ class _Paused(Exception):
     """内部信号：命中暂停点，需停下等用户确认（非错误）。"""
     def __init__(self, step: str):
         self.step = step
+
+
+class _Cancelled(Exception):
+    """内部信号：用户取消了任务，需立即停下后台 pipeline（非错误，状态已是 cancelled）。"""
+    pass
 
 
 def _step_order(task) -> list[str]:
@@ -87,6 +91,21 @@ def _get_result(db: Session, task_id: str, module: str) -> ModuleResult | None:
     return db.query(ModuleResult).filter_by(task_id=task_id, module=module).first()
 
 
+def _voice_segments_from_scenes(db: Session, task_id: str, fallback_segments: list) -> tuple[list, str]:
+    """配音/字幕分段统一取自分镜 cap（与图片同源 → 图-字-音三轨一一对齐）。
+    从 P 产物读 scenes，每个分镜的 cap 作为一段配音文本；返回 ([{"text": cap}, ...], "scene")。
+    若 P 无 scenes、或所有 cap 为空（SB 失败/老任务）→ 回退 F 的 segments，返回 (segments, "segment")。
+    关键：返回的分段数必须 == 图数（分镜数），compose 才能按下标让图压在对应配音上。"""
+    p = _get_result(db, task_id, "P")
+    scenes = (p.output or {}).get("scenes") if p and p.output else None
+    if scenes:
+        segs = [{"text": str(s.get("cap", "") or "").strip()} for s in scenes]
+        # 只要有任意一段有真实文案就用分镜源；cap 为空的段保留占位（计 0 时长，不打乱下标对齐）。
+        if any(s["text"] for s in segs):
+            return segs, "scene"
+    return fallback_segments, "segment"
+
+
 def _save_result(db: Session, task_id: str, module: str, status: str,
                  output=None, cost=0.0, tokens_in=None, tokens_out=None, retry=0):
     mr = _get_result(db, task_id, module)
@@ -106,64 +125,14 @@ def _save_result(db: Session, task_id: str, module: str, status: str,
     return mr
 
 
-def _rescue_failed_images(db, task, cfg, img_key, images, prompts_list, proxy, started):
-    """逐张模式失败补救：对被内容审核拦截的占位图，自动用 LLM 递进改写提示词重生。
-    最多改写 2 次（一次比一次激进，逐步抛弃敏感元素）；非审核类失败（Key 无效等）不改写。
-    源头已用 SB 强化 + 词典预净化消掉大部分敏感，这里兜底救漏网的，不必等用户手动重试。
-    返回更新后的 images 列表（救回的替换占位图，救不回的保持占位）。"""
-    style = tracks.get_style(task.image_style, task.track)
-    llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
-
-    def _is_audit(rsn):
-        return rsn and ("sensitive" in rsn.lower() or "审核" in rsn or "拒绝" in rsn)
-
-    for i, r in enumerate(images):
-        meta = r.meta or {}
-        if not meta.get("fallback") or not _is_audit(meta.get("reason")):
-            continue  # 只救审核失败的；非审核失败/成功图跳过
-        if i >= len(prompts_list):
-            continue
-        _wrapped, sub_type, out_path, duration, ref_uri = prompts_list[i]
-        # 裸主体：从 wrap 过的 prompt 剥出（去风格三层），作为 LLM 改写基底
-        base = im._strip_wrap(style, _wrapped)
-        for attempt in range(1, 3):
-            try:
-                safe_subj, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
-                                                   llm_key, base, attempt=attempt)
-                safe_subj = im._sanitize_imagery(safe_subj)
-            except Exception:
-                break  # LLM 改写失败，保持占位
-            if not safe_subj or safe_subj == base:
-                continue
-            text = im._wrap(style, safe_subj)
-            if ref_uri:
-                text = im._wrap(style, f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
-                                       f"但改为以下全新画面（不同的姿势、表情、构图）：{safe_subj}")
-            try:
-                new_r = im._gen_with_fallback(cfg.image_provider, img_key, text, sub_type,
-                                              Path(out_path) if not isinstance(out_path, Path) else out_path,
-                                              duration, cfg.image_model,
-                                              aspect_ratio=task.aspect_ratio, ref_uri=ref_uri,
-                                              base_url=getattr(cfg, "image_base_url", None), proxy=proxy,
-                                              grayscale=im.is_monochrome_style(style))
-            except Exception:
-                break
-            base = safe_subj
-            nm = new_r.meta or {}
-            if not nm.get("fallback"):
-                images[i] = new_r  # 救回成功
-                break
-            if not _is_audit(nm.get("reason")):
-                break  # 换成非审核错误，停止
-        try:
-            _check_limits(db, task, started)  # 改写重生也耗时，复查超时/成本上限
-        except TaskAborted:
-            break
-    return images
-
-
 def _check_limits(db: Session, task: Task, started: float):
-    """超时与成本上限检查（PRD 11.2）。"""
+    """超时/成本上限/用户取消检查（PRD 11.2）。所有烧钱步骤前后调用，
+    任一命中即抛异常停下后台 pipeline，避免取消/超限后还继续烧钱。"""
+    # 取消检查：cancel 接口在另一线程改了 DB 状态，本线程的 task 是旧快照，必须重读。
+    # 发现已被取消就立即停（抛 _Cancelled，由上层干净退出，不当失败处理）。
+    db.refresh(task)
+    if task.status == "cancelled":
+        raise _Cancelled()
     if time.time() - started > task.time_limit:
         raise TaskAborted("TIMEOUT", "处理超时")
     if float(task.total_cost) > float(task.cost_limit):
@@ -256,28 +225,39 @@ def run_pipeline(db: Session, task_id: str):
 
         # B 改写（仅 full_auto 跑；semi_auto/direct 直接用清洗稿，不改写）
         if task.processing_mode == "full_auto":
-            # S2 结构拆解：creation_mode != none 时，先拆出爆款结构骨架，
-            # 供 B 改写复刻其节奏。拆解失败不阻断（骨架为空即退回普通改写）。
-            structure = None
-            if getattr(task, "creation_mode", "same_topic") != "none":
-                try:
-                    s_out = _llm_step(db, task, cfg, llm_key, "S2",
-                                      lambda: tm.run_structure(cfg.llm_provider, cfg.llm_model,
-                                                               llm_key, cleaned),
-                                      started, pausable=False)
-                    structure = (s_out or {}).get("structure") or None
-                except Exception:
-                    structure = None
-            b_out = _llm_step(db, task, cfg, llm_key, "B",
-                              lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
-                                                     cleaned, task.target_audience, task.title,
-                                                     track=task.track,
-                                                     monetization_mode=task.monetization_mode,
-                                                     rewrite_strength=task.rewrite_strength,
-                                                     narrative_perspective=task.narrative_perspective,
-                                                     structure_guide=structure),
-                              started)
-            script = b_out["script"]
+            _mode = getattr(task, "creation_mode", "same_topic")
+            if _mode == "lite":
+                # 手册轻量改写：只改正文主体、保留原稿爆点、不激进重写。跳过结构拆解。
+                b_out = _llm_step(db, task, cfg, llm_key, "B",
+                                  lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                         cleaned, task.target_audience, task.title,
+                                                         lite=True, keyword=task.keyword or "",
+                                                         author=getattr(task, "author", "") or ""),
+                                  started)
+                script = b_out["script"]
+            else:
+                # S2 结构拆解：creation_mode != none 时，先拆出爆款结构骨架，
+                # 供 B 改写复刻其节奏。拆解失败不阻断（骨架为空即退回普通改写）。
+                structure = None
+                if _mode != "none":
+                    try:
+                        s_out = _llm_step(db, task, cfg, llm_key, "S2",
+                                          lambda: tm.run_structure(cfg.llm_provider, cfg.llm_model,
+                                                                   llm_key, cleaned),
+                                          started, pausable=False)
+                        structure = (s_out or {}).get("structure") or None
+                    except Exception:
+                        structure = None
+                b_out = _llm_step(db, task, cfg, llm_key, "B",
+                                  lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                         cleaned, task.target_audience, task.title,
+                                                         track=task.track,
+                                                         monetization_mode=task.monetization_mode,
+                                                         rewrite_strength=task.rewrite_strength,
+                                                         narrative_perspective=task.narrative_perspective,
+                                                         structure_guide=structure),
+                                  started)
+                script = b_out["script"]
         else:
             script = cleaned
 
@@ -343,8 +323,15 @@ def run_pipeline(db: Session, task_id: str):
         book_info = None
         if "D" in task.modules:
             try:
+                _src_desc = ""
+                if isinstance(task.source_meta, dict):
+                    _src_desc = str(task.source_meta.get("desc")
+                                    or task.source_meta.get("description") or "")
                 d_out = _llm_step(db, task, cfg, llm_key, "D",
-                                  lambda: tm.run_identify(cfg.llm_provider, cfg.llm_model, llm_key, script),
+                                  lambda: tm.run_identify(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                          script, keyword=task.keyword or "",
+                                                          source_title=task.title or "",
+                                                          source_description=_src_desc),
                                   started)
                 book_info = im.pick_main_book(d_out["books"])
             except Exception as e:
@@ -353,11 +340,11 @@ def run_pipeline(db: Session, task_id: str):
         # E 配图（必选）。拆两步：P 提示词生成（不调绘图 API）→ E 批量生图。
         if "E" in task.modules:
             out_dir = storage_root(db) / task.id / "images"
-            # 张数按改写后文案字数自动匹配（约 5 字/秒口播），每张图停留秒数按赛道
-            # （tracks.seconds_per_image，中老年友好 6-9 秒/张），不依赖 F 分段数
-            # （其段数/估时波动大），保证节奏稳定。
+            # 配图张数：先按文案字数估一个【建议分镜数】引导 SB（约 5 字/秒口播 ×
+            # 赛道秒/张，中老年舒适节奏约 40 字/张），但最终图数【跟随 SB 实际分镜数】，
+            # 不再用字数硬算后截断分镜——那会导致图数与分镜数打架、用下标硬凑出图文错位。
             est_dur = len(script) / cost_svc.CHARS_PER_SECOND
-            n_images = im.count_for_duration(est_dur, seconds_per_image=tracks.seconds_per_image(task.track))
+            suggest_images = im.count_for_duration(est_dur, seconds_per_image=tracks.seconds_per_image(task.track))
 
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
             # 参考图 data URI 不落库（体积大），每次现编码，供人物镜头图生图用。
@@ -391,41 +378,69 @@ def run_pipeline(db: Session, task_id: str):
                     except Exception as e:
                         _save_result(db, task.id, "CP", "failed", output={"error": str(e)})
 
-                # 画面脚本（"SB"）：把口播稿转成 N 个分镜，每个含 cap/desc_prompt/has_character，
-                # 让配图有镜头变化、贴合文案、人物按需出场。含质检（雷同尾巴自动打回重写）。
-                # 失败不阻断——build_image_prompts 会回退到 segment 截字。
+                # 画面脚本（"SB"）：【配音严格用原文】模式——先用程序把 script 按句子合并成
+                # 约 40 字一段的原文切片（一字不改），再让 SB 为【每一片】配 desc_prompt。
+                # cap 由程序强制填为原文片，LLM 不碰文案 → 配音/字幕念的就是你的原文、且与画面
+                # 按段一一对齐。失败不阻断——回退 build_image_prompts 的 segment 截字。
+                seg_texts = tm.split_for_storyboard(script)
+                # 夹到 [MIN,MAX] 张：过多则合并尾部、过少不补（由切片自然决定）。
+                if len(seg_texts) > im.MAX_IMAGES:
+                    # 极长文案：把超出部分并入最后一段，保证不丢原文、张数不爆。
+                    head = seg_texts[:im.MAX_IMAGES - 1]
+                    tail = "".join(seg_texts[im.MAX_IMAGES - 1:])
+                    seg_texts = head + [tail]
+                sb_segments = [{"text": t} for t in seg_texts]
                 scenes = None
                 try:
                     sb_out = _llm_step(db, task, cfg, llm_key, "SB",
-                                       lambda: tm.run_storyboard(cfg.llm_provider, cfg.llm_model,
-                                                                 llm_key, script, n_scenes=max(1, n_images - 2),
-                                                                 rewrite_focus=tracks.get_track(task.track).get("rewrite_focus", ""),
-                                                                 character_desc=character_desc),
+                                       lambda: tm.run_storyboard_for_segments(
+                                           cfg.llm_provider, cfg.llm_model, llm_key,
+                                           sb_segments,
+                                           rewrite_focus=tracks.get_track(task.track).get("rewrite_focus", ""),
+                                           character_desc=character_desc),
                                        started)
                     scenes = sb_out.get("scenes") or None
                 except Exception as e:
                     _save_result(db, task.id, "SB", "failed", output={"error": str(e)})
 
-                prompts_list = im.build_image_prompts(book_info, segments, out_dir,
-                                                      image_count=n_images,
-                                                      track=task.track, image_style=task.image_style,
-                                                      scenes=scenes, character_desc=character_desc,
-                                                      ref_uri=ref_uri)
-                # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑。
-                # scenes 必须与实际内容图数（n_images-2）一一对应：SB 分镜可能多于/少于配图数，
-                # 这里按配图数截断/补齐，否则前端画廊格子数与实际图数对不上，多出的显示"未生成"。
-                n_content = max(0, n_images - 2)
+                # 图数【= SB 实际分镜数】：一段分镜 = 一张图，严格一一对应(image[i]=scene[i])，
+                # 不再额外加封面/CTA、不再用下标硬凑（硬凑会把最后一个分镜重复贴到多张图、
+                # 或丢弃多出的分镜 → 图文错位）。SB 失败无分镜时回退到字数估算的建议值，
+                # 由 build_image_prompts 走 segment 截字兜底。
+                # 先按 [MIN,MAX] 夹分镜数（与 build_image_prompts 内部同口径），保证
+                # scenes 与 prompts 数量一致、不错位。
                 raw_scenes = scenes or []
                 if raw_scenes:
-                    aligned_scenes = [raw_scenes[min(i, len(raw_scenes) - 1)] for i in range(n_content)]
+                    n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, len(raw_scenes)))
+                    # 分镜比上限多时截断（极少见，MAX_IMAGES=48）；比下限少时不补，
+                    # 由 build_image_prompts 直接按现有分镜数出图。
+                    aligned_scenes = raw_scenes[:n_images]
                 else:
+                    n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, suggest_images))
                     aligned_scenes = []
+
+                prompts_list, used_items = im.build_image_prompts(
+                    book_info, segments, out_dir,
+                    image_count=n_images,
+                    track=task.track, image_style=task.image_style,
+                    scenes=aligned_scenes or None,
+                    character_desc=character_desc,
+                    ref_uri=ref_uri)
+                # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑、
+                # 及配音/字幕取 cap。用 build_image_prompts 实际使用的 used_items 落库（不是
+                # aligned_scenes）——保证 P.scenes 与图（prompts_list）严格同源同长，配音段数
+                # 永远==图数，jianying 不会因数量不等而静默退回错位逻辑。
+                # used_items 每项含 cap/desc_prompt/has_character；回退(无分镜)时为 segment 截字项、cap 为空。
+                p_scenes = [{"id": i + 1, "cap": it.get("cap", ""),
+                             "desc_prompt": it.get("desc_prompt", ""),
+                             "has_character": bool(it.get("has_character", True))}
+                            for i, it in enumerate(used_items)]
                 _save_result(db, task.id, "P", "success",
                              output={"prompts": [{"prompt": p, "sub_type": st,
                                                   "out_path": str(op), "duration": sd,
                                                   "has_char": bool(rf)}
                                                  for (p, st, op, sd, rf) in prompts_list],
-                                     "scenes": aligned_scenes})
+                                     "scenes": p_scenes})
                 _maybe_pause(db, task, "P")
 
             # Step4 批量生图（"E"）：按任务的生图模式分流——
@@ -437,43 +452,34 @@ def run_pipeline(db: Session, task_id: str):
             mode = (getattr(task, "image_gen_mode", None) or "per_image")
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
+                # 生图是最烧钱的步骤，开跑前再查一次取消/超限——用户点了取消就别再发这批图。
+                _check_limits(db, task, started)
                 _img_proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
                 if mode == "grid":
                     grid_style = tracks.get_style(task.image_style, task.track)
-                    # 九宫格失败补救：整组被审核拒时, 用 LLM 把每格裸 brief 改写成安全版重发。
-                    def _grid_rewrite(brief, attempt):
-                        try:
-                            safe, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
-                                                          llm_key, brief, attempt=attempt)
-                            return safe or brief
-                        except Exception:
-                            return brief
-                    images, _ = with_retry(
-                        lambda: im.render_images_grouped(cfg.image_provider, img_key, prompts_list,
-                                                         model=cfg.image_model,
-                                                         aspect_ratio=task.aspect_ratio,
-                                                         grid_mode=True, style=grid_style,
-                                                         base_url=getattr(cfg, "image_base_url", None),
-                                                         proxy=_img_proxy,
-                                                         rewrite_fn=_grid_rewrite),
-                        IMAGE_RETRY)
+                    # 后台首次生成不自动改写重发：九宫格失败即整组占位+原因，
+                    # 等用户在画廊手动「重新组图」(可顺便改文案)。是否再花钱由用户决定，
+                    # 不在后台用看不见的多次改写反复烧钱。故不传 rewrite_fn。
+                    images = im.render_images_grouped(cfg.image_provider, img_key, prompts_list,
+                                                      model=cfg.image_model,
+                                                      aspect_ratio=task.aspect_ratio,
+                                                      grid_mode=True, style=grid_style,
+                                                      base_url=getattr(cfg, "image_base_url", None),
+                                                      proxy=_img_proxy)
                 else:
-                    images, _ = with_retry(
-                        lambda: im.render_images(cfg.image_provider, img_key, prompts_list,
-                                                 model=cfg.image_model,
-                                                 concurrency=cfg.concurrency,
-                                                 aspect_ratio=task.aspect_ratio,
-                                                 base_url=getattr(cfg, "image_base_url", None),
-                                                 proxy=_img_proxy,
-                                                 grayscale=im.is_monochrome_style(
-                                                     tracks.get_style(task.image_style, task.track))),
-                        IMAGE_RETRY)
-                # 失败补救（逐张模式）：审核拦截的占位图，自动用 LLM 递进改写提示词重生，
-                # 不必等用户手动在画廊点重试。九宫格是整组一张图、改写需整体重组，此处只救逐张
-                # （画质优先模式，最该救）；九宫格失败仍占位，用户可在画廊手动重新组图。
-                if mode != "grid":
-                    images = _rescue_failed_images(db, task, cfg, img_key, images,
-                                                   prompts_list, _img_proxy, started)
+                    # 逐张模式：每张内部已有瞬时故障(超时/限流)退避重试+失败占位，
+                    # 不再套外层整批重发(后台反复烧钱)。审核拦截的图保留占位+原因等手动重生。
+                    images = im.render_images(cfg.image_provider, img_key, prompts_list,
+                                              model=cfg.image_model,
+                                              concurrency=cfg.concurrency,
+                                              aspect_ratio=task.aspect_ratio,
+                                              base_url=getattr(cfg, "image_base_url", None),
+                                              proxy=_img_proxy,
+                                              grayscale=im.is_monochrome_style(
+                                                  tracks.get_style(task.image_style, task.track)))
+                # 失败不在后台自动改写重生（那样会在用户看不见的地方反复烧钱，
+                # task_472 一次烧 16 次就是这么来的）。被审核拦截的图保留占位+原因，
+                # 等用户在画廊手动「重新生成」或「重新组图」——花不花钱、花几次由用户决定。
                 # 成本（重算而非累加，与画廊重试/重组同口径）：E 成本恒等于当前产物实际成本。
                 # 九宫格一次请求出 9 张只算 1 张钱（按 grid 标记折算 ceil(张数/9)）；逐张按实际张数。
                 img_cost = cost_svc.image_cost(images, cfg.image_provider,
@@ -496,6 +502,9 @@ def run_pipeline(db: Session, task_id: str):
         # 无 TTS Key 时降级为 awaiting_audio，等用户手动上传音频。
         tts_key = decrypt(cfg.tts_api_key_enc) if cfg.tts_api_key_enc else ""
         audio_path = None
+        # 配音/字幕分段【统一用分镜 cap】（与图片同源，保证图-字-音三轨一一对齐）：
+        # 从 P 产物读 scenes 的 cap 作为配音分段；cap 缺失/无分镜时回退 F 的 segments（老路）。
+        tts_segments, tts_seg_source = _voice_segments_from_scenes(db, task.id, segments)
         if tts_key:
             try:
                 audio_dir = storage_root(db) / task.id / "audio"
@@ -503,14 +512,19 @@ def run_pipeline(db: Session, task_id: str):
                 if existing_tts and existing_tts.status == "success":
                     audio_path = existing_tts.output.get("audio_path")
                 else:
-                    r = tts_svc.synthesize(segments, cfg.tts_provider, tts_key,
+                    r = tts_svc.synthesize(tts_segments, cfg.tts_provider, tts_key,
                                            audio_dir, voice=(task.voice or cfg.tts_voice),
                                            appid=cfg.tts_appid,
                                            speed=float(task.voice_speed or 1.0))
                     audio_path = r.audio_path
+                    # 存 seg_durations(每个分镜的真实配音时长)和分段文本，供 compose 让
+                    # 图片轨/字幕轨共用这套分镜时长，实现三轨严格对齐。
                     _save_result(db, task.id, "T", "success",
                                  output={"audio_path": r.audio_path, "duration": r.duration,
-                                         "segment_count": r.segment_count})
+                                         "segment_count": r.segment_count,
+                                         "seg_durations": r.seg_durations,
+                                         "seg_texts": [s.get("text", "") for s in tts_segments],
+                                         "seg_source": tts_seg_source})
             except tts_svc.TTSUnavailable:
                 audio_path = None
             except Exception as e:
@@ -541,6 +555,9 @@ def run_pipeline(db: Session, task_id: str):
         task.status = "awaiting_confirm"
         task.paused_at = p.step
         db.commit()
+    except _Cancelled:
+        # 用户取消：状态已是 cancelled，干净退出，不当失败处理、不覆盖状态。
+        return
     except TaskAborted as e:
         _fail(db, task, e.code, e.message)
     except Exception as e:

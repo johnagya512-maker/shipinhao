@@ -143,7 +143,7 @@ export default function TaskCreatePage() {
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
-    image_gen_mode: 'per_image',
+    image_gen_mode: 'grid',
     processing_mode: 'full_auto', pause_mode: 'key_nodes', pause_steps: [],
   }
   function loadDraft(): { form: TaskCreate; previewScript: string; inputMode: 'transcript' | 'douyin'; parseMeta: ParseMeta | null } {
@@ -443,9 +443,10 @@ export default function TaskCreatePage() {
           {analyzing && (
             <p className="mt-1 text-[11px] text-slate-500">正在拆解结构并改写，大模型生成需要点时间，请稍候，不要离开本页。</p>
           )}
-          <div className="mt-2 grid grid-cols-3 gap-2">
+          <div className="mt-2 grid grid-cols-2 gap-2">
             {([
               ['same_topic', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
+              ['lite', '轻量改写', '只改正文主体，保留原稿验证过的爆点和节奏，最省、过查重'],
               ['none', '直接改写', '不拆结构，按常规套路改写'],
               ['keep', '不改文案', '用我写的原文，一字不改，按标点分句'],
             ] as const).map(([key, name, desc]) => {
@@ -471,7 +472,7 @@ export default function TaskCreatePage() {
 
           {/* 改写强度 / 叙事视角：直接影响二创效果，放在预览旁边，调完即可预览看效果。
               仅全自动模式有效（半自动/直接出片不改写）。 */}
-          {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
+          {(form.processing_mode ?? 'full_auto') === 'full_auto' && (form.creation_mode || 'same_topic') !== 'lite' && (
             <div className="mt-2 grid grid-cols-2 gap-3">
               <div>
                 <span className="text-[12px] text-slate-500">改写强度 <span className="text-slate-600">· 嫌改得太像原文就调「强力」</span></span>

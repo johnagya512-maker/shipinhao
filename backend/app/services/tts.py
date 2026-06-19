@@ -262,30 +262,40 @@ def synthesize(segments: list[dict], provider: str, api_key: str | None,
 
     # 过滤：排除空白段、纯标点碎片段（火山对纯标点报 3011 No readable text）；
     # 再把超长段二次切分到 TTS 安全长度（超长会被合成成大段静音）。
-    texts: list[str] = []
+    # 关键：按【输入分段】聚合时长——一个输入分段(如一个分镜的 cap)可能被 _split_long
+    # 拆成多个子段合成，但要把这些子段时长求和，作为该输入分段的真实时长。这样返回的
+    # seg_durations 长度严格 == 输入分段数，下游图/字幕/音频才能按分镜一一对齐。
+    # 被整段过滤掉的纯标点/空白分段计 0 时长但【保留位置】，不打乱分段索引。
+    seg_pieces: list[list[str]] = []  # 每个输入分段 → 它的可合成子段列表（可能为空）
     for s in segments:
         t = (s.get("text", "") or "").strip()
-        if not t or not _has_readable(t):
-            continue
-        for piece in _split_long(t):
-            if _has_readable(piece):
-                texts.append(piece)
-    if not texts:
+        pieces: list[str] = []
+        if t and _has_readable(t):
+            for piece in _split_long(t):
+                if _has_readable(piece):
+                    pieces.append(piece)
+        seg_pieces.append(pieces)
+    if not any(seg_pieces):
         raise TTSError("E6201: 无可合成的分段文本")
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     part_paths: list[Path] = []
-    seg_durations: list[float] = []
-    for i, text in enumerate(texts):
-        p = out_dir / f"seg_{i:03d}.mp3"
-        _synth_one_checked(text, provider, api_key, voice, appid, model,
-                           timeout, speed, p)
-        # 每段单独去残留长静音（火山偶发的尾部静音填充），保证段时长真实、与字幕对齐。
-        # 不在拼接后整条去静音——那会打乱"段时长↔字幕"的对应关系，导致字幕错位。
-        _remove_long_silence(p)
-        part_paths.append(p)
-        seg_durations.append(_probe_duration(p))
+    seg_durations: list[float] = []  # 与输入 segments 一一对应（过滤段为 0.0）
+    piece_idx = 0
+    for pieces in seg_pieces:
+        seg_total = 0.0
+        for text in pieces:
+            p = out_dir / f"seg_{piece_idx:03d}.mp3"
+            _synth_one_checked(text, provider, api_key, voice, appid, model,
+                               timeout, speed, p)
+            # 每段单独去残留长静音（火山偶发的尾部静音填充），保证段时长真实、与字幕对齐。
+            # 不在拼接后整条去静音——那会打乱"段时长↔字幕"的对应关系，导致字幕错位。
+            _remove_long_silence(p)
+            part_paths.append(p)
+            seg_total += _probe_duration(p)
+            piece_idx += 1
+        seg_durations.append(round(seg_total, 3))
 
     final_path = out_dir / "audio.mp3"
     _concat_audio(part_paths, final_path)

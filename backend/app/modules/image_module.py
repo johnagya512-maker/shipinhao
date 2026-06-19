@@ -140,9 +140,9 @@ def run_images(provider, api_key, book_info, segments, out_dir: Path,
     否则靠提示词里的人物特征文字(character_desc)锚定；空镜/物件画面紧贴文案、不带人物。
     单张被内容审核反复拒绝时降级为占位图，不中断整条链路。
     多张并发生成（线程池，I/O 密集），保持封面→内容→结尾的顺序返回。"""
-    tasks = build_image_prompts(book_info, segments, out_dir, image_count=image_count,
-                                track=track, image_style=image_style,
-                                character_desc=character_desc, ref_uri=ref_uri)
+    tasks, _ = build_image_prompts(book_info, segments, out_dir, image_count=image_count,
+                                   track=track, image_style=image_style,
+                                   character_desc=character_desc, ref_uri=ref_uri)
     return render_images(provider, api_key, tasks, model=model, concurrency=concurrency,
                          aspect_ratio=aspect_ratio, proxy=proxy,
                          grayscale=is_monochrome_style(tracks.get_style(image_style, track) if image_style else None))
@@ -172,27 +172,23 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
     ref_uri（参考图 data URI）非空时，人物镜头走图生图（保持主角一致：同一个人、不同场景），
     每个人物镜头的 prompt 用「保持面部不变、改变场景姿势」句式包裹，并带上 ref_uri。"""
     image_count = max(MIN_IMAGES, min(MAX_IMAGES, image_count))
-    n_content = image_count - 2
     out_dir.mkdir(parents=True, exist_ok=True)
 
     style = tracks.get_style(image_style, track)
     tk = tracks.get_track(track)
 
+    # 兜底主体（SB 失败、无分镜时用赛道主体生成通用画面）。
     if track == "character_story":
         title = (book_info or {}).get("title") or tk["image_subject"]
-        cover_subject = f"{title}，人物半身画像，温和的神情"
-        cta_subject = f"{title}，意境悠远的收尾画面，留白引人遐想"
+        fallback_subject = f"{title}，人物半身画像，温和的神情"
     elif track == "health_book":
         title = (book_info or {}).get("title") or "健康养生"
         topic = (book_info or {}).get("category") or "健康养生"
-        cover_subject = f"《{title}》书籍封面，{topic}主题，清晰易读"
-        cta_subject = f"《{title}》书籍特写，号召了解的画面"
+        fallback_subject = f"《{title}》书籍封面，{topic}主题，清晰易读"
     else:
-        # 其它赛道：用赛道主体（image_subject）生成通用封面/结尾，不套书籍封面框架。
         subject = tk["image_subject"]
         title = (book_info or {}).get("title") or subject
-        cover_subject = f"{subject}，{title}，吸睛开场画面"
-        cta_subject = f"{subject}，引发互动的收尾画面，留白引人遐想"
+        fallback_subject = f"{subject}，{title}，吸睛开场画面"
 
     # 把 scenes 归一成 [{"cap","desc_prompt","has_character"}]，兼容老格式（desc 字段 / 纯字符串）。
     norm_scenes = []
@@ -207,14 +203,18 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
             norm_scenes.append({"cap": "", "desc_prompt": _sanitize_imagery(str(x)),
                                 "has_character": True})
 
-    # 组装任务列表（保持顺序：封面 → 内容 → 结尾）
-    # 优先用画面脚本（视觉化分镜）；没有则回退到 segment 截字 + 镜头轮换。
+    # 图片与分镜【严格一一对应】：N 个分镜 = N 张图，下标对齐（image[i] = scene[i]），
+    # 不再额外加抽象封面/CTA。首张标 sub_type="cover"（仅供剪映草稿封面缩略图用），
+    # 但它就是第一个分镜（画首段文案的内容、配首段配音）；其余标 "content"。
+    # 无分镜（SB 失败）时回退：按 image_count 用 segment 截字 + 镜头轮换兜底。
     if norm_scenes:
-        scene_items = [norm_scenes[min(i, len(norm_scenes) - 1)] for i in range(n_content)]
+        scene_items = norm_scenes
         use_storyboard = True
     else:
-        descs = assign_content_descriptions(segments, n_content)
-        scene_items = [{"cap": "", "desc_prompt": d, "has_character": True} for d in descs]
+        n = max(MIN_IMAGES, image_count)
+        descs = assign_content_descriptions(segments, n)
+        scene_items = [{"cap": "", "desc_prompt": d or fallback_subject,
+                        "has_character": True} for d in descs]
         use_storyboard = False
 
     # 图生图人物镜头的提示词包裹：强调"保持参考人物面部/外貌不变，改变场景姿势"
@@ -223,14 +223,7 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
         return (f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
                 f"但改为以下全新画面（不同的姿势、表情、构图）：{subject}")
 
-    # 封面：人物故事赛道是视频第一帧、需抓眼球，强制带主角特征（若有）。
-    cover_prompt_subject = cover_subject
-    if character_desc and track == "character_story":
-        cover_prompt_subject = f"{cover_subject}，主角形象：{character_desc}"
-    cover_ref = ref_uri if track == "character_story" else None
-    cover_text = _persona(cover_prompt_subject) if cover_ref else cover_prompt_subject
-    tasks = [(_wrap(style, cover_text), "cover", out_dir / "cover.png", 4, cover_ref)]
-
+    tasks = []
     for i, item in enumerate(scene_items):
         desc = item["desc_prompt"]
         has_char = item["has_character"]
@@ -249,10 +242,14 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
         # 仅"需要人物出场"的镜头走图生图（带参考图）；空镜/物件镜头纯文生图。
         item_ref = ref_uri if has_char else None
         content_text = _persona(content_subject) if item_ref else content_subject
-        tasks.append((_wrap(style, content_text), "content",
-                      out_dir / f"content_{i}.png", 10, item_ref))
-    tasks.append((_wrap(style, cta_subject), "cta", out_dir / "cta.png", 6, None))
-    return tasks
+        # 首张标 cover（剪映草稿封面用），其余 content。落盘文件名按下标，保证稳定。
+        sub_type = "cover" if i == 0 else "content"
+        fname = "cover.png" if i == 0 else f"content_{i}.png"
+        tasks.append((_wrap(style, content_text), sub_type,
+                      out_dir / fname, 10, item_ref))
+    # 返回 tasks 和【实际使用的分镜项】scene_items：调用方用它落库 P.scenes，保证
+    # 图与配音/字幕严格同源同长（cap 一一对应），不靠隐式过滤撞巧合。
+    return tasks, scene_items
 
 
 def render_images(provider, api_key, tasks, model=None, concurrency=5,

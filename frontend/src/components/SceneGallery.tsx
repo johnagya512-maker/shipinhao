@@ -50,6 +50,9 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   // 多选「一起重新组图」：selected 记录勾选的分镜下标；batchRunning 标记组图请求进行中
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [batchRunning, setBatchRunning] = useState(false)
+  // 本次重组的出图方式：''=跟随建任务时选的模式；'grid'=九宫格省成本；'per_image'=逐张画质优先。
+  // 让用户在画廊当场切换，不必回建任务页改。
+  const [batchMode, setBatchMode] = useState<'' | 'grid' | 'per_image'>('')
   // 点击缩略图放大查看：lightbox 存当前放大的图片 URL（null = 关闭）
   const [lightbox, setLightbox] = useState<string | null>(null)
   // 并发重试时读取最新 scenes（避免闭包拿到旧值）
@@ -71,9 +74,6 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   function humanReason(raw?: string | null): string {
     if (!raw) return '生成失败，可再试一次或调整提示词'
     const s = String(raw)
-    // 豆包九宫格模式禁用了逐张单图重试：引导用户用「一起重新组图」（勾选多张一次重生）。
-    if (/E_GRID_ONLY/.test(s))
-      return '豆包为九宫格省成本模式，单张换图已关闭。请勾选要重做的图，用下方「一起重新组图」一次重生'
     if (/sensitive|审核|拒绝|reject/i.test(s))
       return '提示词被内容审核拦截，请改写画面描述（避开敏感/暴力/政治字眼）后重试'
     if (/限流|429|rate/i.test(s)) return '触发限流，稍等片刻再重试'
@@ -100,22 +100,25 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     }
   }
 
-  // 内容图在 images 数组里的下标：cover(0) + content(1..n) + cta。第 i 个分镜 → 下标 i+1
+  // 图片与分镜严格一一对应：image[i] = scene[i]（不再有独立封面占下标0）。
   // 实际执行一张重试（不含排队控制）。每张把自己的提示词直接传给后端，后端在 per-task
   // 锁内回写单张，互不覆盖，所以并行安全。
   async function runRetry(i: number) {
-    const imgIndex = i + 1
+    const imgIndex = i
     try {
+      // 传当前画廊里的提示词。若该图被审核拦截、当前词仍过不了，后端会自动升级到
+      // 安全画面再生成（点一次即出图，不原样重发必败词）。
       const prompt = scenesRef.current[i]?.desc_prompt
       const r = await api.retryImage(taskId, imgIndex, prompt)
       setBust((b) => ({ ...b, [imgIndex]: (b[imgIndex] ?? 0) + 1 }))
+      // 后端自动改写并成功时，把改写后的安全提示词回填到画廊输入框，让用户看到改成了什么
       if (r.rewritten && r.new_prompt) {
         setScenes((prev) => prev.map((s, idx) => (idx === i ? { ...s, desc_prompt: r.new_prompt as string } : s)))
       }
       setFailReason((m) => {
         const next = { ...m }
         if (r.failed) next[i] = humanReason(r.reason)
-        else if (r.rewritten) next[i] = '✓ 原提示词被审核拦截，已自动改写并重新生成'
+        else if (r.rewritten) next[i] = '✓ 原画面被审核拦截，已自动改为安全画面并生成成功'
         else delete next[i]
         return next
       })
@@ -151,7 +154,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   // 一键勾选所有失败的占位图，方便「把失败的一起重新组图」
   function selectAllFailed() {
     const f = new Set<number>()
-    scenes.forEach((_, i) => { if (images[i + 1]?.fallback) f.add(i) })
+    scenes.forEach((_, i) => { if (images[i]?.fallback) f.add(i) })
     setSelected(f)
   }
 
@@ -166,10 +169,10 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     }
     setBatchRunning(true)
     const sel = [...selected].sort((a, b) => a - b)
-    // 分镜下标 i → 图片下标 i+1（封面占 0，画廊卡片只含内容图）
-    const imgIndices = sel.map((i) => i + 1)
+    // 分镜与图一一对应：分镜下标 i → 图片下标 i
+    const imgIndices = sel.map((i) => i)
     try {
-      const r = await api.batchRetryImages(taskId, imgIndices)
+      const r = await api.batchRetryImages(taskId, imgIndices, batchMode || undefined)
       setBust((b) => {
         const n = { ...b }
         imgIndices.forEach((idx) => { n[idx] = (n[idx] ?? 0) + 1 })
@@ -179,7 +182,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
       setFailReason((m) => {
         const next = { ...m }
         r.results.forEach((res) => {
-          const i = res.index - 1
+          const i = res.index
           if (res.failed) next[i] = humanReason(res.reason)
           else delete next[i]
         })
@@ -223,6 +226,15 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <select value={batchMode}
+            onChange={(e) => setBatchMode(e.target.value as '' | 'grid' | 'per_image')}
+            title="本次重组的出图方式：九宫格一次请求出多张省钱；逐张每张单独出、画质优先（黑白等强约束更稳）"
+            className="px-2 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-200 border-none
+              focus:ring-1 focus:ring-brand-500">
+            <option value="">出图方式：跟随任务</option>
+            <option value="grid">九宫格（省成本）</option>
+            <option value="per_image">逐张（画质优先）</option>
+          </select>
           <button onClick={selectAllFailed}
             className="px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-700 text-slate-200
               hover:bg-slate-600 transition-colors">
@@ -247,7 +259,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {scenes.map((s, i) => {
-          const imgIndex = i + 1
+          const imgIndex = i
           const img = images[imgIndex]
           const v = bust[imgIndex] ?? 0
           const src = img ? `${api.imageUrl(taskId, img.path)}&v=${v}` : null

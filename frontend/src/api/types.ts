@@ -136,6 +136,13 @@ export interface TaskResultsOut {
   modules: ModuleResult[]
 }
 
+export interface ImagePreset {
+  name: string
+  model?: string
+  base_url?: string
+  unit_price?: number | null
+}
+
 export interface ConfigOut {
   llm_provider: string
   llm_model: string
@@ -162,6 +169,7 @@ export interface ConfigOut {
   proxy_url: string
   default_image_gen_mode?: string
   image_base_url?: string
+  image_presets?: ImagePreset[]
 }
 
 export interface ConfigUpdate {
@@ -189,6 +197,7 @@ export interface ConfigUpdate {
   proxy_url?: string
   default_image_gen_mode?: string
   image_base_url?: string
+  image_presets?: ImagePreset[]
 }
 
 export interface QueueStats {

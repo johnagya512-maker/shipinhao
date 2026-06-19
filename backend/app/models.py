@@ -146,6 +146,10 @@ class Config(Base):
     # 实际单价不同(如兔子API约0.12)，填这里让成本核算/上限校验按真实单价算，不再虚高。
     # <=0 或空=用内置缺省价。九宫格按 ceil(张数/9) 折算请求数后再乘此单价。
     image_unit_price: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
+    # 配图预设快照：[{name, model, base_url, unit_price}, ...]，供前台一键切换豆包/gpt 等多套
+    # 配图配置。仅存模型/地址/单价三项；API key 全局共用一份（gpt 与豆包同走兔子 API），不入预设。
+    # 切换=把某预设三项拷进当前 image_model/image_base_url/image_unit_price；后端读的仍是当前值。
+    image_presets: Mapped[list | None] = mapped_column(JSON, nullable=True)
     daily_cost_cap: Mapped[float] = mapped_column(Numeric(8, 2), default=100)
     concurrency: Mapped[int] = mapped_column(Integer, default=3)
     # 任务级并发：同时执行的任务数上限（与 concurrency 的图片级并发相乘 ≈ 总图片请求量）。

@@ -1,13 +1,19 @@
 // 配置页：LLM / 图像供应商与 Key、每日成本上限、并发。Key 写入后只回显掩码。
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { ConfigOut, ConfigUpdate } from '../api/types'
+import type { ConfigOut, ConfigUpdate, ImagePreset } from '../api/types'
 
 const LLM_PROVIDERS = ['deepseek', 'openai', 'qwen', 'doubao']
 const IMAGE_PROVIDERS = ['doubao', 'openai']
 const COLLECT_PROVIDERS = ['tikhub']
 const ASR_PROVIDERS = ['volcano', 'siliconflow']
 const TTS_PROVIDERS = ['edge_local', 'volcano', 'siliconflow', 'yuntts_edge']
+
+// 内置配图预设模板：库里没存过预设时供「应用」快速填充。仅含模型/地址/单价，key 全局共用。
+const BUILTIN_PRESETS: ImagePreset[] = [
+  { name: '豆包 Seedream', model: 'doubao-seedream-4-5-251128', base_url: '', unit_price: 0.25 },
+  { name: 'gpt-image-2', model: 'gpt-image-2', base_url: 'https://api.tu-zi.com/v1/images/generations', unit_price: 0.058 },
+]
 
 export default function ConfigPage() {
   const [cfg, setCfg] = useState<ConfigOut | null>(null)
@@ -49,6 +55,34 @@ export default function ConfigPage() {
       setFieldStatus((s) => ({ ...s, [key]: 'error' }))
       setFieldErr((er) => ({ ...er, [key]: (e as ApiError).message }))
     }
+  }
+
+  // 应用一个预设：把 model/base_url/unit_price 三项一起保存进当前生效配置（key 不动）。
+  async function applyPreset(p: ImagePreset) {
+    set({ image_model: p.model ?? '', image_base_url: p.base_url ?? '',
+          image_unit_price: p.unit_price ?? null })
+    await saveField('image_model', p.model ?? '')
+    await saveField('image_base_url', p.base_url ?? '')
+    await saveField('image_unit_price', p.unit_price ?? null)
+  }
+
+  // 把当前生效的三项打包存成一个命名预设（同名覆盖），整列保存。
+  async function savePreset() {
+    const name = window.prompt('预设名称（如 豆包 / gpt）：')?.trim()
+    if (!name) return
+    const current: ImagePreset = {
+      name,
+      model: form.image_model ?? cfg?.image_model ?? '',
+      base_url: form.image_base_url ?? cfg?.image_base_url ?? '',
+      unit_price: form.image_unit_price ?? cfg?.image_unit_price ?? null,
+    }
+    const list = (cfg?.image_presets ?? []).filter((p) => p.name !== name)
+    await saveField('image_presets', [...list, current])
+  }
+
+  async function deletePreset(name: string) {
+    const list = (cfg?.image_presets ?? []).filter((p) => p.name !== name)
+    await saveField('image_presets', list)
   }
 
   // 字段旁的实时状态小标（保存中 / ✓ 已保存 / ✗ 错误）。
@@ -150,7 +184,47 @@ export default function ConfigPage() {
       </div>
 
       <div className="card space-y-4">
-        <div className="font-semibold text-slate-100">配图模型（图像）<Status k="image_provider" /><Status k="image_api_key" /></div>
+        <div className="font-semibold text-slate-100">配图模型（图像）<Status k="image_provider" /><Status k="image_api_key" /><Status k="image_presets" /></div>
+
+        {/* 配图预设：豆包/gpt 各存一套，一键切换。仅切模型/地址/单价，API Key 全局共用不变。 */}
+        <div className="rounded-lg border border-slate-700/60 bg-slate-800/30 p-3 space-y-2">
+          <div className="text-sm text-slate-300">配图预设（一键切换豆包 / gpt 等，不动 API Key）</div>
+          {(cfg.image_presets && cfg.image_presets.length > 0) ? (
+            <div className="flex flex-wrap gap-2">
+              {cfg.image_presets.map((p) => {
+                const active = (form.image_model ?? cfg.image_model) === p.model
+                  && (form.image_base_url ?? cfg.image_base_url ?? '') === (p.base_url ?? '')
+                return (
+                  <span key={p.name}
+                    className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${
+                      active ? 'border-emerald-500 text-emerald-300 bg-emerald-500/10' : 'border-slate-600 text-slate-200 bg-slate-800/40'
+                    }`}>
+                    <button type="button" onClick={() => applyPreset(p)} className="hover:underline">
+                      {p.name}{active ? ' ✓' : ''}
+                    </button>
+                    <button type="button" onClick={() => deletePreset(p.name)}
+                      className="text-slate-500 hover:text-red-400" title="删除预设">×</button>
+                  </span>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-slate-500">还没存预设，可先应用内置模板：</span>
+              {BUILTIN_PRESETS.map((p) => (
+                <button key={p.name} type="button" onClick={() => applyPreset(p)}
+                  className="rounded-full border border-slate-600 bg-slate-800/40 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800">
+                  应用「{p.name}」
+                </button>
+              ))}
+            </div>
+          )}
+          <button type="button" onClick={savePreset}
+            className="rounded-lg border border-slate-600 bg-slate-800/40 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800">
+            ＋ 把当前配置存为预设
+          </button>
+        </div>
+
         <label className="block">
           <span className="text-sm text-slate-400">供应商</span>
           <select className="field"
