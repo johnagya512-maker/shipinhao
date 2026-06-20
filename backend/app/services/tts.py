@@ -21,7 +21,9 @@ from dataclasses import dataclass
 VOLCANO_TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"
 VOLCANO_CLUSTER = "volcano_tts"
 # 默认音色用官方示例里 v1 HTTP 可用的音色（2.0 音色 *_uranus_bigtts 仅 v3 支持）。
-VOLCANO_DEFAULT_VOICE = "zh_male_M392_conversation_wvae_bigtts"
+# 默认音色：本账号已用 /preview-tts 探活返回 200 实测可用的 2.0(uranus) 音色。
+# 老版 *_moon/*_mars 在本账号未授权(grant not found)，切勿用作默认。
+VOLCANO_DEFAULT_VOICE = "zh_male_cixingjieshuonan_uranus_bigtts"
 
 # 硅基流动语音合成端点（OpenAI 兼容 /audio/speech）。
 SILICONFLOW_TTS_ENDPOINT = "https://api.siliconflow.cn/v1/audio/speech"

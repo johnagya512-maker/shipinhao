@@ -370,7 +370,7 @@ export default function ConfigPage() {
         </label>
         <label className="block">
           <span className="text-sm text-slate-600">App ID（仅火山 volcano 需要）</span>
-          <input className="mt-1 w-full border rounded-lg px-3 py-2"
+          <input className="field"
             placeholder={cfg.tts_appid || '火山控制台的 appid'}
             defaultValue={cfg.tts_appid}
             onChange={(e) => set({ tts_appid: e.target.value })}
@@ -381,20 +381,20 @@ export default function ConfigPage() {
       <div className="card grid grid-cols-2 gap-4 mt-4">
         <label className="block">
           <span className="text-sm text-slate-600">每日成本上限（元）<Status k="daily_cost_cap" /></span>
-          <input type="number" min={0} step={1} className="mt-1 w-full border rounded-lg px-3 py-2"
+          <input type="number" min={0} step={1} className="field"
             defaultValue={cfg.daily_cost_cap}
             onChange={(e) => { set({ daily_cost_cap: Number(e.target.value) }); saveField('daily_cost_cap', Number(e.target.value)) }} />
         </label>
         <label className="block">
           <span className="text-sm text-slate-600">最大并行任务数（1-10）<Status k="max_concurrent_tasks" /></span>
-          <input type="number" min={1} max={10} className="mt-1 w-full border rounded-lg px-3 py-2"
+          <input type="number" min={1} max={10} className="field"
             defaultValue={cfg.max_concurrent_tasks}
             onChange={(e) => { set({ max_concurrent_tasks: Number(e.target.value) }); saveField('max_concurrent_tasks', Number(e.target.value)) }} />
           <span className="text-xs text-slate-500 mt-1 block">同时执行几个任务，超出的自动排队。改后立即生效。</span>
         </label>
         <label className="block">
           <span className="text-sm text-slate-600">单任务配图并发（1-10）<Status k="concurrency" /></span>
-          <input type="number" min={1} max={10} className="mt-1 w-full border rounded-lg px-3 py-2"
+          <input type="number" min={1} max={10} className="field"
             defaultValue={cfg.concurrency}
             onChange={(e) => { set({ concurrency: Number(e.target.value) }); saveField('concurrency', Number(e.target.value)) }} />
           <span className="text-xs text-slate-500 mt-1 block">一个任务内同时生成几张图。</span>

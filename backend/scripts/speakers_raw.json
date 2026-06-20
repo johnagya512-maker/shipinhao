@@ -1,0 +1,431 @@
+{
+  "Result": {
+    "Speakers": [
+      {
+        "ID": "7569915035259240491",
+        "VoiceType": "zh_female_vv_uranus_bigtts",
+        "Name": "Vivi 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/vivi_v2.png",
+        "Gender": "女",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "通用场景"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1340b51f-f828-4383-8fd0-f62a750d6cea"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_vv_uranus_bigtts.wav",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "今天的阳光真好啊！感觉整个人都充满了活力呢。真想去外面跑一跑，去探索那些有趣的地方，去邂逅一些奇妙的事情。生活嘛，就该这样自由自在、充满朝气的呀！哈哈！",
+            "Flag": "🇨🇳🇺🇸"
+          },
+          {
+            "Language": "ja",
+            "Text": "",
+            "Flag": "🇯🇵"
+          },
+          {
+            "Language": "id",
+            "Text": "",
+            "Flag": "🇮🇩"
+          },
+          {
+            "Language": "es-mx",
+            "Text": "",
+            "Flag": "🇲🇽"
+          }
+        ],
+        "Emotions": [],
+        "Description": "语调平稳、咬字柔和、自带治愈安抚力的女声音色",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-03-17 10:39:31",
+        "UpdateTime": "2026-03-17 10:39:38",
+        "Preview": true,
+        "Emoji": "💐",
+        "Requests": 1227128,
+        "TextLength": 36686760
+      },
+      {
+        "ID": "7574011450654457882",
+        "VoiceType": "zh_female_xiaohe_uranus_bigtts",
+        "Name": "小何 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/小何.png",
+        "Gender": "女",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "通用场景"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1340b51f-f828-4383-8fd0-f62a750d6cea"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_xiaohe_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "清晨的阳光跳上窗台，让我们带着笑脸，去赴一场春天的约会吧！",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "声线甜美有活力的妹妹，活泼开朗，笑容明媚。",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-03-02 16:14:32",
+        "UpdateTime": "2026-03-02 16:15:21",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 32499,
+        "TextLength": 1057700
+      },
+      {
+        "ID": "7628502241871183910",
+        "VoiceType": "zh_male_wennuanahu_uranus_bigtts",
+        "Name": "温暖阿虎/Alvin 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/温暖阿虎.png",
+        "Gender": "男",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "通用场景"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1340b51f-f828-4383-8fd0-f62a750d6cea"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_male_wennuanahu_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "So, what do you want to talk about? Sports? Movies? Music? Or anything else that comes to mind. Let's have a great conversation!",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "声线阳光温暖、语气亲切，活力满满的少年音",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-14 15:02:06",
+        "UpdateTime": "2026-04-14 16:45:38",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 3879,
+        "TextLength": 186667
+      },
+      {
+        "ID": "7628502241871134758",
+        "VoiceType": "zh_male_jieshuoxiaoming_uranus_bigtts",
+        "Name": "解说小明 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/解说小明.png",
+        "Gender": "男",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "视频配音"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "b2c05039-a48f-4105-9557-b0e8f466ec99"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_male_jieshuoxiaoming_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "嘿，你好呀！今天的阳光格外温暖，就像你的笑容一样，瞬间照亮了我的世界。刚刚看到你的那一刻，我就觉得有一种特别的吸引力。",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "语速明快、中气十足，充满激情与感染力的解说男声",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-14 14:44:47",
+        "UpdateTime": "2026-04-14 16:45:38",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 6341,
+        "TextLength": 170167
+      },
+      {
+        "ID": "7628501908881145907",
+        "VoiceType": "zh_female_wenroumama_uranus_bigtts",
+        "Name": "温柔妈妈 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/温柔妈妈_副本.png",
+        "Gender": "女",
+        "Age": "中年",
+        "Categories": [
+          {
+            "Categories": [
+              "通用场景"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1340b51f-f828-4383-8fd0-f62a750d6cea"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_wenroumama_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "默认文宝贝们别着急，慢慢来就好啦。操作失误没关系，咱们稳住心态，一点点大家开心最重要，累了就歇一歇，我陪着你们一起玩，输赢都不重要，平安快乐就好啦。本...",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "语调舒缓、咬字温润，自带母性柔光的治愈女声",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-14 14:43:29",
+        "UpdateTime": "2026-04-14 16:45:38",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 783,
+        "TextLength": 20585
+      },
+      {
+        "ID": "7628501908881162291",
+        "VoiceType": "zh_female_qiaopinv_uranus_bigtts",
+        "Name": "俏皮女声 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/俏皮女声.png",
+        "Gender": "女",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "通用场景"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1340b51f-f828-4383-8fd0-f62a750d6cea"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_qiaopinv_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "你这个小迷糊，又忘记东西放在哪里了吧？没关系啦，我来帮你找，下次可不许再这么粗心咯。",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "语调灵动跳脱、元气满满，古灵精怪的少女音",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-17 15:50:27",
+        "UpdateTime": "2026-04-17 15:50:38",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 120,
+        "TextLength": 6793
+      },
+      {
+        "ID": "7628503970654421019",
+        "VoiceType": "zh_female_shaoergushi_uranus_bigtts",
+        "Name": "少儿故事 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/少儿故事.png",
+        "Gender": "女",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "视频配音"
+            ]
+          },
+          {
+            "Categories": [
+              "有声阅读"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "b2c05039-a48f-4105-9557-b0e8f466ec99",
+          "b2135d4d-797a-4d53-a037-d0bf861bd890"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_shaoergushi_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "森林里住着一只聪明的小狐狸，它总是能想出各种奇妙的点子，帮助小伙伴们解决难题，大家都可喜欢它啦。",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "语调活泼、声线亲切，适配儿童故事的治愈女声",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-15 11:27:13",
+        "UpdateTime": "2026-04-15 11:28:43",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 423,
+        "TextLength": 52045
+      },
+      {
+        "ID": "7628808850744852531",
+        "VoiceType": "zh_male_guanggaojieshuo_uranus_bigtts",
+        "Name": "广告解说 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/广告解说.png",
+        "Gender": "男",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "通用场景"
+            ]
+          },
+          {
+            "Categories": [
+              "视频配音"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1340b51f-f828-4383-8fd0-f62a750d6cea",
+          "b2c05039-a48f-4105-9557-b0e8f466ec99"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_male_guanggaojieshuo_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "全新升级的这款产品，融合了顶尖科技与时尚设计，它将全方位满足您的需求，成为您生活中不可或缺的好帮手。",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "语调明快、感染力拉满，专业感十足的解说音",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-15 11:26:05",
+        "UpdateTime": "2026-04-15 11:28:43",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 907,
+        "TextLength": 10974
+      },
+      {
+        "ID": "7628502241871282214",
+        "VoiceType": "zh_female_gujie_uranus_bigtts",
+        "Name": "顾姐 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/顾姐.png",
+        "Gender": "女",
+        "Age": "青年",
+        "Categories": [
+          {
+            "Categories": [
+              "角色扮演"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1d8bf65c-331b-4f5a-a57d-da01dd29838c"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_gujie_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "你们这群蠢货，连这点小事都办不好？时尚界的规则如同战场法则，只有强者才能掌控全局。我顾里可不会容忍任何瑕疵，想要跟上我的步伐，就拿出你们的本事来，别在我面前丢人现眼。",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "声线干练、气场强大，飒爽独立的大女主音",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-15 11:25:12",
+        "UpdateTime": "2026-04-15 11:28:43",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 627,
+        "TextLength": 13648
+      },
+      {
+        "ID": "7628808850744836147",
+        "VoiceType": "zh_female_wuzetian_uranus_bigtts",
+        "Name": "武则天 2.0",
+        "Avatar": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/avatar/武则天.png",
+        "Gender": "女",
+        "Age": "中年",
+        "Categories": [
+          {
+            "Categories": [
+              "角色扮演"
+            ]
+          }
+        ],
+        "CategoryKeys": [
+          "1d8bf65c-331b-4f5a-a57d-da01dd29838c"
+        ],
+        "NormalLabels": null,
+        "SpecialLabels": null,
+        "TrialURL": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_hz_ihsph/ljhwZthlaukjlkulzlp/portal/bigtts/zh_female_wuzetian_uranus_bigtts.mp3",
+        "ShortTrialURL": "",
+        "Languages": [
+          {
+            "Language": "zh-cn",
+            "Text": "本宫的威严岂容置疑，朝堂之上，众臣皆需遵循本宫旨意，若有违抗，定当严惩不贷，本宫定要这天下长治久安。",
+            "Flag": "🇨🇳🇺🇸"
+          }
+        ],
+        "Emotions": [],
+        "Description": "声线威严、气场拉满，自带帝王霸气的御姐音",
+        "Status": "online",
+        "ResourceID": "seed-tts-2.0",
+        "CreateTime": "2026-04-15 11:23:50",
+        "UpdateTime": "2026-04-15 11:28:43",
+        "Preview": true,
+        "Emoji": "",
+        "Requests": 103,
+        "TextLength": 5213
+      }
+    ],
+    "Total": 454
+  },
+  "ResponseMetadata": {
+    "RequestId": "20260620130030FC9CC5E7227D795F2645",
+    "Action": "ListSpeakers",
+    "Version": "2025-05-20",
+    "Service": "speech_saas_prod",
+    "Region": "cn-beijing"
+  }
+}

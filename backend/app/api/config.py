@@ -71,12 +71,12 @@ def list_voices(db: Session = Depends(get_db)):
     if not needs_probe:
         # Edge 等供应商音色对所有账号开放，无需探活，恒可用。
         voices = [{**v, "available": True} for v in library]
-        return {"categories": voices_svc.CATEGORIES, "voices": voices, "probing": False}
+        return {"categories": voices_svc.categories_for(library), "voices": voices, "probing": False}
     # 火山：触发/复用当前凭证的后台探活；立即取已探出的结果合并进返回。
     voices_svc.ensure_probe(cfg.tts_provider, cfg.tts_appid, key)
     avail = voices_svc.availability(cfg.tts_appid, key)
     voices = [{**v, "available": avail.get(v["id"])} for v in library]
-    return {"categories": voices_svc.CATEGORIES, "voices": voices,
+    return {"categories": voices_svc.categories_for(library), "voices": voices,
             "probing": bool(key) and not avail}
 
 
