@@ -27,8 +27,16 @@ export default function ScriptReview({ taskId, modules, onChanged }: Props) {
   const { text, module } = pickScript(modules)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
-  const [busy, setBusy] = useState<'' | 'resume' | 'save' | 'rewrite'>('')
+  const [busy, setBusy] = useState<'' | 'resume' | 'save' | 'rewrite' | 'cfix'>('')
   const [err, setErr] = useState('')
+
+  // 合规风险横幅：停在 H 且自动改写后仍有残余风险时展示，让用户知情后再定夺。
+  const h = modules.find((m) => m.module === 'H')
+  const ho = h?.output as Record<string, unknown> | undefined
+  const riskInfo = ho && ho.awaiting_user_confirm
+    ? { score: Number(ho.risk_score ?? 0), fixed: Number(ho.auto_fixed ?? 0),
+        violations: (ho.violations as { type?: string; severity?: string; snippet?: string }[]) ?? [] }
+    : null
 
   async function onResume() {
     setBusy('resume'); setErr('')
@@ -53,14 +61,48 @@ export default function ScriptReview({ taskId, modules, onChanged }: Props) {
     finally { setBusy('') }
   }
 
+  async function onComplianceFix() {
+    setBusy('cfix'); setErr('')
+    try { await api.complianceFix(taskId); onChanged() }
+    catch (e) { setErr((e as ApiError).message) }
+    finally { setBusy('') }
+  }
+
   const working = busy !== ''
 
   return (
     <div className="mb-4 rounded-xl border border-brand-500/40 bg-brand-600/5 p-4">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-base">✋</span>
-        <span className="text-sm font-semibold text-brand-300">文案已生成，请先确认</span>
+        <span className="text-base">{riskInfo ? '⚠️' : '✋'}</span>
+        <span className="text-sm font-semibold text-brand-300">
+          {riskInfo ? '合规风险：已自动改写，仍有残余风险，请确认' : '文案已生成，请先确认'}
+        </span>
       </div>
+
+      {riskInfo && (
+        <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">
+          <p className="text-[12px] text-amber-300 mb-1.5">
+            系统已自动合规改写 {riskInfo.fixed} 轮（风险分 {riskInfo.score}）。以下风险点改写后仍被判定存在，
+            健康类题材里这类「疗效/医疗承诺」表述平台查得最严，建议你手动删改后再继续：
+          </p>
+          <ul className="space-y-1">
+            {riskInfo.violations.slice(0, 8).map((v, i) => (
+              <li key={i} className="text-[11px] text-slate-400 leading-relaxed">
+                <span className={v.severity === 'high' ? 'text-red-400' : 'text-amber-400'}>
+                  [{v.severity}] {v.type}
+                </span>
+                ：{(v.snippet || '').slice(0, 50)}
+              </li>
+            ))}
+          </ul>
+          <button onClick={onComplianceFix} disabled={working}
+            title="让 AI 针对上面这些风险点再定向软化一轮（会调用大模型）"
+            className="mt-2.5 px-3.5 py-1.5 rounded-lg bg-amber-600/90 text-white text-[13px] font-medium hover:bg-amber-600 disabled:opacity-50">
+            {busy === 'cfix' ? 'AI 改写中…' : '✨ 一键 AI 合规改写'}
+          </button>
+          <span className="ml-2 text-[10px] text-slate-500">改完仍停在这页，你再看效果</span>
+        </div>
+      )}
 
       {!editing ? (
         <div className="rounded-lg bg-slate-950/50 border border-slate-700/60 p-3 max-h-[42vh] overflow-auto">

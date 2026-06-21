@@ -170,6 +170,9 @@ export const api = {
   cancel: (id: string) => request<TaskOut>(`/tasks/${id}/cancel`, { method: 'POST' }),
   resume: (id: string) => request<TaskOut>(`/tasks/${id}/resume`, { method: 'POST' }),
 
+  // 一键 AI 合规改写：针对停在 H 的残余违规点定向软化一轮，改完重审仍停确认页。
+  complianceFix: (id: string) => request<TaskOut>(`/tasks/${id}/compliance-fix`, { method: 'POST' }),
+
   // ── 逐句编辑 / 单图重试 / 单步重跑（对齐竞品「随停随跑、每步可改」）──
   // 保存编辑后的分镜（cap/desc_prompt/has_character），写回 SB+P 产物，不触发生图。
   saveScenes: (id: string, scenes: Scene[]) =>

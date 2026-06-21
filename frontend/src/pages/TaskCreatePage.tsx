@@ -33,6 +33,8 @@ const IMAGE_STYLES = [
   { key: '极简插画', name: '极简插画', desc: '扁平简洁 · 现代设计' },
   { key: '温馨绘本', name: '温馨绘本', desc: '蜡笔童趣 · 明亮温暖' },
   { key: '明亮商业', name: '明亮商业', desc: '干净背景 · 产品突出' },
+  { key: '古典油画', name: '古典油画', desc: '厚涂笔触 · 伦勃朗布光' },
+  { key: '印象派油画', name: '印象派油画', desc: '松散笔触 · 莫奈光色' },
 ]
 const ASPECTS = [
   { key: '9:16', name: '9:16', desc: '竖屏', box: 'w-3 h-5' },
@@ -75,12 +77,6 @@ const OPTIONAL_MODULES = [
   { key: 'E', name: 'E 智能配图' },
   { key: 'F', name: 'F 配音分段' },
   { key: 'H', name: 'H 合规审查' },
-]
-// 处理模式：决定前段文案怎么来（后续生图/配音/成片三模式一致）。
-const PROCESSING_MODES = [
-  { key: 'full_auto', name: '全自动', desc: '清洗+AI改写+智能分句（推荐）' },
-  { key: 'semi_auto', name: '半自动', desc: '用原文，仅AI智能分句，不改写' },
-  { key: 'direct', name: '直接出片', desc: '不改写，按标点机械切分（仍合规审查）' },
 ]
 // 暂停确认：在关键步骤后停下等人工确认。
 const PAUSE_MODES = [
@@ -285,7 +281,7 @@ export default function TaskCreatePage() {
     }
   }
 
-  async function doAnalyzeStructure() {
+  async function doAnalyzeStructure(modeOverride?: string) {
     const text = (form.transcript ?? '').trim()
     if (text.length < 20) { setAnalyzeErr('请先在上方粘贴文案（至少 20 字）'); return }
     setAnalyzing(true); setAnalyzeErr(''); setStructure(null); setPreviewScript('')
@@ -298,7 +294,7 @@ export default function TaskCreatePage() {
         monetization_mode: form.monetization_mode,
         rewrite_strength: form.rewrite_strength,
         narrative_perspective: form.narrative_perspective,
-        creation_mode: form.creation_mode,
+        creation_mode: modeOverride ?? form.creation_mode,
       })
       setStructure(r.structure)
       setPreviewScript(r.script)
@@ -439,7 +435,7 @@ export default function TaskCreatePage() {
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-400">二创方式 <span className="text-[11px] text-slate-600">· 拆解爆款结构再仿写</span></span>
             {!noRewrite && (inputMode === 'transcript' || (form.transcript ?? '').trim()) ? (
-              <button type="button" onClick={doAnalyzeStructure} disabled={analyzing}
+              <button type="button" onClick={() => doAnalyzeStructure()} disabled={analyzing}
                 className="text-[12px] px-2.5 py-1 rounded-lg border border-brand-500/40 text-brand-300 hover:bg-brand-600/10 disabled:opacity-50">
                 {analyzing ? '生成中…约30-60秒' : '✨ 预览二创文案'}
               </button>
@@ -450,19 +446,27 @@ export default function TaskCreatePage() {
           )}
           <div className="mt-2 grid grid-cols-2 gap-2">
             {([
-              ['same_topic', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
-              ['lite', '轻量改写', '只改正文主体，保留原稿验证过的爆点和节奏，最省、过查重'],
-              ['none', '直接改写', '不拆结构，按常规套路改写'],
-              ['keep', '不改文案', '用我写的原文，一字不改，按标点分句'],
-            ] as const).map(([key, name, desc]) => {
-              const on = key === 'keep' ? noRewrite : (!noRewrite && (form.creation_mode || 'same_topic') === key)
+              // 每项明确对应 (creation_mode, processing_mode)，避免与下方重复设置打架。
+              // 前三项=改写(full_auto)；后两项=不改写(用原文)，区别仅分句方式。
+              ['same_topic', 'same_topic', 'full_auto', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
+              ['lite', 'lite', 'full_auto', '轻量改写', '只改正文主体，保留原稿验证过的爆点和节奏，最省、过查重'],
+              ['none', 'none', 'full_auto', '直接改写', '不拆结构，按常规套路改写'],
+              ['semi_auto', 'same_topic', 'semi_auto', '不改写·智能分句', '用我写的原文一字不改，AI 智能分句断句'],
+              ['keep', 'same_topic', 'direct', '不改写·机械切分', '用我写的原文，按标点机械切分'],
+            ] as const).map(([key, cm, pm, name, desc]) => {
+              // 当前选中项由实际字段反推：direct→keep，semi_auto→semi_auto，否则看 creation_mode。
+              const curKey = form.processing_mode === 'direct' ? 'keep'
+                : form.processing_mode === 'semi_auto' ? 'semi_auto'
+                : (form.creation_mode || 'same_topic')
+              const on = curKey === key
               return (
                 <button key={key} type="button" onClick={() => {
-                  if (key === 'keep') {
-                    set({ processing_mode: 'direct' })
-                    setPreviewScript(''); setStructure(null)   // 不改文案：清掉残留的二创预览
+                  set({ creation_mode: cm, processing_mode: pm })
+                  if (pm === 'full_auto') {
+                    // 改写类：切换即重新生成预览，所见即所得。无文案则跳过。
+                    if ((form.transcript ?? '').trim().length >= 20 && !analyzing) doAnalyzeStructure(cm)
                   } else {
-                    set({ creation_mode: key, processing_mode: 'full_auto' })
+                    setPreviewScript(''); setStructure(null)   // 不改写：清掉残留的二创预览
                   }
                 }}
                   className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
@@ -474,6 +478,9 @@ export default function TaskCreatePage() {
               )
             })}
           </div>
+          {noRewrite && (
+            <p className="mt-1.5 text-[11px] text-amber-400/80">已选「不改写」：用你的原文直接出片，不做 AI 改写。</p>
+          )}
 
           {/* 改写强度 / 叙事视角：直接影响二创效果，放在预览旁边，调完即可预览看效果。
               仅全自动模式有效（半自动/直接出片不改写）。 */}
@@ -829,28 +836,6 @@ export default function TaskCreatePage() {
                     )
                   })}
                 </div>
-              </div>
-
-              <div>
-                <span className="text-sm text-slate-400">处理模式 <span className="text-[11px] text-slate-600">· 决定文案怎么来，后续生图/配音/成片一致</span></span>
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  {PROCESSING_MODES.map((m) => {
-                    const on = (form.processing_mode ?? 'full_auto') === m.key
-                    return (
-                      <button key={m.key} type="button"
-                        onClick={() => set({ processing_mode: m.key })}
-                        className={`text-left px-2.5 py-2 rounded-lg border transition-colors ${
-                          on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-                        }`}>
-                        <div className={`text-sm font-medium ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">{m.desc}</div>
-                      </button>
-                    )
-                  })}
-                </div>
-                {form.processing_mode !== 'full_auto' && (
-                  <p className="mt-1.5 text-[11px] text-slate-500">此模式不做 AI 改写，「改写强度 / 叙事视角 / 带货模式」不可调，已隐藏。</p>
-                )}
               </div>
 
               <div>

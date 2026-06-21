@@ -291,17 +291,42 @@ def run_pipeline(db: Session, task_id: str):
             except Exception:
                 db.rollback()
 
-        # H 合规闸门（强制，按赛道词库；三种处理模式都跑——保留合规兜底）
+        # H 合规闸门（强制，按赛道词库；三种处理模式都跑——保留合规兜底）。
+        # pausable=False：H 的暂停由下方自定义逻辑控制（仅在仍有风险时才停，干净通过不打扰）。
         h_out = _llm_step(db, task, cfg, llm_key, "H",
                           lambda: tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
                                                     script, track=task.track),
-                          started)
-        if not h_out["passed"]:
-            task.status = "blocked"
-            task.error_code = "E4002"
-            task.error_message = "合规检查未通过"
-            db.commit()
-            return
+                          started, pausable=False)
+        # 不通过 → 自动合规化改写后重审，最多 2 轮；过了就用改后稿继续。
+        # awaiting_user_confirm 标记：resume 复用 H 产物时跳过本段，避免无限改写/暂停。
+        _fix_round = 0
+        while (not h_out["passed"] and not h_out.get("awaiting_user_confirm")
+               and _fix_round < 2):
+            _fix_round += 1
+            try:
+                fix_out, _fr = tm.run_compliance_fix(
+                    cfg.llm_provider, cfg.llm_model, llm_key,
+                    script, h_out.get("violations") or [], track=task.track)
+            except Exception:
+                break  # 改写失败（如 LLM 报错）→ 退出循环走下方确认/通过逻辑
+            new_script = (fix_out or {}).get("script", "").strip()
+            if not new_script or new_script == script:
+                break
+            script = new_script
+            # 改后稿回写 B 产物（direct/semi 模式无 B 则回写 A），让详情页/分句用合规稿
+            _wb = "B" if task.processing_mode == "full_auto" else "A"
+            _key = "script" if _wb == "B" else "cleaned_text"
+            _save_result(db, task.id, _wb, "success", output={_key: script})
+            h_chk = tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
+                                      script, track=task.track)
+            h_out = h_chk[0] if isinstance(h_chk, tuple) else h_chk
+            h_out["auto_fixed"] = _fix_round  # 标记已自动改写第几轮，供前端提示
+            _save_result(db, task.id, "H", "success", output=h_out)
+        # 仍不通过：自动改写已尽力，停在文案确认关卡交用户定夺（不丢改写成果、不硬放行）。
+        if not h_out["passed"] and not h_out.get("awaiting_user_confirm"):
+            h_out["awaiting_user_confirm"] = True
+            _save_result(db, task.id, "H", "success", output=h_out)
+            raise _Paused("H")
 
         # F 分段（必选）。direct 模式机械切分（不调 LLM、不计费）；其余走 LLM 分句。
         if task.processing_mode == "direct":
@@ -483,7 +508,8 @@ def run_pipeline(db: Session, task_id: str):
                 # 成本（重算而非累加，与画廊重试/重组同口径）：E 成本恒等于当前产物实际成本。
                 # 九宫格一次请求出 9 张只算 1 张钱（按 grid 标记折算 ceil(张数/9)）；逐张按实际张数。
                 img_cost = cost_svc.image_cost(images, cfg.image_provider,
-                                               getattr(cfg, "image_unit_price", None))
+                                               getattr(cfg, "image_unit_price", None),
+                                               model=cfg.image_model)
                 cost_svc.rebill_module(db, task, "E", cfg.image_provider, img_cost)
                 _save_result(db, task.id, "E", "success",
                              output={"images": [{"path": r.path, "sub_type": r.sub_type,

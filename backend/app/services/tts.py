@@ -20,6 +20,14 @@ from dataclasses import dataclass
 # 火山引擎大模型语音合成 HTTP 非流式接口（一次性返回 base64 音频）。
 VOLCANO_TTS_ENDPOINT = "https://openspeech.bytedance.com/api/v1/tts"
 VOLCANO_CLUSTER = "volcano_tts"
+# 复刻音色(声音复刻 ICL)走独立 cluster，普通/多情感音色用 volcano_tts。
+VOLCANO_CLUSTER_ICL = "volcano_icl"
+
+
+def _is_clone_voice(voice: str | None) -> bool:
+    """复刻音色判断：火山复刻音色 ID 以 S_ 开头（自定义复刻音色亦可能 ICL_ 前缀）。
+    复刻音色合成需切到 volcano_icl cluster，普通/多情感音色不受影响。"""
+    return bool(voice) and (voice.startswith("S_") or voice.startswith("ICL_"))
 # 默认音色用官方示例里 v1 HTTP 可用的音色（2.0 音色 *_uranus_bigtts 仅 v3 支持）。
 # 默认音色：本账号已用 /preview-tts 探活返回 200 实测可用的 2.0(uranus) 音色。
 # 老版 *_moon/*_mars 在本账号未授权(grant not found)，切勿用作默认。
@@ -53,22 +61,25 @@ def _synth_volcano(text: str, api_key: str, voice: str | None,
                    emotion: str | None = None, emotion_scale: float = 4.0) -> bytes:
     """火山引擎大模型 TTS 单段合成，返回 mp3 字节。
 
-    鉴权：Authorization 头为 "Bearer;${access_token}"（Bearer 与 token 以分号分隔）。
-    appid 必填；app.token 无实际鉴权作用，可传任意非空串（此处复用 access_token）。
+    鉴权：新版控制台 API Key，放 `x-api-key` 头（老的 Bearer;access_token+appid 火山已逐步下线）。
+    一个 API Key 通吃普通(uranus)/多情感(mars)/复刻(S_开头)三类音色，仅 cluster 按音色类型选：
+      复刻音色(S_/ICL_前缀) → volcano_icl；其余 → volcano_tts。app 不再需要传 appid。
     emotion 非空时启用情感（enable_emotion+emotion+emotion_scale），让多情感音色有起伏、
     不平读；仅多情感音色(*_emo_*)支持，普通音色传了会被忽略或报错，故由 voices.emotion_for 决定。
     """
-    if not appid:
-        raise TTSError("E6207: 火山 TTS 需配置 appid（在配置页填写）")
-    headers = {"Authorization": f"Bearer;{api_key}"}
-    audio = {"voice_type": voice or VOLCANO_DEFAULT_VOICE,
+    if not api_key:
+        raise TTSError("E6207: 火山 TTS 需配置 API Key（在配置页填写新版控制台 API Key）")
+    vt = voice or VOLCANO_DEFAULT_VOICE
+    cluster = VOLCANO_CLUSTER_ICL if _is_clone_voice(vt) else VOLCANO_CLUSTER
+    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    audio = {"voice_type": vt,
              "encoding": "mp3", "speed_ratio": _clamp_speed(speed)}
     if emotion:
         audio["enable_emotion"] = True
         audio["emotion"] = emotion
         audio["emotion_scale"] = max(1.0, min(5.0, float(emotion_scale)))
     payload = {
-        "app": {"appid": appid, "token": api_key, "cluster": VOLCANO_CLUSTER},
+        "app": {"cluster": cluster},
         "user": {"uid": "shipinhao"},
         "audio": audio,
         "request": {"reqid": uuid.uuid4().hex, "text": text, "operation": "query"},
@@ -84,8 +95,8 @@ def _synth_volcano(text: str, api_key: str, voice: str | None,
     code = body.get("code")
     if code != 3000:
         msg = body.get("message", "")
-        if "authenticate" in msg or "grant not found" in msg:
-            raise TTSError(f"E6204: TTS 鉴权失败（检查 appid/access_token）: {msg}")
+        if "authenticate" in msg or "grant not found" in msg or "invalid key" in msg or code == 3001:
+            raise TTSError(f"E6204: TTS 鉴权失败（检查新版控制台 API Key）: {msg}")
         if "voice_type" in msg or code == 3050:
             raise TTSError(f"E6210: 音色不存在或无授权（检查 voice）: {msg}")
         raise TTSError(f"E6208: TTS 合成失败 code={code}: {msg}")

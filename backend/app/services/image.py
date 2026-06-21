@@ -113,7 +113,11 @@ def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
             # 个别中转站 gpt 线路仍回 url，兜底下载
             out.append(httpx.get(d["url"], **_kw).content)
     if not out:
-        raise ImageError(f"{label}未返回图片", retryable=True)
+        # gpt 中转站(兔子等)按【请求次数】计费, 触发审核/上游波动时常回 200 但 data 为空。
+        # 这种返空若判 retryable 会被上层 IMG_RETRY 反复重打 → 一张图扣 N 次钱却拿不到图
+        # (task: "扣60几次0张图"的元凶)。故标 retryable=False: 不自动重试、直接占位, 一张最多扣1次,
+        # 是否再花钱由用户在画廊手动「重新生成」决定。
+        raise ImageError(f"{label}未返回图片(中转站返空, 不自动重试)", retryable=False)
     return out
 
 
@@ -239,7 +243,13 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         # 其他 4xx（model 不对 / 参数不符等）透出真实报错，不可重试。
         raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
 
-    img_url = resp.json()["data"][0]["url"]
+    data = resp.json().get("data") or []
+    if not data or not data[0].get("url"):
+        # 豆包/中转站返 200 但 data 空(同 gpt 返空场景): 标 retryable=False 不自动重试,
+        # 降级占位等手动重生。避免旧代码 resp.json()["data"][0] 直接 IndexError:
+        # 后台靠双保险兜住, 但单图重试路径会 500 没占位。显式抛 ImageError 两条路径都优雅占位。
+        raise ImageError(f"配图未返回图片(返空, 不自动重试): {str(resp.text)[:120]}", retryable=False)
+    img_url = data[0]["url"]
     img_bytes = httpx.get(img_url, **_kw).content
     out_path.write_bytes(img_bytes)
     # 统一缩放到目标比例尺寸（黑白风格强制转灰度）

@@ -81,7 +81,13 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
         dur_us = max(1, audio_us - cursor) if idx == last else int(round(d * SEC))
         img_starts.append((cursor, cursor + dur_us))
         seg = VideoSegment(VideoMaterial(img), Timerange(cursor, dur_us))
-        _apply_intro(seg, draft, tpl.pick_intro(tmpl, seed, idx))
+        # 持续微动（Ken Burns）：整段缓慢上下漂移+微推近，画面不再切换后僵住。
+        # 开启动画时用它替代「入场动画」——入场那种"动一下就停"正是要解决的问题；
+        # 二者都写 scale/position 通道会打架，故微动开则不加入场。转场保留（镜头间衔接）。
+        if enable_animations:
+            _apply_kenburns(seg, draft, dur_us, idx, seed)
+        else:
+            _apply_intro(seg, draft, tpl.pick_intro(tmpl, seed, idx))
         # 转场加在「前一段」尾部衔接下一段，故除首段外按上一镜头的转场设置
         if idx > 0:
             _apply_transition(seg, draft, tpl.pick_transition(tmpl, seed, idx - 1))
@@ -329,6 +335,26 @@ def _apply_intro(seg, draft, name):
             seg.add_animation(anim)
     except Exception:
         pass
+
+
+def _apply_kenburns(seg, draft, dur_us, idx, seed):
+    """持续微动（Ken Burns）：整段缓慢上移/下移 + 轻微推近，让画面"活"起来，
+    解决「只有切换时动一下、之后静止」的问题。
+    做法：在片段头(0)和尾(dur_us)各打一对关键帧——
+      · uniform_scale：底放大到 1.12（留出上下边距，平移不露黑边），整段再微推到 1.16；
+      · position_y：在 ±amp 之间缓慢漂移，方向按镜头序号交替（一上一下，不单调）。
+    position_y 坐标：正=上移、负=下移（与字幕同坐标系）；幅度 0.06 控制在边距内不露黑边。"""
+    try:
+        KP = draft.KeyframeProperty
+        base, zoom, amp = 1.12, 0.04, 0.06
+        up = (idx % 2 == 0)  # 偶数镜头上移、奇数下移，交替不单调
+        y0, y1 = (-amp, amp) if up else (amp, -amp)  # 上移：从下往上；下移：从上往下
+        seg.add_keyframe(KP.uniform_scale, 0, base)
+        seg.add_keyframe(KP.uniform_scale, dur_us, base + zoom)
+        seg.add_keyframe(KP.position_y, 0, y0)
+        seg.add_keyframe(KP.position_y, dur_us, y1)
+    except Exception:
+        pass  # 关键帧 API 缺失/报错不阻断草稿生成
 
 
 def _apply_transition(seg, draft, name):

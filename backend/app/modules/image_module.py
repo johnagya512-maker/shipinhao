@@ -6,6 +6,15 @@ from app.services.image import generate_image, placeholder_result, ImageError, I
 from app.modules import tracks
 
 IMG_RETRY = 2
+# gpt-image 协议：失败/超时请求中转站【照样收费】，故瞬时故障重试收紧到 1 次（最多 2 次请求），
+# 不像豆包失败 $0 可放心重试 3 次。避免一张顽固失败的图按次烧钱。
+IMG_RETRY_GPT = 1
+
+
+def _img_retry_for(model: str | None) -> int:
+    """按模型定瞬时故障重试次数：gpt/dall 失败也计费 → 收紧；其余按默认。"""
+    m = (model or "").lower()
+    return IMG_RETRY_GPT if ("gpt" in m or "dall" in m) else IMG_RETRY
 
 # 配图节奏：默认约 8 秒一张（中老年友好）；实际秒/张由赛道决定（见 tracks.seconds_per_image）。
 # 张数随时长动态变，封顶避免成本失控；下限保证封面+内容+CTA 基本结构。
@@ -121,14 +130,16 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
                                    ref_uri=ref_uri, base_url=base_url, proxy=proxy,
                                    grayscale=grayscale),
-            IMG_RETRY)
+            _img_retry_for(model))
         return result
     except ImageError as e:
-        # 审核类失败(audit=True, 含输入文案敏感): 降级占位图带审核 reason, 交给上层 LLM 改写补救
-        # (改个说法就能过), 不直接抛。真·不可救(Key无效/model错等, 非audit且不可重试): 抛出。
-        if getattr(e, "audit", False) or getattr(e, "retryable", False):
-            return placeholder_result(out_path, sub_type, suggested_duration, reason=str(e)[:120])
-        raise
+        # 任何 ImageError 都降级占位、绝不向上 raise。
+        # 历史教训(task: "扣60几次0张图"): 逐张模式下某张碰到不可重试硬错误(如余额不足 403、
+        # model 错), 旧代码 raise → render_images 的 fut.result() 一抛掀翻整批 → E 产物根本没存 →
+        # 画廊全是"未生成"空槽, 而前面已扣的钱全打水漂。
+        # 改为单张失败只占位+原因, 其余照常返回, E 必落地。是否重生由用户在画廊决定。
+        # (Key无效这类全局错也只占位, 不再让一张错带崩整批; 用户看占位原因即知要去改 Key。)
+        return placeholder_result(out_path, sub_type, suggested_duration, reason=str(e)[:120])
 
 
 def run_images(provider, api_key, book_info, segments, out_dir: Path,
@@ -267,7 +278,14 @@ def render_images(provider, api_key, tasks, model=None, concurrency=5,
                           aspect_ratio, rf, base_url, proxy, grayscale): idx
                 for idx, (p, st, op, sd, rf) in enumerate(tasks)}
         for fut in futs:
-            results[futs[fut]] = fut.result()  # 单张失败会抛不可重试错误，向上传递
+            idx = futs[fut]
+            try:
+                results[idx] = fut.result()
+            except Exception as e:
+                # 双保险:_gen_with_fallback 已兜住 ImageError, 这里再兜住任何意外异常
+                # (写盘失败/编码异常等), 保证单张出事不掀翻整批、E 必落地。
+                p, st, op, sd, rf = tasks[idx]
+                results[idx] = placeholder_result(op, st, sd, reason=f"生成异常: {str(e)[:100]}")
     return results
 
 
@@ -370,10 +388,15 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             groups.append((idxs[s:s + GROUP_MAX], rf))
 
     def _fill_placeholder(indices, reason):
-        """整组判败：每格写占位图，等用户在画廊手动重新组图。绝不逐张补图（控成本）。"""
+        """整组判败：每格写占位图，等用户在画廊手动重新组图。绝不逐张补图（控成本）。
+        九宫格模式下占位也打 grid 标记——这一组失败=【一次】网格请求失败，计费才能按
+        ceil(格数/9) 正确折算（否则失败格被当逐张图各计 1 单位，gpt-image 下会高估成本）。"""
         for i in indices:
             _p, st, op, sd, _rf = tasks[i]
-            results[i] = placeholder_result(op, st, sd, reason=reason)
+            r = placeholder_result(op, st, sd, reason=reason)
+            if grid_mode:
+                r.meta["grid"] = True
+            results[i] = r
 
     def _batch_only(indices, ref):
         """auto 组图：一次请求出多张。失败即整组判败占位，绝不回退逐张。"""
@@ -392,6 +415,9 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                 results[i] = batch[k]
         except ImageError as e:
             _fill_placeholder(indices, f"组图失败: {str(e)[:80]}")
+        except Exception as e:
+            # 同九宫格: 非 ImageError(json解析/解码/写盘等)也占位, 不冒泡掀翻整批。
+            _fill_placeholder(indices, f"组图处理异常: {str(e)[:80]}")
 
     def _do_group(indices, ref):
         """处理一个批次：单张也走九宫格/组图一次请求；失败即判败占位，绝不逐张降级。
@@ -431,6 +457,13 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                     last_err = str(e)
                     if not _is_audit(last_err):
                         break  # 非审核类(超时/Key等), 改写无用, 直接占位
+                except Exception as e:
+                    # 非 ImageError(如 _split_grid 解码坏图/截断数据抛 PIL.UnidentifiedImageError、
+                    # 下载/写盘异常): 改写救不了, 直接占位。绝不让它冒泡到 ex.map 掀翻整批
+                    # (九宫格版"单点掀桌": 一组解码失败→render_images_grouped崩→E没存→全槽未生成,
+                    # 而那次九宫格请求已扣过钱)。
+                    last_err = f"九宫格处理异常: {str(e)[:80]}"
+                    break
             _fill_placeholder(indices, f"九宫格失败: {last_err[:80]}")
             return
         _batch_only(indices, ref)
@@ -438,6 +471,15 @@ def render_images_grouped(provider, api_key, tasks, model=None,
     # 多批并发跑（每批一次组图请求），把串行等待压成并行，明显提速。
     from concurrent.futures import ThreadPoolExecutor
     workers = max(1, min(len(groups), 4))
+
+    def _safe_group(g):
+        # 双保险: _do_group 内部已兜异常, 这里再兜住 try 块之外的意外(如组装 prompt 抛错),
+        # 保证某一组出事不掀翻其余组、对应槽位占位兜底, E 必落地。
+        try:
+            _do_group(g[0], g[1])
+        except Exception as e:
+            _fill_placeholder(g[0], f"九宫格批次异常: {str(e)[:80]}")
+
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(lambda g: _do_group(g[0], g[1]), groups))
+        list(ex.map(_safe_group, groups))
     return results

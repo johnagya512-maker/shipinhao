@@ -175,8 +175,9 @@ export default function TaskDetailPage() {
   const hasDownload = task.status === 'completed' && !inJianying
   const showCompletedTip = task.status === 'completed'
   const awaitingConfirm = task.status === 'awaiting_confirm'
-  // 停在文案步（B）：用聚焦的文案确认窗口，而非通用确认卡片。
-  const awaitingScript = awaitingConfirm && task.paused_at === 'B'
+  // 停在文案步（B 改写确认）或 H（合规自动改写后仍有风险，需人工定夺）：
+  // 都用聚焦的文案确认窗口，而非通用确认卡片。
+  const awaitingScript = awaitingConfirm && (task.paused_at === 'B' || task.paused_at === 'H')
 
   return (
     <div className="max-w-6xl mx-auto">

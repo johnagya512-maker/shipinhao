@@ -17,7 +17,15 @@ IMAGE_PRICE = {
     "doubao": 0.25,
     "kling": 0.30,
     "tongyi": 0.20,
+    "gpt-image": 0.58,   # gpt-image-2（中转站如兔子API），约 $0.0828/次 ≈ 0.58 元，每次请求计费
 }
+
+
+def _is_gpt_model(model: str | None) -> bool:
+    """模型名带 gpt/dall 即 gpt-image 协议（与 image.py:_is_gpt 同口径）。
+    gpt-image 关键差异：失败/被拒的请求中转站【照样收费】，不能像豆包那样跳过不计。"""
+    m = (model or "").lower()
+    return "gpt" in m or "dall" in m
 
 # 各 LLM 模块输出 token 相对输入的经验系数（PRD 9.6）。
 OUTPUT_RATIO = {"A": 0.9, "B": 0.8, "C": 1.0, "F": 1.0}
@@ -76,20 +84,25 @@ def actual_llm_cost(tokens_in: int, tokens_out: int, provider: str) -> float:
     return round((tokens_in + tokens_out) / 1000 * unit, 4)
 
 
-def image_billable_units(images: list) -> float:
+def image_billable_units(images: list, model: str | None = None) -> float:
     """按计费口径折算图片「请求单位数」。
     九宫格模式（image 带 grid=True）：一次请求出 9 张只算 1 张钱 → 按 ceil(grid张数/9) 计；
     普通逐张/组图：每张算 1 个单位。images 可以是 dict 列表（E 产物）或带 .meta 的 ImageResult。
-    占位图（fallback=True，审核拒绝/失败降级而来）不计费——中转站对失败请求收 $0，
-    实测每条 SensitiveContentDetected 等失败请求账单都是 0.00000，不应算进成本。
+
+    失败占位（fallback=True）是否计费，按协议区分：
+    - 豆包等：失败请求中转站收 $0 → 跳过不计（实测 SensitiveContentDetected 账单 0.00000）。
+    - gpt-image（gpt/dall 模型）：失败/被拒请求【照样收费】→ 必须计入，否则严重低估成本
+      （task_69f9678c4942 实测：第4组九宫格失败仍被兔子API按 $0.0828/次扣费）。
     """
     import math
+    is_gpt = _is_gpt_model(model)
     grid_n = other_n = 0
     for im in images:
         meta = im if isinstance(im, dict) else getattr(im, "meta", {})
         meta = meta or {}
-        if meta.get("fallback"):
-            continue  # 占位图=失败降级，中转站不收费，跳过
+        if meta.get("fallback") and not is_gpt:
+            continue  # 豆包等：占位=失败降级，中转站不收费，跳过
+        # gpt-image：占位图对应的请求照样发生过、照样扣钱，计入。
         is_grid = bool(meta.get("grid"))
         if is_grid:
             grid_n += 1
@@ -108,9 +121,15 @@ def _image_unit(provider: str, override: float | None = None) -> float:
     return IMAGE_PRICE.get(provider, 0.10)
 
 
-def image_cost(images: list, provider: str, unit_price: float | None = None) -> float:
-    """图片实际成本 = 计费单位数 × 单价。unit_price 非空且>0 时用它（中转站真实单价）。"""
-    return round(image_billable_units(images) * _image_unit(provider, unit_price), 4)
+def image_cost(images: list, provider: str, unit_price: float | None = None,
+               model: str | None = None) -> float:
+    """图片实际成本 = 计费单位数 × 单价。
+    unit_price 非空且>0 时用它（中转站真实单价，用户在配置中心填）。
+    否则回退内置缺省价：gpt-image 模型用 gpt-image 价（0.58），其余按 provider。
+    gpt-image 协议下失败请求也计入单位数（中转站照收费）。"""
+    units = image_billable_units(images, model=model)
+    price_key = "gpt-image" if _is_gpt_model(model) else provider
+    return round(units * _image_unit(price_key, unit_price), 4)
 
 
 def record_cost(db: Session, task_id: str, module: str, provider: str, cost: float):

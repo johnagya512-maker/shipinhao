@@ -15,6 +15,7 @@ CATEGORIES = [
     {"key": "character", "name": "角色扮演", "desc": "戏剧感强"},
     {"key": "dialect", "name": "方言口音", "desc": "地方特色"},
     {"key": "emotion", "name": "多情感", "desc": "可调情绪"},
+    {"key": "clone", "name": "声音复刻", "desc": "我的克隆音色"},
 ]
 
 # 音色清单：id=火山 voice_type，name=展示名，tag=描述标签，category=分类 key
@@ -112,6 +113,19 @@ VOICE_LIBRARY = [
     {"id": "zh_male_xionger_uranus_bigtts", "name": "熊二", "tag": "角色扮演", "category": "character"},
     {"id": "zh_male_zhuangzhou_uranus_bigtts", "name": "庄周", "tag": "角色扮演", "category": "character"},
     {"id": "zh_male_zhubajie_uranus_bigtts", "name": "猪八戒", "tag": "角色扮演", "category": "character"},
+    # ── 多情感（账号授权·emo 2.0，合成时自动带 emotion 让声音有起伏不平读）──
+    # emotion 为该音色默认情绪（已实测 happy/sad/angry/neutral/excited/surprised 均可合成）。
+    {"id": "zh_female_roumeinvyou_emo_v2_mars_bigtts", "name": "柔美女友", "tag": "多情感·温柔", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_female_meilinvyou_emo_v2_mars_bigtts", "name": "魅力女友", "tag": "多情感·甜美", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_female_shuangkuaisisi_emo_v2_mars_bigtts", "name": "爽快思思", "tag": "多情感·活力", "category": "emotion", "emotion": "excited"},
+    {"id": "zh_female_gaolengyujie_emo_v2_mars_bigtts", "name": "高冷御姐", "tag": "多情感·冷感", "category": "emotion", "emotion": "neutral"},
+    {"id": "zh_male_yangguangqingnian_emo_v2_mars_bigtts", "name": "阳光青年", "tag": "多情感·阳光", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_male_beijingxiaoye_emo_v2_mars_bigtts", "name": "北京小爷", "tag": "多情感·京腔", "category": "emotion", "emotion": "happy"},
+    {"id": "zh_male_ruyayichen_emo_v2_mars_bigtts", "name": "儒雅逸辰", "tag": "多情感·儒雅", "category": "emotion", "emotion": "neutral"},
+    {"id": "ICL_zh_female_huoponvhai_tob", "name": "活泼女孩", "tag": "多情感·活泼", "category": "emotion", "emotion": "excited"},
+    # ── 声音复刻（账号自训克隆音色，走 volcano_icl，需新版控制台 API Key）──
+    {"id": "S_kXK5czr62", "name": "晓松音色", "tag": "我的复刻", "category": "clone"},
+    {"id": "S_jXK5czr62", "name": "女朗读音色", "tag": "我的复刻", "category": "clone"},
 ]
 
 

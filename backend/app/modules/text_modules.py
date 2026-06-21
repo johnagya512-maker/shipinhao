@@ -506,27 +506,36 @@ def run_compliance(provider, model, key, script, track="character_story"):
         data = {"passed": True, "violations": [], "risk_score": 0.0}
     violations = data.get("violations", [])
     risk = _normalize_risk(data.get("risk_score", 0.0))
-    # LLM 语义判定常把否定语境（如"不聊补药""无法治愈"）误判为 high，单独一票否决
-    # 会误杀正常文案。故 high 级硬拦截只认规则词库（带否定检测、确定性强）；
-    # LLM 的 high 仅作风险参考——保留展示，并把风险分托底拉高，但不直接 block。
-    llm_has_high = any(v.get("severity") == "high" for v in violations)
-    if llm_has_high:
-        risk = max(risk, 0.6)  # LLM 报 high：拉高风险分（但 ≤0.7，不致直接失败）
-    # 规则命中高危词才强制拉满风险并一票否决
+    # 合规拦截【只认规则词库的高危违禁词】（如奇迹/根治/病好了，确定性强、是真红线）。
+    # LLM 的语义判定（修辞、转述、带书介绍等常被误判为违规）【仅作提醒】，
+    # 保留在 violations 里展示，但不参与 passed —— 避免主观误判把正常文案卡死。
     if matched["high"]:
         risk = max(risk, 0.9)
         for w in matched["high"]:
             violations.append({"type": "违禁词", "snippet": w, "severity": "high",
                                "suggestion": "删除或改写"})
-    # 通过条件：规则库无 high 命中，且综合风险 ≤ 0.7（LLM 误判不再卡死，真违禁仍拦）
-    passed = risk <= 0.7 and not matched["high"]
+    # 通过条件：只要没命中规则库高危词就放行（LLM 主观高分不再硬拦，仅提示）。
+    passed = not matched["high"]
     return {
         "passed": passed,
         "violations": violations,
         "risk_score": round(risk, 2),
         "matched_words": matched["high"] + matched["warn"],
-        "needs_review": 0.3 < risk <= 0.7,
+        "needs_review": bool(violations) and passed,
     }, r
+
+
+def run_compliance_fix(provider, model, key, script, violations, track="character_story"):
+    """H 自动合规化改写：把违规文案按违规清单改成合规版，返回 {"script": 改后正文}。
+    只软化违规表达，保留事实/数字/人名/书名/故事线。改后需由调用方重新跑 run_compliance 复审。"""
+    vlist = "\n".join(
+        f"- [{v.get('severity','')}] {v.get('type','')}：{v.get('snippet','')}"
+        f"（建议：{v.get('suggestion','')}）"
+        for v in (violations or [])
+    ) or "（无具体清单，按通用合规规则全文软化）"
+    prompt = _render(prompts.MODULE_H_FIX, script=script, violations=vlist)
+    r = call_llm(provider, model, key, prompt)
+    return {"script": r.text.strip()}, r
 
 
 def _normalize_risk(value) -> float:

@@ -434,6 +434,57 @@ def resume_task(task_id: str, bg: BackgroundTasks, db: Session = Depends(get_db)
     return task
 
 
+@router.post("/tasks/{task_id}/compliance-fix", response_model=TaskOut)
+def compliance_fix(task_id: str, db: Session = Depends(get_db)):
+    """一键 AI 合规改写：针对当前残余违规点让 LLM 定向软化一轮，改完重审、回写产物。
+    任务保持 awaiting_confirm（停在确认页），用户看改后稿+新风险再决定。仅停在 H 时可调。"""
+    from app.core.security import decrypt
+    from app.modules import text_modules as tm
+    from app.modules.retry import with_retry
+    from app.services.llm import LLMError
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    if task.status != "awaiting_confirm" or task.paused_at != "H":
+        raise HTTPException(400, detail="仅在合规确认关卡可一键改写")
+    cfg = db.get(Config, 1)
+    llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+    if not llm_key:
+        raise HTTPException(400, detail="未配置大模型 API Key，无法改写")
+    # 当前文案：full_auto 取 B 稿，否则取 A 清洗稿。
+    wb = "B" if task.processing_mode == "full_auto" else "A"
+    skey = "script" if wb == "B" else "cleaned_text"
+    with _get_retry_lock(task_id):
+        src = db.query(ModuleResult).filter_by(task_id=task_id, module=wb).first()
+        script = (src.output or {}).get(skey, "") if src and src.output else ""
+        h = db.query(ModuleResult).filter_by(task_id=task_id, module="H").first()
+        violations = (h.output or {}).get("violations", []) if h and h.output else []
+        if not script.strip():
+            raise HTTPException(404, detail="无可改写的文案产物")
+        try:
+            (fix_out, _fr), _ = with_retry(lambda: tm.run_compliance_fix(
+                cfg.llm_provider, cfg.llm_model, llm_key, script, violations,
+                track=task.track), 2)
+        except LLMError as e:
+            raise HTTPException(502, detail=f"合规改写失败：{e}"[:200])
+        new_script = (fix_out or {}).get("script", "").strip()
+        if not new_script:
+            raise HTTPException(502, detail="改写返回为空，请重试")
+        if src:                                  # 回写改后稿
+            o = dict(src.output or {}); o[skey] = new_script; src.output = o
+        # 重审并更新 H 产物（保留 awaiting_user_confirm，仍停确认页）
+        h_chk = tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
+                                  new_script, track=task.track)
+        h_new = h_chk[0] if isinstance(h_chk, tuple) else h_chk
+        h_new["awaiting_user_confirm"] = True
+        h_new["auto_fixed"] = ((h.output or {}).get("auto_fixed", 0) if h and h.output else 0) + 1
+        if h:
+            h.output = h_new
+        db.commit()
+    db.refresh(task)
+    return task
+
+
 @router.get("/tasks/{task_id}/results")
 def get_task_results(task_id: str, db: Session = Depends(get_db)):
     """任务详情：各模块产物（PRD 6.3）。供详情页展示清洗/改写/分段/合规/配图结果。"""
@@ -840,7 +891,8 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     e_now = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
     cur_imgs = (e_now.output or {}).get("images", []) if e_now else []
     e_cost = cost_svc.image_cost(cur_imgs, provider,
-                                 getattr(cfg, "image_unit_price", None) if cfg else None)
+                                 getattr(cfg, "image_unit_price", None) if cfg else None,
+                                 model=getattr(cfg, "image_model", None) if cfg else None)
     cost_svc.rebill_module(db, task, "E", provider, e_cost)
 
     # 返回：是否仍失败、原因、是否做过安全改写、改写后的主体（前端回填到输入框）
@@ -1002,7 +1054,8 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     # 九宫格按 grid 标记折算 ceil(张数/9)、一次请求出9张只算1张钱；逐张按实际张数。
     provider = cfg.image_provider if cfg else "mock"
     e_cost = cost_svc.image_cost(final_imgs, provider,
-                                 getattr(cfg, "image_unit_price", None) if cfg else None)
+                                 getattr(cfg, "image_unit_price", None) if cfg else None,
+                                 model=getattr(cfg, "image_model", None) if cfg else None)
     total = cost_svc.rebill_module(db, task, "E", provider, e_cost)
 
     for r in out:
