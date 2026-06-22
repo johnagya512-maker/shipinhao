@@ -307,11 +307,21 @@ def _split_grid(grid_path: Path, out_paths: list, sub_types: list, durations: li
         x0, y0 = c * cw + inset_x, r * ch + inset_y
         x1, y1 = c * cw + cw - inset_x, r * ch + ch - inset_y
         cell = img.crop((x0, y0, x1, y1))
-        if (aspect_ratio or "9:16") == "9:16":
-            ccw, cch = cell.size
-            tw = int(cch * 9 / 16)
+        # 每格按【目标比例】中心裁切后再缩放，避免近正方形的格子被直接 resize 成 16:9/9:16
+        # 而横向或纵向拉伸（人物变胖/变扁、画面变扭）。对所有比例通用，不只竖版。
+        ccw, cch = cell.size
+        dst_ratio = w / h
+        src_ratio = ccw / cch
+        if src_ratio > dst_ratio:
+            # 格子比目标更宽：裁掉左右
+            tw = int(cch * dst_ratio)
             left = max(0, (ccw - tw) // 2)
             cell = cell.crop((left, 0, min(left + tw, ccw), cch))
+        elif src_ratio < dst_ratio:
+            # 格子比目标更高：裁掉上下
+            th = int(ccw / dst_ratio)
+            top = max(0, (cch - th) // 2)
+            cell = cell.crop((0, top, ccw, min(top + th, cch)))
         cell = cell.resize((w, h), Image.LANCZOS)
         if grayscale:
             cell = cell.convert("L").convert("RGB")
