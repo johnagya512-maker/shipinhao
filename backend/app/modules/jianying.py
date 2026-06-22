@@ -14,6 +14,18 @@ SEC = 1_000_000  # 1 秒 = 1e6 微秒
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
 
+# 出图比例 → 剪映画布尺寸。须与 image.py 的 ASPECT_DIMS 对齐，否则横版图被塞进竖版画布会变形。
+_CANVAS = {
+    "9:16": (1080, 1920),
+    "3:4": (1440, 1920),
+    "1:1": (1440, 1440),
+    "16:9": (1920, 1080),
+}
+
+
+def _canvas_for(aspect_ratio: str | None) -> tuple[int, int]:
+    return _CANVAS.get(aspect_ratio or "9:16", (WIDTH, HEIGHT))
+
 
 def _populate(script, image_paths, image_weights, audio_path, segments,
               enable_subtitles, enable_animations, template="classic", seed=0,
@@ -184,32 +196,37 @@ def build_draft(image_paths: list[str], image_weights: list[float], audio_path: 
                 enable_subtitles: bool = True, enable_animations: bool = True,
                 jianying_dir: str | None = None,
                 template: str = "classic", seed: int = 0,
-                seg_durations: list[float] | None = None) -> dict:
+                seg_durations: list[float] | None = None,
+                aspect_ratio: str | None = None) -> dict:
     """生成剪映草稿。返回 {draft_path, duration, dropped_images, in_jianying}。
 
     jianying_dir 提供时写入用户剪映草稿目录（DraftFolder，剪映可直接打开）；
     否则退回 storage 内裸 json（仅供下载）。
     template/seed 选动画模板并保证草稿可复现。
     seg_durations 非空时启用分镜对齐模式（图/字/音三轨共用分镜时长）。
+    aspect_ratio 决定画布尺寸（须与出图比例一致，否则横版图被塞进竖版画布会变形）。
     """
     if jianying_dir:
         return _build_into_jianying(image_paths, image_weights, audio_path, segments,
                                     jianying_dir, draft_name, enable_subtitles,
-                                    enable_animations, template, seed, seg_durations)
+                                    enable_animations, template, seed, seg_durations,
+                                    aspect_ratio)
     return _build_bare_json(image_paths, image_weights, audio_path, segments,
                             draft_dir, draft_name, enable_subtitles, enable_animations,
-                            template, seed, seg_durations)
+                            template, seed, seg_durations, aspect_ratio)
 
 
 def _build_into_jianying(image_paths, image_weights, audio_path, segments,
                          jianying_dir, draft_name, enable_subtitles, enable_animations,
-                         template="classic", seed=0, seg_durations=None):
+                         template="classic", seed=0, seg_durations=None,
+                         aspect_ratio=None):
     """用 DraftFolder 写入剪映草稿目录，生成完整结构（实测剪映可打开）。"""
     from pyJianYingDraft import DraftFolder
+    cw, ch = _canvas_for(aspect_ratio)
     folder = DraftFolder(jianying_dir)
     if folder.has_draft(draft_name):
         _remove_draft(Path(jianying_dir) / draft_name, draft_name, folder)
-    script = folder.create_draft(draft_name, WIDTH, HEIGHT, FPS, allow_replace=True)
+    script = folder.create_draft(draft_name, cw, ch, FPS, allow_replace=True)
     duration, dropped = _populate(script, image_paths, image_weights, audio_path,
                                   segments, enable_subtitles, enable_animations,
                                   template, seed, seg_durations)
@@ -251,10 +268,12 @@ def _write_cover(draft_path: Path, image_paths: list[str]):
 
 def _build_bare_json(image_paths, image_weights, audio_path, segments,
                      draft_dir, draft_name, enable_subtitles, enable_animations,
-                     template="classic", seed=0, seg_durations=None):
+                     template="classic", seed=0, seg_durations=None,
+                     aspect_ratio=None):
     """退回方案：storage 内裸 draft_content.json（仅供下载，剪映不直接识别）。"""
     from pyJianYingDraft import ScriptFile
-    script = ScriptFile(WIDTH, HEIGHT, FPS, maintrack_adsorb=True)
+    cw, ch = _canvas_for(aspect_ratio)
+    script = ScriptFile(cw, ch, FPS, maintrack_adsorb=True)
     duration, dropped = _populate(script, image_paths, image_weights, audio_path,
                                   segments, enable_subtitles, enable_animations,
                                   template, seed, seg_durations)
