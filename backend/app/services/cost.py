@@ -100,8 +100,14 @@ def image_billable_units(images: list, model: str | None = None) -> float:
     for im in images:
         meta = im if isinstance(im, dict) else getattr(im, "meta", {})
         meta = meta or {}
-        if meta.get("fallback") and not is_gpt:
-            continue  # 豆包等：占位=失败降级，中转站不收费，跳过
+        if meta.get("fallback"):
+            if not is_gpt:
+                continue  # 豆包等：占位=失败降级，中转站不收费，跳过
+            # gpt-image：占位对应的请求一般照样扣钱，计入。但「连接层断连」(Server disconnected /
+            # 请求错误)是服务器没收到/没回任何响应，中转站多半未受理、未扣费 → 不计，避免高估。
+            reason = str(meta.get("reason") or meta.get("fail_reason") or "")
+            if "请求错误" in reason or "disconnected" in reason.lower():
+                continue
         # gpt-image：占位图对应的请求照样发生过、照样扣钱，计入。
         is_grid = bool(meta.get("grid"))
         if is_grid:

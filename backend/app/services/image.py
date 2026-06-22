@@ -409,14 +409,19 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         raise ImageError("绘图 API Key 无效", retryable=False)
     if resp.status_code == 429:
         raise ImageError("绘图限流", retryable=True)
+    if resp.status_code >= 500:
+        raise ImageError(f"九宫格服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
     if resp.status_code >= 400:
         body = resp.text[:300]
+        # 审核拦截：原样重试必再被拒(retryable=False不烧钱)，但标 audit=True 交上层 LLM 改写补救。
         if "sensitive" in body.lower() or "SensitiveContent" in body:
-            raise ImageError(f"九宫格被内容审核拒绝(可改写): {body}", retryable=True, audit=True)
-        raise ImageError(f"九宫格被拒 {resp.status_code}: {body}", retryable=True)
+            raise ImageError(f"九宫格被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
+        # 其它 4xx(Key错/参数错等)：重试无用，直接占位。
+        raise ImageError(f"九宫格被拒 {resp.status_code}: {body}", retryable=False)
     data = resp.json().get("data") or []
     if not data or not data[0].get("url"):
-        raise ImageError("九宫格未返回图片", retryable=True)
+        # 中转站返 200 但 data 空：重试会一次次扣钱拿不到图(同逐张返空口径)，不自动重试。
+        raise ImageError("九宫格未返回图片(中转站返空, 不自动重试)", retryable=False)
     raw = out_paths[0].parent / "_grid_raw.png"
     try:
         raw.write_bytes(httpx.get(data[0]["url"], **_kw).content)

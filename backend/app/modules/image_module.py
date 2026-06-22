@@ -446,10 +446,16 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                         break
                 cell_prompt = build_grid_prompt(briefs, style_bible=_style_bible(style))
                 try:
-                    grid = generate_grid_image(provider, api_key, cell_prompt, sub_types,
-                                               out_paths, durations, model=model,
-                                               aspect_ratio=aspect_ratio, base_url=base_url,
-                                               proxy=proxy, grayscale=_gray)
+                    # 瞬时故障(超时/断连/限流/5xx)退避重试，和逐张 _gen_with_fallback 一致：
+                    # 中转站瞬时断连("Server disconnected without sending a response")多半上游没出图
+                    # 也没扣费，重试一次常能成；retryable=False 的错(审核/被拒/返空)在 with_retry 内不重试。
+                    from app.modules.retry import with_retry
+                    grid, _ = with_retry(
+                        lambda: generate_grid_image(provider, api_key, cell_prompt, sub_types,
+                                                    out_paths, durations, model=model,
+                                                    aspect_ratio=aspect_ratio, base_url=base_url,
+                                                    proxy=proxy, grayscale=_gray),
+                        _img_retry_for(model))
                     for k, i in enumerate(indices):
                         results[i] = grid[k]
                     return  # 成功
