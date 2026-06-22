@@ -19,12 +19,18 @@ class ImageResult:
 
 
 class ImageError(Exception):
-    def __init__(self, message: str, retryable: bool = True, audit: bool = False):
+    def __init__(self, message: str, retryable: bool = True, audit: bool = False,
+                 disconnect: bool = False):
         super().__init__(message)
         self.retryable = retryable
         # audit=True：内容审核拦截（输入文案/输出图片敏感）。原样重试无用, 但 LLM 改写可救,
         # 故上层降级占位图(带审核 reason)交给改写补救, 而非当作终极错误直接抛。
         self.audit = audit
+        # disconnect=True：连接层断连(Server disconnected/请求错误)。服务器没回任何响应,
+        # 中转站多半未受理、未扣费(见 cost.image_billable_units)。故即使 gpt(失败也计费)也能
+        # 放心多重试——重试不烧钱、还常能成。with_retry 据此给断连更高的重试预算。
+        self.disconnect = disconnect
+
 
 
 # 竖版 9:16（默认）
@@ -88,7 +94,7 @@ def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
     except httpx.TimeoutException as e:
         raise ImageError(f"{label}超时: {e}", retryable=True)
     except httpx.RequestError as e:
-        raise ImageError(f"{label}请求错误: {e}", retryable=True)
+        raise ImageError(f"{label}请求错误: {e}", retryable=True, disconnect=True)
     if resp.status_code == 401:
         raise ImageError("绘图 API Key 无效", retryable=False)
     if resp.status_code == 429:
@@ -404,7 +410,7 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
     except httpx.TimeoutException as e:
         raise ImageError(f"九宫格超时: {e}", retryable=True)
     except httpx.RequestError as e:
-        raise ImageError(f"九宫格请求错误: {e}", retryable=True)
+        raise ImageError(f"九宫格请求错误: {e}", retryable=True, disconnect=True)
     if resp.status_code == 401:
         raise ImageError("绘图 API Key 无效", retryable=False)
     if resp.status_code == 429:

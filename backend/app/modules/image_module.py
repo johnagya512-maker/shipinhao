@@ -9,6 +9,9 @@ IMG_RETRY = 2
 # gpt-image 协议：失败/超时请求中转站【照样收费】，故瞬时故障重试收紧到 1 次（最多 2 次请求），
 # 不像豆包失败 $0 可放心重试 3 次。避免一张顽固失败的图按次烧钱。
 IMG_RETRY_GPT = 1
+# 连接层断连(Server disconnected/请求错误)例外：服务器没受理、没扣费，重试不烧钱且常能成。
+# gpt 九宫格大图易被网关偶发掐断，给断连更高的重试预算（与计费无关，不怕烧钱）。
+IMG_DISCONNECT_RETRY = 4
 
 
 def _img_retry_for(model: str | None) -> int:
@@ -130,7 +133,7 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
                                    ref_uri=ref_uri, base_url=base_url, proxy=proxy,
                                    grayscale=grayscale),
-            _img_retry_for(model))
+            _img_retry_for(model), disconnect_retry=IMG_DISCONNECT_RETRY)
         return result
     except ImageError as e:
         # 任何 ImageError 都降级占位、绝不向上 raise。
@@ -455,7 +458,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                                                     out_paths, durations, model=model,
                                                     aspect_ratio=aspect_ratio, base_url=base_url,
                                                     proxy=proxy, grayscale=_gray),
-                        _img_retry_for(model))
+                        _img_retry_for(model), disconnect_retry=IMG_DISCONNECT_RETRY)
                     for k, i in enumerate(indices):
                         results[i] = grid[k]
                     return  # 成功
