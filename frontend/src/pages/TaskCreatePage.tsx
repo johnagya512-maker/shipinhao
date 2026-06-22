@@ -447,8 +447,9 @@ export default function TaskCreatePage() {
           <div className="mt-2 grid grid-cols-2 gap-2">
             {([
               // 每项明确对应 (creation_mode, processing_mode)，避免与下方重复设置打架。
-              // 前三项=改写(full_auto)；后两项=不改写(用原文)，区别仅分句方式。
+              // 前四项=改写(full_auto)；后两项=不改写(用原文)，区别仅分句方式。
               ['same_topic', 'same_topic', 'full_auto', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
+              ['remix', 'remix', 'full_auto', '仿写·中度', '保留钩子和爆点节奏，逐句换措辞过查重（推荐）'],
               ['lite', 'lite', 'full_auto', '轻量改写', '只改正文主体，保留原稿验证过的爆点和节奏，最省、过查重'],
               ['none', 'none', 'full_auto', '直接改写', '不拆结构，按常规套路改写'],
               ['semi_auto', 'same_topic', 'semi_auto', '不改写·智能分句', '用我写的原文一字不改，AI 智能分句断句'],

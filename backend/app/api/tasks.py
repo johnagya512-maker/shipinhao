@@ -142,7 +142,8 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="未配置大模型 API Key，无法生成")
     prov, model = cfg.llm_provider, cfg.llm_model
     _mode = body.get("creation_mode") or "same_topic"
-    # lite=手册轻量改写（不拆结构）；none=不拆直接改写；其余=先拆爆款骨架再按骨架重写。
+    # lite=手册轻量改写（不拆结构）；remix=中度仿写（不拆结构）；
+    # none=不拆直接改写；其余=先拆爆款骨架再按骨架重写。
     # 接入 with_retry：第三方网关 504/超时自动重试，和正式任务一致。
     structure = {}
     try:
@@ -151,6 +152,12 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
                 prov, model, llm_key, text,
                 target_audience=body.get("target_audience") or "50+女性",
                 title=body.get("title"), lite=True,
+                keyword=body.get("keyword") or "", author=body.get("author") or ""), 2)
+        elif _mode == "remix":
+            (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
+                prov, model, llm_key, text,
+                target_audience=body.get("target_audience") or "50+女性",
+                title=body.get("title"), remix=True,
                 keyword=body.get("keyword") or "", author=body.get("author") or ""), 2)
         else:
             if _mode != "none":

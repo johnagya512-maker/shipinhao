@@ -140,15 +140,24 @@ def _structure_to_guide(structure: dict) -> str:
 def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性", title=None,
                 track="character_story", monetization_mode="revenue_share",
                 rewrite_strength="medium", narrative_perspective="auto",
-                structure_guide=None, lite=False, keyword="", author="", rewrite_notes=""):
+                structure_guide=None, lite=False, remix=False,
+                keyword="", author="", rewrite_notes=""):
     """B 改写。按赛道选提示词；人物故事赛道按变现模式切换结尾引导。
     rewrite_strength/narrative_perspective 作为附加指令注入提示词尾部。
     structure_guide（dict 骨架）非空时，要求改写严格复刻该爆款结构。
     lite=True 走手册轻量改写版（MODULE_B_LITE）：只改正文主体、保留原稿爆点、不激进重写、
-    不杜撰，过查重即可；此模式忽略赛道/骨架/强度档（手册轻量流是单一通用提示词）。"""
+    不杜撰，过查重即可；此模式忽略赛道/骨架/强度档（手册轻量流是单一通用提示词）。
+    remix=True 走中度仿写版（MODULE_B_REMIX）：保留钩子类型/爆点顺序/情绪节奏，逐句重写措辞、
+    连续雷同≤10字过查重；介于拆解结构(改最狠)与轻量(改最轻)之间，同样是单一通用提示词。"""
     from app.modules import tracks
     if lite:
         prompt = _render(prompts.MODULE_B_LITE, cleaned_transcript=cleaned_text,
+                         keyword=keyword or "", title=title or "", author=author or "",
+                         rewrite_notes=rewrite_notes or "（无）")
+        r = call_llm(provider, model, key, prompt)
+        return {"script": r.text.strip()}, r
+    if remix:
+        prompt = _render(prompts.MODULE_B_REMIX, cleaned_transcript=cleaned_text,
                          keyword=keyword or "", title=title or "", author=author or "",
                          rewrite_notes=rewrite_notes or "（无）")
         r = call_llm(provider, model, key, prompt)

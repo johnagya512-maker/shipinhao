@@ -235,6 +235,15 @@ def run_pipeline(db: Session, task_id: str):
                                                          author=getattr(task, "author", "") or ""),
                                   started)
                 script = b_out["script"]
+            elif _mode == "remix":
+                # 中度仿写：保留钩子类型/爆点顺序/情绪节奏，逐句重写措辞、连续雷同≤10字。跳过结构拆解。
+                b_out = _llm_step(db, task, cfg, llm_key, "B",
+                                  lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                         cleaned, task.target_audience, task.title,
+                                                         remix=True, keyword=task.keyword or "",
+                                                         author=getattr(task, "author", "") or ""),
+                                  started)
+                script = b_out["script"]
             else:
                 # S2 结构拆解：creation_mode != none 时，先拆出爆款结构骨架，
                 # 供 B 改写复刻其节奏。拆解失败不阻断（骨架为空即退回普通改写）。
