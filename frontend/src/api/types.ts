@@ -21,6 +21,7 @@ export interface TaskCreate {
   monetization_mode?: string
   image_style?: string | null
   aspect_ratio?: string
+  layout?: string
   rewrite_strength?: string
   narrative_perspective?: string
   voice_speed?: number
@@ -123,6 +124,7 @@ export interface TaskDetail {
   pause_steps?: string[] | null
   paused_at?: string | null
   aspect_ratio?: string | null
+  layout?: string | null
   image_gen_mode?: string
   reference_image?: string | null
   cost_breakdown?: { module: string; name: string; cost: number }[]

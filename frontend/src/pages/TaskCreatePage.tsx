@@ -43,11 +43,13 @@ const ASPECTS = [
   { key: '16:9', name: '16:9', desc: '横屏', box: 'w-5 h-3' },
 ]
 // 草稿模板：出图比例的上位概念。选模板自动带出对应比例（仍可手动覆盖）。
+// layout=full：画布=出图比例（现状）；center_h：竖屏画布中央放 16:9 横图、上下黑边。
 const TEMPLATES = [
-  { key: 'vertical', name: '默认竖屏', desc: '视频号/抖音主流', ratio: '9:16' },
-  { key: 'vertical_43', name: '竖版 3:4', desc: '朋友圈/图文', ratio: '3:4' },
-  { key: 'square', name: '方形 1:1', desc: '封面/多平台', ratio: '1:1' },
-  { key: 'landscape', name: '横屏 16:9', desc: '横版/B站', ratio: '16:9' },
+  { key: 'vertical', name: '默认竖屏', desc: '视频号/抖音主流', ratio: '9:16', layout: 'full' },
+  { key: 'center_h', name: '竖屏中央横图', desc: '书单号·横图+黑边', ratio: '9:16', layout: 'center_h' },
+  { key: 'vertical_43', name: '竖版 3:4', desc: '朋友圈/图文', ratio: '3:4', layout: 'full' },
+  { key: 'square', name: '方形 1:1', desc: '封面/多平台', ratio: '1:1', layout: 'full' },
+  { key: 'landscape', name: '横屏 16:9', desc: '横版/B站', ratio: '16:9', layout: 'full' },
 ]
 const REWRITE_STRENGTHS = [
   { key: 'light', name: '轻度', desc: '贴近原文' },
@@ -135,7 +137,7 @@ export default function TaskCreatePage() {
     douyin_url: '', transcript: '', keyword: '', title: '', author: '',
     modules: ['A', 'B', 'E', 'F', 'G', 'H'],
     target_audience: '50+女性', track: 'character_story',
-    monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16',
+    monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16', layout: 'full',
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
@@ -673,11 +675,11 @@ export default function TaskCreatePage() {
 
         <div className={dimImg}>
           <span className="text-sm text-slate-400">草稿模板</span>
-          <div className="mt-2 grid grid-cols-4 gap-2">
+          <div className="mt-2 grid grid-cols-5 gap-2">
             {TEMPLATES.map((t) => {
-              const on = form.aspect_ratio === t.ratio
+              const on = form.aspect_ratio === t.ratio && (form.layout || 'full') === t.layout
               return (
-                <button key={t.key} type="button" onClick={() => set({ aspect_ratio: t.ratio })}
+                <button key={t.key} type="button" onClick={() => set({ aspect_ratio: t.ratio, layout: t.layout })}
                   className={`text-left px-2.5 py-1.5 rounded-lg border transition-colors ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
                        : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
@@ -696,7 +698,7 @@ export default function TaskCreatePage() {
             {ASPECTS.map((a) => {
               const on = form.aspect_ratio === a.key
               return (
-                <button key={a.key} type="button" onClick={() => set({ aspect_ratio: a.key })}
+                <button key={a.key} type="button" onClick={() => set({ aspect_ratio: a.key, layout: 'full' })}
                   className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-colors ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
                        : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'

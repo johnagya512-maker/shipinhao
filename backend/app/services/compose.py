@@ -100,7 +100,8 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
                                     jianying_dir=jianying_dir or None,
                                     template=template, seed=seed,
                                     seg_durations=seg_durations,
-                                    aspect_ratio=getattr(task, "aspect_ratio", None))
+                                    aspect_ratio=getattr(task, "aspect_ratio", None),
+                                    layout=getattr(task, "layout", "full"))
     try:
         r = _try_build(draft_name)
     except Exception as e:

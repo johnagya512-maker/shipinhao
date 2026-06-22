@@ -484,6 +484,7 @@ def run_pipeline(db: Session, task_id: str):
             #     （按 1 张计费，省约 89%），风格由统一圣经管。竖版需中心裁切，清晰度略降。
             #     失败整组占位、不回退逐张（控成本），用户可在画廊手动重新组图。
             mode = (getattr(task, "image_gen_mode", None) or "per_image")
+            img_ratio = tracks.image_ratio_for(task)  # center_h 版式强制 16:9，与画布解耦
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
                 # 生图是最烧钱的步骤，开跑前再查一次取消/超限——用户点了取消就别再发这批图。
@@ -496,7 +497,7 @@ def run_pipeline(db: Session, task_id: str):
                     # 不在后台用看不见的多次改写反复烧钱。故不传 rewrite_fn。
                     images = im.render_images_grouped(cfg.image_provider, img_key, prompts_list,
                                                       model=cfg.image_model,
-                                                      aspect_ratio=task.aspect_ratio,
+                                                      aspect_ratio=img_ratio,
                                                       grid_mode=True, style=grid_style,
                                                       base_url=getattr(cfg, "image_base_url", None),
                                                       proxy=_img_proxy)
@@ -506,7 +507,7 @@ def run_pipeline(db: Session, task_id: str):
                     images = im.render_images(cfg.image_provider, img_key, prompts_list,
                                               model=cfg.image_model,
                                               concurrency=cfg.concurrency,
-                                              aspect_ratio=task.aspect_ratio,
+                                              aspect_ratio=img_ratio,
                                               base_url=getattr(cfg, "image_base_url", None),
                                               proxy=_img_proxy,
                                               grayscale=im.is_monochrome_style(

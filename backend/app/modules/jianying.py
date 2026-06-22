@@ -27,9 +27,18 @@ def _canvas_for(aspect_ratio: str | None) -> tuple[int, int]:
     return _CANVAS.get(aspect_ratio or "9:16", (WIDTH, HEIGHT))
 
 
+# center_h 版式：画布固定竖屏 9:16，中央放一张完整 16:9 横图（上下纯黑边）。
+# scale=1.0 经真草稿实测即为「宽度撑满画布、上下黑边、横图完整可见」（剪映 scale 基准为 fit）。
+# 框内微动：在 1.0→1.0×(1+CENTER_H_ZOOM) 间缓慢推近，幅度极小（只要有动感、不要大动作）；
+# 不做 position_y 平移，避免横图在黑边里漂移露出画布外/黑边变化。背景填充黑色，独立于图不动。
+CENTER_H_BASE_SCALE = 1.0
+CENTER_H_ZOOM = 0.03   # 推近幅度 3%，整段缓慢，克制
+
+
+
 def _populate(script, image_paths, image_weights, audio_path, segments,
               enable_subtitles, enable_animations, template="classic", seed=0,
-              seg_durations=None):
+              seg_durations=None, layout="full"):
     """把图片/音频/字幕三轨填进 script。返回 (duration_sec, dropped_images)。
 
     template/seed 控制动画模板：每镜头按种子从模板入场池选动画、相邻加转场、
@@ -42,10 +51,12 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
     """
     import pyJianYingDraft as draft
     from pyJianYingDraft import (VideoMaterial, AudioMaterial, VideoSegment,
-                                 AudioSegment, TextSegment, Timerange, TrackType)
+                                 AudioSegment, TextSegment, Timerange, TrackType,
+                                 ClipSettings)
     from app.modules import draft_templates as tpl
 
     tmpl = template if enable_animations else "none"
+    is_center_h = (layout == "center_h")
 
     # 以剪映库自己解码出的素材时长为唯一基准（微秒），避免与 moviepy 读数
     # 存在毫秒级偏差导致"片段范围超出素材"。
@@ -93,13 +104,25 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
         dur_us = max(1, audio_us - cursor) if idx == last else int(round(d * SEC))
         img_starts.append((cursor, cursor + dur_us))
         seg = VideoSegment(VideoMaterial(img), Timerange(cursor, dur_us))
-        # 持续微动（Ken Burns）：整段缓慢上下漂移+微推近，画面不再切换后僵住。
-        # 开启动画时用它替代「入场动画」——入场那种"动一下就停"正是要解决的问题；
-        # 二者都写 scale/position 通道会打架，故微动开则不加入场。转场保留（镜头间衔接）。
-        if enable_animations:
-            _apply_kenburns(seg, draft, dur_us, idx, seed)
+        if is_center_h:
+            # 竖屏中央横图：16:9 图 scale=1.0 即「宽度撑满 9:16 画布、上下纯黑边、完整可见」。
+            # 加黑色背景填充（独立于图，不动），框内缓慢微推近，不做平移避免横图漂移露边。
+            seg.clip_settings = ClipSettings(scale_x=CENTER_H_BASE_SCALE,
+                                             scale_y=CENTER_H_BASE_SCALE)
+            try:
+                seg.add_background_filling("color", color="#000000FF")
+            except Exception:
+                pass  # 背景填充 API 缺失不阻断
+            if enable_animations:
+                _apply_center_h_zoom(seg, draft, dur_us)
         else:
-            _apply_intro(seg, draft, tpl.pick_intro(tmpl, seed, idx))
+            # 持续微动（Ken Burns）：整段缓慢上下漂移+微推近，画面不再切换后僵住。
+            # 开启动画时用它替代「入场动画」——入场那种"动一下就停"正是要解决的问题；
+            # 二者都写 scale/position 通道会打架，故微动开则不加入场。转场保留（镜头间衔接）。
+            if enable_animations:
+                _apply_kenburns(seg, draft, dur_us, idx, seed)
+            else:
+                _apply_intro(seg, draft, tpl.pick_intro(tmpl, seed, idx))
         # 转场加在「前一段」尾部衔接下一段，故除首段外按上一镜头的转场设置
         if idx > 0:
             _apply_transition(seg, draft, tpl.pick_transition(tmpl, seed, idx - 1))
@@ -197,7 +220,7 @@ def build_draft(image_paths: list[str], image_weights: list[float], audio_path: 
                 jianying_dir: str | None = None,
                 template: str = "classic", seed: int = 0,
                 seg_durations: list[float] | None = None,
-                aspect_ratio: str | None = None) -> dict:
+                aspect_ratio: str | None = None, layout: str = "full") -> dict:
     """生成剪映草稿。返回 {draft_path, duration, dropped_images, in_jianying}。
 
     jianying_dir 提供时写入用户剪映草稿目录（DraftFolder，剪映可直接打开）；
@@ -205,31 +228,39 @@ def build_draft(image_paths: list[str], image_weights: list[float], audio_path: 
     template/seed 选动画模板并保证草稿可复现。
     seg_durations 非空时启用分镜对齐模式（图/字/音三轨共用分镜时长）。
     aspect_ratio 决定画布尺寸（须与出图比例一致，否则横版图被塞进竖版画布会变形）。
+    layout=center_h 时画布固定 9:16、中央放 16:9 横图（与 aspect_ratio 解耦）。
     """
     if jianying_dir:
         return _build_into_jianying(image_paths, image_weights, audio_path, segments,
                                     jianying_dir, draft_name, enable_subtitles,
                                     enable_animations, template, seed, seg_durations,
-                                    aspect_ratio)
+                                    aspect_ratio, layout)
     return _build_bare_json(image_paths, image_weights, audio_path, segments,
                             draft_dir, draft_name, enable_subtitles, enable_animations,
-                            template, seed, seg_durations, aspect_ratio)
+                            template, seed, seg_durations, aspect_ratio, layout)
+
+
+def _canvas_dims(aspect_ratio, layout):
+    """画布尺寸：center_h 版式强制竖屏 9:16（中央放横图），其余按出图比例。"""
+    if layout == "center_h":
+        return _CANVAS["9:16"]
+    return _canvas_for(aspect_ratio)
 
 
 def _build_into_jianying(image_paths, image_weights, audio_path, segments,
                          jianying_dir, draft_name, enable_subtitles, enable_animations,
                          template="classic", seed=0, seg_durations=None,
-                         aspect_ratio=None):
+                         aspect_ratio=None, layout="full"):
     """用 DraftFolder 写入剪映草稿目录，生成完整结构（实测剪映可打开）。"""
     from pyJianYingDraft import DraftFolder
-    cw, ch = _canvas_for(aspect_ratio)
+    cw, ch = _canvas_dims(aspect_ratio, layout)
     folder = DraftFolder(jianying_dir)
     if folder.has_draft(draft_name):
         _remove_draft(Path(jianying_dir) / draft_name, draft_name, folder)
     script = folder.create_draft(draft_name, cw, ch, FPS, allow_replace=True)
     duration, dropped = _populate(script, image_paths, image_weights, audio_path,
                                   segments, enable_subtitles, enable_animations,
-                                  template, seed, seg_durations)
+                                  template, seed, seg_durations, layout)
     script.save()
     # 写封面缩略图，否则剪映草稿列表显示黑图 + 00:00（数据完整，仅列表预览缺失）。
     _write_cover(Path(jianying_dir) / draft_name, image_paths)
@@ -269,14 +300,14 @@ def _write_cover(draft_path: Path, image_paths: list[str]):
 def _build_bare_json(image_paths, image_weights, audio_path, segments,
                      draft_dir, draft_name, enable_subtitles, enable_animations,
                      template="classic", seed=0, seg_durations=None,
-                     aspect_ratio=None):
+                     aspect_ratio=None, layout="full"):
     """退回方案：storage 内裸 draft_content.json（仅供下载，剪映不直接识别）。"""
     from pyJianYingDraft import ScriptFile
-    cw, ch = _canvas_for(aspect_ratio)
+    cw, ch = _canvas_dims(aspect_ratio, layout)
     script = ScriptFile(cw, ch, FPS, maintrack_adsorb=True)
     duration, dropped = _populate(script, image_paths, image_weights, audio_path,
                                   segments, enable_subtitles, enable_animations,
-                                  template, seed, seg_durations)
+                                  template, seed, seg_durations, layout)
     draft_dir.mkdir(parents=True, exist_ok=True)
     draft_path = draft_dir / f"{draft_name}.json"
     script.dump(str(draft_path))
@@ -372,6 +403,19 @@ def _apply_kenburns(seg, draft, dur_us, idx, seed):
         seg.add_keyframe(KP.uniform_scale, dur_us, base + zoom)
         seg.add_keyframe(KP.position_y, 0, y0)
         seg.add_keyframe(KP.position_y, dur_us, y1)
+    except Exception:
+        pass  # 关键帧 API 缺失/报错不阻断草稿生成
+
+
+def _apply_center_h_zoom(seg, draft, dur_us):
+    """竖屏中央横图的框内微动：仅缓慢推近（scale 1.0→1.0×(1+CENTER_H_ZOOM)），不做平移。
+    幅度极小、整段匀速，只为「有动感」不要大动作。不动 position_y，横图始终居中、
+    黑边稳定不漂移。基准 scale 与 clip_settings 一致（1.0=宽度撑满画布、完整可见）。"""
+    try:
+        KP = draft.KeyframeProperty
+        base = CENTER_H_BASE_SCALE
+        seg.add_keyframe(KP.uniform_scale, 0, base)
+        seg.add_keyframe(KP.uniform_scale, dur_us, base * (1 + CENTER_H_ZOOM))
     except Exception:
         pass  # 关键帧 API 缺失/报错不阻断草稿生成
 

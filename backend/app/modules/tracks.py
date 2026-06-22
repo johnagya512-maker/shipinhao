@@ -202,3 +202,12 @@ def seconds_per_image(track_key: str | None) -> float:
     """取某赛道的每张图停留秒数（决定出图节奏/张数）。未配置赛道用默认值。"""
     return _SECONDS_PER_IMAGE.get(track_key or DEFAULT_TRACK, DEFAULT_SECONDS_PER_IMAGE)
 
+
+def image_ratio_for(task) -> str:
+    """出图比例：版式 center_h（竖屏中央横图）强制出 16:9 横图，与画布(9:16)解耦；
+    其余版式沿用任务自身的 aspect_ratio。供编排/重生/重组三处统一调用。"""
+    if getattr(task, "layout", "full") == "center_h":
+        return "16:9"
+    return getattr(task, "aspect_ratio", None) or "9:16"
+
+

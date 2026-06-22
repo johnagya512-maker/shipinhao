@@ -36,6 +36,9 @@ class Task(Base):
     monetization_mode: Mapped[str] = mapped_column(String(20), default="revenue_share")
     image_style: Mapped[str | None] = mapped_column(String(30), nullable=True)
     aspect_ratio: Mapped[str] = mapped_column(String(10), default="9:16")
+    # 版式：full=全屏(画布=出图比例，现状)；center_h=竖屏中央横图(画布9:16+中央16:9图+黑边)。
+    # center_h 时画布与出图比例解耦：画布按 9:16，出图强制 16:9。
+    layout: Mapped[str] = mapped_column(String(16), default="full")
     rewrite_strength: Mapped[str] = mapped_column(String(10), default="medium")
     narrative_perspective: Mapped[str] = mapped_column(String(10), default="auto")
     voice_speed: Mapped[float] = mapped_column(Numeric(3, 2), default=1.0)

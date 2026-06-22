@@ -18,6 +18,7 @@ class TaskCreate(BaseModel):
     monetization_mode: str = "revenue_share"  # revenue_share | book_sales
     image_style: str | None = None
     aspect_ratio: str = "9:16"   # 出图比例：9:16 / 3:4 / 1:1 / 16:9
+    layout: str = "full"         # 版式：full=全屏 / center_h=竖屏中央横图(画布9:16+中央16:9+黑边)
     rewrite_strength: str = "medium"      # 改写强度：light / medium / strong
     narrative_perspective: str = "auto"   # 叙事视角：auto / first / third
     voice_speed: float = 1.0     # 配音语速 0.5~2.0
