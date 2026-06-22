@@ -484,10 +484,6 @@ def run_pipeline(db: Session, task_id: str):
             #     （按 1 张计费，省约 89%），风格由统一圣经管。竖版需中心裁切，清晰度略降。
             #     失败整组占位、不回退逐张（控成本），用户可在画廊手动重新组图。
             mode = (getattr(task, "image_gen_mode", None) or "per_image")
-            # 16:9 等横版强制逐张：九宫格只能切正方形大图，横版每格要么被拉伸变扭、要么裁掉大半
-            # 构图残缺；且 gpt 横版大图体积大、易 Server disconnected 整组失败。横版改逐张出原生比例。
-            if (task.aspect_ratio or "9:16") in ("16:9", "4:3"):
-                mode = "per_image"
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
                 # 生图是最烧钱的步骤，开跑前再查一次取消/超限——用户点了取消就别再发这批图。

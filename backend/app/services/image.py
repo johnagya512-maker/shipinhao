@@ -270,13 +270,25 @@ GRID_CANVAS = 2304         # 模板/请求画布边长（正方形，每格 768�
 GRID_LINE = 24             # 白色分隔线半宽（像素）
 
 
-def _make_grid_template(path: Path, canvas: int = GRID_CANVAS, line: int = GRID_LINE):
-    """画一张 3×3 白底+浅灰格子的网格模板，作为图生图参考图，给模型「填格」用。"""
+def _grid_canvas_size(aspect_ratio: str | None) -> tuple[int, int]:
+    """九宫格大图画布尺寸：横版(16:9)让大图也出 16:9，3×3 切出来每格天然 16:9、不变形，
+    且每格分辨率比硬切正方形再拉伸更高。其余比例(竖版/方形)沿用正方形画布（每格再中心裁）。"""
+    if (aspect_ratio or "9:16") == "16:9":
+        return (3072, 1728)    # 16:9，每格 1024×576，长边切片后约够清晰
+    return (GRID_CANVAS, GRID_CANVAS)
+
+
+def _make_grid_template(path: Path, cw_total: int = GRID_CANVAS, ch_total: int | None = None,
+                        line: int = GRID_LINE):
+    """画一张 3×3 白底+浅灰格子的网格模板，作为图生图参考图，给模型「填格」用。
+    支持非方形画布(横版传 ch_total)。"""
     from PIL import ImageDraw
-    img = Image.new("RGB", (canvas, canvas), (255, 255, 255))
+    if ch_total is None:
+        ch_total = cw_total
+    img = Image.new("RGB", (cw_total, ch_total), (255, 255, 255))
     d = ImageDraw.Draw(img)
     rows, cols = GRID_RC
-    cw, ch = canvas // cols, canvas // rows
+    cw, ch = cw_total // cols, ch_total // rows
     for i in range(GRID_CELLS):
         r, c = i // cols, i % cols
         d.rectangle([c * cw + line, r * ch + line,
@@ -355,12 +367,12 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
     if _is_gpt(model):
         url = _endpoint(provider, base_url)
         grid_prompt = (
-            "请把整张正方形图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
+            "请把整张图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
             "用清晰的白色分隔线隔开。在每个格子里按从左到右、从上到下的编号填入"
             "对应画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
             + cell_prompt + "\n\n不要在图片里放任何文字说明。"
         )
-        imgs = _gpt_request(url, api_key, grid_prompt, "1024x1024", 1,
+        imgs = _gpt_request(url, api_key, grid_prompt, _gpt_size(aspect_ratio), 1,
                             model, timeout, proxy, label="九宫格")
         raw = out_paths[0].parent / "_grid_raw.png"
         raw.write_bytes(imgs[0])
@@ -372,13 +384,14 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         return res
 
     import base64
+    gcw, gch = _grid_canvas_size(aspect_ratio)
     tpl_path = out_paths[0].parent / "_grid_template.png"
-    _make_grid_template(tpl_path)
+    _make_grid_template(tpl_path, gcw, gch)
     tpl_uri = f"data:image/png;base64,{base64.b64encode(tpl_path.read_bytes()).decode()}"
 
     url = _endpoint(provider, base_url)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"prompt": cell_prompt, "size": f"{GRID_CANVAS}x{GRID_CANVAS}",
+    payload = {"prompt": cell_prompt, "size": f"{gcw}x{gch}",
                "image": tpl_uri, "sequential_image_generation": "disabled",
                "response_format": "url", "stream": False, "watermark": False}
     if model:
