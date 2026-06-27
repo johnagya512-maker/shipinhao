@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from app.core.config import settings, _DATA_DIR
 from app.core.database import init_db
-from app.api import tasks, config as config_router
+from app.api import tasks, config as config_router, config_backup
 
 logger = logging.getLogger("uvicorn")
 
@@ -39,6 +39,12 @@ def _startup():
     init_database_health_check()
 
     init_db()
+
+    # 配置自动备份（用户无感知）
+    from app.core.config_manager import auto_backup_config, restore_config_if_empty
+    auto_backup_config()
+    restore_config_if_empty()
+
     _recover_orphan_tasks()
     _init_scheduler()
     # 开发便利：把 .env 里的种子 Key 写进数据库（仅填空项），免去每次测试重输。
@@ -142,6 +148,7 @@ def _init_scheduler():
 
 app.include_router(tasks.router)
 app.include_router(config_router.router)
+app.include_router(config_backup.router)
 
 
 @app.exception_handler(Exception)
