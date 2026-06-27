@@ -34,6 +34,10 @@ app = FastAPI(title="视频号图书带货AI工作流系统", version="1.1")
 
 @app.on_event("startup")
 def _startup():
+    # 数据库健康检查与自动备份
+    from app.core.db_health import init_database_health_check
+    init_database_health_check()
+
     init_db()
     _recover_orphan_tasks()
     _init_scheduler()
@@ -46,6 +50,13 @@ def _startup():
     if settings.host == "0.0.0.0" and not settings.access_token:
         logger.warning("服务监听 0.0.0.0 但未设置 APP_ACCESS_TOKEN，接口将无鉴权暴露，存在风险。")
     _check_decryptable_keys()
+
+
+@app.on_event("shutdown")
+def _shutdown():
+    """应用关闭时安全清理"""
+    from app.core.db_health import shutdown_database_safely
+    shutdown_database_safely()
 
 
 def _recover_orphan_tasks():
