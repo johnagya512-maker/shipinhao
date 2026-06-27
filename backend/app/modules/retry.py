@@ -7,9 +7,11 @@ from app.services.image import ImageError
 def with_retry(fn, max_retry: int, backoff=(2, 4), disconnect_retry: int | None = None):
     """执行 fn，遇可重试错误指数退避。返回 (result, attempts)。
 
-    disconnect_retry 非空时：对「连接层断连」(ImageError.disconnect=True) 用这个更高的
-    重试预算。断连意味着服务器没受理、没扣费（见 cost.image_billable_units），所以即使
-    是 gpt(失败也计费)也能放心多重试——重试不烧钱、还常能把图救回来。其余失败仍用 max_retry。
+    disconnect_retry 非空时：对「连接层断连」(ImageError.disconnect=True) 用这个单独的
+    重试预算。是否该多重试取决于协议（调用方按模型传不同的值）：
+    - 豆包等失败 $0：断连=没受理没扣费，给高预算放心多重试，不烧钱还常能成。
+    - gpt-image（tu-zi 等中转站）：断连实测照样扣费，调用方传低预算（同其它失败），别按次烧钱。
+    其余失败仍用 max_retry。
     """
     attempt = 0
     last_err = None

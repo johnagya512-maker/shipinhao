@@ -693,16 +693,26 @@ export default function TaskCreatePage() {
         </div>
 
         <div className={dimImg}>
-          <span className="text-sm text-slate-400">出图比例 <span className="text-[11px] text-slate-600">· 已跟随草稿模板，可手动覆盖</span></span>
+          <span className="text-sm text-slate-400">出图比例 <span className="text-[11px] text-slate-600">
+            {(form.layout || 'full') === 'center_h'
+              ? '· 中央横图固定出 16:9 横图（竖屏画布 + 上下黑边），不可改'
+              : '· 已跟随草稿模板，可手动覆盖'}</span></span>
           <div className="mt-2 flex gap-2">
             {ASPECTS.map((a) => {
-              const on = form.aspect_ratio === a.key
+              // center_h（竖屏中央横图）：实际出图固定 16:9（后端 image_ratio_for 写死，与 9:16 画布解耦），
+              // 故此处锁定 16:9 选中、其余置灰不可点。否则：①显示的 9:16 不是真出图比例（误导）；
+              // ②点任一比例会把 layout 重置成 full、悄悄废掉「中央横图」模板（脚枪）。
+              const isCenterH = (form.layout || 'full') === 'center_h'
+              const on = isCenterH ? (a.key === '16:9') : (form.aspect_ratio === a.key)
+              const dim = isCenterH && a.key !== '16:9'
               return (
-                <button key={a.key} type="button" onClick={() => set({ aspect_ratio: a.key, layout: 'full' })}
+                <button key={a.key} type="button" disabled={isCenterH}
+                  onClick={() => { if (!isCenterH) set({ aspect_ratio: a.key, layout: 'full' }) }}
+                  title={isCenterH ? '中央横图固定 16:9，如需改比例请在上方草稿模板换其它模板' : undefined}
                   className={`flex items-center gap-2 px-3 py-2 rounded-xl border transition-colors ${
                     on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30'
                        : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-                  }`}>
+                  } ${dim ? 'opacity-40' : ''} ${isCenterH ? 'cursor-not-allowed' : ''}`}>
                   <span className={`${a.box} rounded-sm border ${on ? 'border-brand-400' : 'border-slate-500'}`} />
                   <span className={`text-sm ${on ? 'text-brand-300' : 'text-slate-200'}`}>{a.name}</span>
                   <span className="text-[11px] text-slate-500">{a.desc}</span>
@@ -791,6 +801,27 @@ export default function TaskCreatePage() {
           {previewError && (
             <p className="mt-1 text-[11px] text-red-400">试听失败：{previewError}</p>
           )}
+
+          {/* 配音语速：紧挨音色（从高级选项挪上来）。语速跟音色是同类设置、且要边调边听。
+              拖到目标速度 → 点「试听此语速」用【当前选中音色 + 当前语速】真实合成一句播放（不变调，
+              所听即成品效果）。复用音色试听链路 previewTts(voice, speed)，后端不用动。
+              voice 传空时后端回退配置默认音色（config.py::preview_tts）。 */}
+          <div className="mt-3 rounded-lg border border-slate-700/60 bg-slate-800/30 px-3 py-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-slate-300">配音语速：{(form.voice_speed ?? 1).toFixed(2)}×</span>
+              <button type="button"
+                onClick={() => previewVoice(form.voice || '', form.voice_speed ?? 1)}
+                className="px-2.5 py-1 rounded-md text-xs font-medium bg-brand-600/20 text-brand-300
+                  hover:bg-brand-600/30 transition-colors"
+                title="用当前选中的音色和当前语速合成一句听效果（改了速度再点一下即可对比）">
+                {previewingId === (form.voice || '') ? '■ 停止' : '▶ 试听此语速'}
+              </button>
+            </div>
+            <input type="range" min={0.5} max={2} step={0.05} className="mt-2 w-full accent-brand-500"
+              value={form.voice_speed ?? 1}
+              onChange={(e) => set({ voice_speed: Number(e.target.value) })} />
+            <div className="flex justify-between text-[10px] text-slate-600"><span>0.5× 慢</span><span>1× 正常</span><span>2× 快</span></div>
+          </div>
         </div>
 
         <div>
@@ -882,14 +913,7 @@ export default function TaskCreatePage() {
               </div>
 
               {/* 改写强度 / 叙事视角已移到上方「二创方式」区，调完即可预览，所见即所得 */}
-
-              <label className="block">
-                <span className="text-sm text-slate-400">配音语速：{(form.voice_speed ?? 1).toFixed(2)}×</span>
-                <input type="range" min={0.5} max={2} step={0.05} className="mt-2 w-full accent-brand-500"
-                  value={form.voice_speed ?? 1}
-                  onChange={(e) => set({ voice_speed: Number(e.target.value) })} />
-                <div className="flex justify-between text-[10px] text-slate-600"><span>0.5× 慢</span><span>1× 正常</span><span>2× 快</span></div>
-              </label>
+              {/* 配音语速已挪到上方「配音员」区（紧挨音色、可边调边试听），不再放在高级选项里 */}
 
               {/* 带货模式：仅全自动模式有效（改写时才决定带货段落，整块隐藏，对齐竞品） */}
               {(form.processing_mode ?? 'full_auto') === 'full_auto' && (

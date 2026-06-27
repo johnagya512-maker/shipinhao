@@ -57,6 +57,28 @@ def test_estimate_cost_under_limit():
     assert est < 2.0
 
 
+def test_gpt_disconnect_placeholder_is_billed():
+    """回归：gpt-image 断连占位【照样计费】。曾误以为 disconnected=没扣费而豁免，
+    但实测 tu-zi 中转站断连照扣钱(task_0a68fc5a3bf0)，豁免会把烧钱藏成 0。
+    豆包断连仍 $0 不计——按协议分流，别一刀切。"""
+    from app.services.cost import image_billable_units
+    # gpt-image：3 张九宫格占位（断连），必须计费 → ceil(3/9)=1 个单位
+    gpt_imgs = [{"fallback": True, "grid": True,
+                 "fail_reason": "九宫格失败: Server disconnected without sending a response."}
+                for _ in range(3)]
+    assert image_billable_units(gpt_imgs, model="gpt-image-2") == 1
+    # 豆包：同样断连占位，失败 $0 → 不计费
+    assert image_billable_units(gpt_imgs, model="doubao-seedream-4-5") == 0
+
+
+def test_gpt_disconnect_retry_budget_tightened():
+    """回归：gpt 断连重试预算收紧到 1（=其它失败），不再放心重试4次按次烧钱。
+    豆包断连仍享高预算（失败不扣费）。"""
+    from app.modules.image_module import _disconnect_retry_for, IMG_RETRY_GPT, IMG_DISCONNECT_RETRY
+    assert _disconnect_retry_for("gpt-image-2") == IMG_RETRY_GPT == 1
+    assert _disconnect_retry_for("doubao-seedream-4-5") == IMG_DISCONNECT_RETRY == 4
+
+
 def test_pick_main_book_by_confidence():
     from app.modules.image_module import pick_main_book
     books = [{"title": "A", "confidence": 0.6, "extracted_from": "x"},
@@ -137,3 +159,56 @@ def test_jianying_draft_structure(tmp_path):
     assert by_type["audio"] == 1       # 1 段音频
     assert by_type["text"] == 2        # 空段被跳过，只剩 2 条字幕
     assert d["canvas_config"]["width"] == 1080
+
+
+def _video_kf_props(draft_path):
+    """读出视频轨每个片段的关键帧属性集合，供动画断言用。"""
+    import json
+    d = json.load(open(draft_path, encoding="utf-8"))
+    vtrack = [t for t in d["tracks"] if t["type"] == "video"][0]
+    return [{kf.get("property_type") for kf in (s.get("common_keyframes") or [])}
+            for s in vtrack["segments"]]
+
+
+def _make_av(tmp_path, n=3, w=108, h=192):
+    """造 n 张测试图 + 一段 6s 静音 wav，返回 (imgs, audio_path)。"""
+    import wave, struct
+    from PIL import Image
+    imgs = []
+    for i in range(n):
+        p = tmp_path / f"k{i}.png"
+        Image.new("RGB", (w, h), (i * 40, 100, 150)).save(p)
+        imgs.append(str(p))
+    audio = tmp_path / "ka.wav"
+    with wave.open(str(audio), "w") as wv:
+        wv.setnchannels(1); wv.setsampwidth(2); wv.setframerate(8000)
+        wv.writeframes(struct.pack("<" + "h" * 48000, *([0] * 48000)))  # 6s
+    return imgs, str(audio)
+
+
+def test_jianying_animation_keyframes(tmp_path):
+    """动画关键帧真实落进草稿（防回归：误加静态 clip_settings.scale 会覆盖关键帧→画面定死）。
+    - full + 动画开：Ken Burns = 推近(ScaleX) + 上下漂移(PositionY)
+    - center_h + 动画开：放大横移 = 推近(ScaleX) + 横扫(PositionX)
+    - 动画关：零关键帧（静态画面）"""
+    import struct  # noqa: F401  (与 _make_av 共用 import 习惯)
+    from app.modules import jianying
+    segs = [{"text": "第一段"}, {"text": "第二段"}, {"text": "第三段"}]
+    imgs, audio = _make_av(tmp_path)
+
+    r = jianying.build_draft(imgs, [2, 2, 2], audio, segs, tmp_path / "d_full",
+                             "full_anim", enable_animations=True, layout="full")
+    for props in _video_kf_props(r["draft_path"]):
+        assert "KFTypeScaleX" in props      # 推近
+        assert "KFTypePositionY" in props   # 上下漂移（Ken Burns）
+
+    r = jianying.build_draft(imgs, [2, 2, 2], audio, segs, tmp_path / "d_ch",
+                             "ch_anim", enable_animations=True, layout="center_h")
+    for props in _video_kf_props(r["draft_path"]):
+        assert "KFTypeScaleX" in props      # 推近
+        assert "KFTypePositionX" in props   # 横扫（横图不做纵移）
+
+    r = jianying.build_draft(imgs, [2, 2, 2], audio, segs, tmp_path / "d_off",
+                             "off_anim", enable_animations=False, layout="full")
+    for props in _video_kf_props(r["draft_path"]):
+        assert not props                    # 关动画 = 静态，无关键帧

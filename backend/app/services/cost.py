@@ -17,7 +17,7 @@ IMAGE_PRICE = {
     "doubao": 0.25,
     "kling": 0.30,
     "tongyi": 0.20,
-    "gpt-image": 0.58,   # gpt-image-2（中转站如兔子API），约 $0.0828/次 ≈ 0.58 元，每次请求计费
+    "gpt-image": 0.058,   # gpt-image-2（兔子中转站），¥0.058/次，每次请求计费
 }
 
 

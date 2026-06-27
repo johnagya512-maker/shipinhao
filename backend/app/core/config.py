@@ -6,9 +6,22 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # config.py 位于 backend/app/core/，上溯三级到 backend 根目录。
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# 桌面客户端模式：Electron 主进程注入 APP_DATA_DIR（指向用户 AppData），
-# 让 SQLite/storage 落到可写的用户目录，而非只读的安装目录。未设置则用仓库根（开发）。
-_DATA_DIR = Path(os.environ.get("APP_DATA_DIR", BASE_DIR))
+# 优先从环境变量读取 APP_DATA_DIR（生产模式由 Electron 注入）。
+# 开发模式下环境变量未设置时，尝试从 .env 文件读取，保证开发和生产用同一个数据库。
+def _resolve_data_dir() -> Path:
+    env_val = os.environ.get("APP_DATA_DIR")
+    if env_val:
+        return Path(env_val)
+    # 开发模式：从 .env 读取
+    env_file = BASE_DIR / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("APP_DATA_DIR=") and not line.startswith("#"):
+                return Path(line.split("=", 1)[1].strip())
+    return BASE_DIR
+
+_DATA_DIR = _resolve_data_dir()
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 

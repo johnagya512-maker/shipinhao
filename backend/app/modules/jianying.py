@@ -32,7 +32,10 @@ def _canvas_for(aspect_ratio: str | None) -> tuple[int, int]:
 # 框内微动：在 1.0→1.0×(1+CENTER_H_ZOOM) 间缓慢推近，幅度极小（只要有动感、不要大动作）；
 # 不做 position_y 平移，避免横图在黑边里漂移露出画布外/黑边变化。背景填充黑色，独立于图不动。
 CENTER_H_BASE_SCALE = 1.0
-CENTER_H_ZOOM = 0.03   # 推近幅度 3%，整段缓慢，克制
+CENTER_H_ZOOM = 0.06   # 推近幅度 6%：整段缓慢推近，配合横移有动感但不浮夸
+# 放大+横移组合参数：先微放大到 PAN_BASE 留出左右余量，再在余量内横扫 ±PAN_AMP，绝不露边。
+CENTER_H_PAN_BASE = 1.06   # 横移基准放大（左右各溢出约 3%，给平移留空间）
+CENTER_H_PAN_AMP = 0.03    # 横向平移幅度，控制在溢出余量内，不露画布外/黑边
 
 
 
@@ -107,14 +110,18 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
         if is_center_h:
             # 竖屏中央横图：16:9 图 scale=1.0 即「宽度撑满 9:16 画布、上下纯黑边、完整可见」。
             # 加黑色背景填充（独立于图，不动），框内缓慢微推近，不做平移避免横图漂移露边。
-            seg.clip_settings = ClipSettings(scale_x=CENTER_H_BASE_SCALE,
-                                             scale_y=CENTER_H_BASE_SCALE)
             try:
                 seg.add_background_filling("color", color="#000000FF")
             except Exception:
                 pass  # 背景填充 API 缺失不阻断
             if enable_animations:
-                _apply_center_h_zoom(seg, draft, dur_us)
+                # 微推靠 scale 关键帧实现。【不要】再写静态 clip_settings.scale——
+                # 它和关键帧写同一通道会打架（静态值覆盖关键帧→图片定死不动）。
+                _apply_center_h_zoom(seg, draft, dur_us, idx)
+            else:
+                # 不开动画才用静态 scale 固定画面（1.0=宽度撑满、完整居中、黑边稳定）。
+                seg.clip_settings = ClipSettings(scale_x=CENTER_H_BASE_SCALE,
+                                                 scale_y=CENTER_H_BASE_SCALE)
         else:
             # 持续微动（Ken Burns）：整段缓慢上下漂移+微推近，画面不再切换后僵住。
             # 开启动画时用它替代「入场动画」——入场那种"动一下就停"正是要解决的问题；
@@ -332,17 +339,51 @@ def _expand_images_to_fill(image_paths, image_weights, audio_total):
     return paths, weights
 
 
+def _caption_tokens(text: str) -> list:
+    """把纯文本切成【不可再分的显示单元】：连续数字（含小数点/百分号，如 20、3.5、95%）
+    算一个整体 token，其余字符逐字成 token。保证断行时不会把数字切两半（如 20→2|0）。"""
+    return re.findall(r"\d[\d.]*%?|.", text)
+
+
+def _pack_tokens(tokens: list, max_chars: int) -> list:
+    """把 token 列表均衡打包成多条 ≤max_chars 的短字幕，不切断任何 token。
+    均衡：13 字切成 7+6 而非 12+1，避免句末/单字孤字甩到下一行。
+    单个 token 本身超长（极少见，如超长数字串）时整块保留，宁可越界也不切断数字。"""
+    total = sum(len(t) for t in tokens)
+    if total == 0:
+        return []
+    if total <= max_chars:
+        return ["".join(tokens)]
+    n = -(-total // max_chars)          # 需要的块数（向上取整）
+    target = -(-total // n)             # 每块目标字数（尽量均衡）
+    out, buf = [], ""
+    for t in tokens:
+        if buf and (len(buf) + len(t) > max_chars
+                    or (len(buf) >= target and len(buf) + len(t) > target)):
+            out.append(buf)
+            buf = t
+        else:
+            buf += t
+    if buf:
+        out.append(buf)
+    return out
+
+
 def _split_caption(text: str, max_chars: int = 12) -> list:
     """把一段字幕文字切成多条 ≤max_chars 的短字幕（一屏只显示几个字，像短视频）。
-    优先在标点处断，标点间仍超长则按字数硬切。返回短句列表（去掉句末多余标点）。"""
+    流程：① 按标点切自然小句并去掉所有标点（短视频字幕惯例，不显示标点）；
+    ② 相邻小句贪心合并到接近 max_chars；③ 超长块均衡切分，数字整体不拆、不留孤字。"""
     text = text.strip()
     if not text:
         return []
-    # 先按标点切成自然小句（保留标点判断，但显示时去掉行尾标点更清爽）
-    pieces = re.split(r"(?<=[，,。．.！!？?；;、：:])", text)
+    # 按标点切成自然小句（标点仅作断句依据，显示时一律去掉）。
+    # 注意：不把 ASCII 句点 . / 全角 ．当断句符——中文字幕里它几乎都是小数点（如 99.5），
+    # 句末停顿用 。！？，小数由数字 token 保护，避免把 99.5 劈成 99|5。
+    pieces = re.split(r"(?<=[，,。！!？?；;、：:\s])", text)
+    _PUNCT = "，,。！!？?；;、：:　 \t\r\n"
     caps, buf = [], ""
     for p in pieces:
-        p = p.strip()
+        p = p.strip(_PUNCT).strip()
         if not p:
             continue
         if len(buf) + len(p) <= max_chars:
@@ -350,14 +391,14 @@ def _split_caption(text: str, max_chars: int = 12) -> list:
         else:
             if buf:
                 caps.append(buf)
-            while len(p) > max_chars:
-                caps.append(p[:max_chars])
-                p = p[max_chars:]
-            buf = p
+            chunks = _pack_tokens(_caption_tokens(p), max_chars)
+            # 末块若过短，并回前一块的尾部由 _pack_tokens 的均衡已大致避免；
+            # 这里把除最后一块外的整块先收下，最后一块留作 buf 继续与下一小句合并。
+            caps.extend(chunks[:-1])
+            buf = chunks[-1] if chunks else ""
     if buf:
         caps.append(buf)
-    # 去掉每条行尾的标点（短视频字幕惯例），保留内部
-    return [c.rstrip("，,。．.！!？?；;、：: ") or c for c in caps]
+    return caps
 
 
 def _read_seg_durations(audio_path: str, n: int):
@@ -407,15 +448,23 @@ def _apply_kenburns(seg, draft, dur_us, idx, seed):
         pass  # 关键帧 API 缺失/报错不阻断草稿生成
 
 
-def _apply_center_h_zoom(seg, draft, dur_us):
-    """竖屏中央横图的框内微动：仅缓慢推近（scale 1.0→1.0×(1+CENTER_H_ZOOM)），不做平移。
-    幅度极小、整段匀速，只为「有动感」不要大动作。不动 position_y，横图始终居中、
-    黑边稳定不漂移。基准 scale 与 clip_settings 一致（1.0=宽度撑满画布、完整可见）。"""
+def _apply_center_h_zoom(seg, draft, dur_us, idx=0):
+    """竖屏中央横图的框内微动（放大+横移组合）：整段缓慢推近，同时横向缓慢平移，
+    让画面有"镜头横扫 + 推近"的动感，而不只是单调放大。
+    做法：在片段头(0)和尾(dur_us)各打关键帧——
+      · uniform_scale：CENTER_H_PAN_BASE(1.06，留出左右余量供平移不露边) → ×(1+ZOOM) 缓慢推近；
+      · position_x：在 ±CENTER_H_PAN_AMP 间横扫，方向按镜头序号交替（一左一右，不单调）。
+    幅度都压得很小：平移控制在放大溢出的余量内，绝不露出画布外/黑边漂移。
+    不动 position_y（横图上下是黑边，纵移会让画面贴边突兀）。"""
     try:
         KP = draft.KeyframeProperty
-        base = CENTER_H_BASE_SCALE
+        base = CENTER_H_PAN_BASE
+        left_first = (idx % 2 == 0)  # 偶数镜头左→右、奇数右→左，交替不单调
+        x0, x1 = (-CENTER_H_PAN_AMP, CENTER_H_PAN_AMP) if left_first else (CENTER_H_PAN_AMP, -CENTER_H_PAN_AMP)
         seg.add_keyframe(KP.uniform_scale, 0, base)
         seg.add_keyframe(KP.uniform_scale, dur_us, base * (1 + CENTER_H_ZOOM))
+        seg.add_keyframe(KP.position_x, 0, x0)
+        seg.add_keyframe(KP.position_x, dur_us, x1)
     except Exception:
         pass  # 关键帧 API 缺失/报错不阻断草稿生成
 

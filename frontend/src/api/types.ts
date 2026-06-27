@@ -111,6 +111,7 @@ export interface TaskDetail {
   long_title?: string | null
   short_title?: string | null
   hashtags?: string[] | null
+  comment_cta?: { pinned?: string; price_scarcity?: string; second_seed?: string } | null
   author?: string | null
   keyword?: string | null
   track: string
@@ -127,6 +128,8 @@ export interface TaskDetail {
   layout?: string | null
   image_gen_mode?: string
   reference_image?: string | null
+  voice?: string | null
+  voice_speed?: number
   cost_breakdown?: { module: string; name: string; cost: number }[]
   error_code?: string | null
   error_message?: string | null
@@ -144,6 +147,7 @@ export interface ImagePreset {
   model?: string
   base_url?: string
   unit_price?: number | null
+  api_key?: string  // 预设专属的 API Key，切换预设时一起切换
 }
 
 export interface ConfigOut {

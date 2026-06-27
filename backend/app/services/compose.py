@@ -134,9 +134,15 @@ def _compose_jianying(db, task, task_id, image_paths, weights, segments,
 
 
 def _safe_name(name: str) -> str:
-    """剪映草稿名去掉文件系统非法字符，限长。"""
+    """剪映草稿名去掉文件系统非法字符，限长。
+    除显式非法字符（\\/:*?"<>|）外，还要清掉控制字符（换行/制表符等——LLM 生成的
+    标题或采集描述常混入，会触发 WinError 123 目录名语法错误），并把内部空白折叠成单空格、
+    去掉 Windows 不允许的结尾点和空格。"""
     import re
-    name = re.sub(r'[\\/:*?"<>|]', "", name).strip()
+    name = re.sub(r'[\x00-\x1f\x7f]', "", name)          # 控制字符（含 \n \r \t）
+    name = re.sub(r'[\\/:*?"<>|]', "", name)             # 文件系统非法字符
+    name = re.sub(r'\s+', " ", name).strip()             # 折叠空白
+    name = name.rstrip(". ")                              # Windows 禁止结尾点/空格
     return name[:60] or "draft"
 
 

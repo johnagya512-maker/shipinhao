@@ -61,12 +61,16 @@ def run_gen_title(provider, model, key, script, keyword=None):
     return title[:30], r
 
 
-def run_gen_title_tags(provider, model, key, script, keyword=None):
+def run_gen_title_tags(provider, model, key, script, keyword=None, track="character_story"):
     """生成发布用的【短标题】+【长标题】+【热门话题标签】，供成品一并输出。
+    按赛道注入对应的标题钩子风格（title_style），不同赛道标题调性不同。
     返回 ((short_title str, long_title str, hashtags list[str]), LLMResult)。
     锦上添花，解析失败时返回 ('', '', [])，不阻断出片。"""
+    from app.modules import tracks
     snippet = (script or "")[:1000]
-    prompt = _render(prompts.TITLE_TAGS, script=snippet, keyword=keyword or "")
+    title_style = tracks.get_track(track).get("title_style") or "制造好奇、勾起点击的悬念或反差钩子。"
+    prompt = _render(prompts.TITLE_TAGS, script=snippet, keyword=keyword or "",
+                     title_style=title_style)
     r: LLMResult = call_llm(provider, model, key, prompt)
     short_title, long_title, tags = "", "", []
     try:
@@ -83,6 +87,25 @@ def run_gen_title_tags(provider, model, key, script, keyword=None):
     except Exception:
         pass
     return (short_title, long_title, tags), r
+
+
+def run_gen_comment_cta(provider, model, key, script, book_title="", keyword=None):
+    """生成发布后【评论区置顶下单引导话术】，仅图书带货模式调用。
+    返回 ((pinned str, price_scarcity str, second_seed str), LLMResult)。
+    锦上添花，解析失败时返回 ('', '', '')，不阻断出片。"""
+    snippet = (script or "")[:1200]
+    prompt = _render(prompts.COMMENT_CTA, script=snippet,
+                     book_title=book_title or "", keyword=keyword or "")
+    r: LLMResult = call_llm(provider, model, key, prompt)
+    pinned, price_scarcity, second_seed = "", "", ""
+    try:
+        data = _extract_json(r.text)
+        pinned = str(data.get("pinned") or "").strip().strip('"').strip("「」").strip()[:120]
+        price_scarcity = str(data.get("price_scarcity") or "").strip().strip('"').strip("「」").strip()[:120]
+        second_seed = str(data.get("second_seed") or "").strip().strip('"').strip("「」").strip()[:120]
+    except Exception:
+        pass
+    return (pinned, price_scarcity, second_seed), r
 
 
 def run_structure(provider, model, key, source_text):

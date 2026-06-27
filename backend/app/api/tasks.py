@@ -409,6 +409,49 @@ def update_title(task_id: str, body: dict, db: Session = Depends(get_db)):
     return task
 
 
+@router.post("/tasks/{task_id}/regenerate-titles", response_model=TaskOut)
+def regenerate_titles(task_id: str, db: Session = Depends(get_db)):
+    """只重新生成标题/标签，其他产物不动。"""
+    from app.core.security import decrypt
+    from app.modules import text_modules as tm
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    cfg = db.get(Config, 1)
+    llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+    if not llm_key:
+        raise HTTPException(400, detail="未配置大模型 API Key")
+    # 取最终文案：优先 edited_script，其次 B 改写输出，再其次 A 清洗后正文，最后原始逐字稿
+    script = ""
+    for m in (task.modules or []):
+        if m.get("step") == "B" and m.get("output", {}).get("script"):
+            script = m["output"]["script"]
+            break
+    if not script:
+        for m in (task.modules or []):
+            if m.get("step") == "A" and m.get("output", {}).get("cleaned"):
+                script = m["output"]["cleaned"]
+                break
+    if not script:
+        script = task.transcript or ""
+    if len(script.strip()) < 10:
+        raise HTTPException(400, detail="文案太短，无法生成标题")
+    try:
+        (short_title, long_title, tags), _ = tm.run_gen_title_tags(
+            cfg.llm_provider, cfg.llm_model, llm_key, script, task.keyword, track=task.track)
+        if short_title:
+            task.short_title = short_title
+        if long_title:
+            task.long_title = long_title
+        if tags:
+            task.hashtags = tags
+        db.commit()
+        db.refresh(task)
+    except Exception as e:
+        raise HTTPException(502, detail=f"标题生成失败：{e}"[:200])
+    return task
+
+
 @router.post("/tasks/{task_id}/cancel", response_model=TaskOut)
 def cancel_task(task_id: str, db: Session = Depends(get_db)):
     task = db.get(Task, task_id)

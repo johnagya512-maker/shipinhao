@@ -173,6 +173,9 @@ export const api = {
   // 一键 AI 合规改写：针对停在 H 的残余违规点定向软化一轮，改完重审仍停确认页。
   complianceFix: (id: string) => request<TaskOut>(`/tasks/${id}/compliance-fix`, { method: 'POST' }),
 
+  // 只换标题/标签：重新生成短标题+长标题+热门标签，其他产物不动。
+  regenerateTitles: (id: string) => request<TaskOut>(`/tasks/${id}/regenerate-titles`, { method: 'POST' }),
+
   // ── 逐句编辑 / 单图重试 / 单步重跑（对齐竞品「随停随跑、每步可改」）──
   // 保存编辑后的分镜（cap/desc_prompt/has_character），写回 SB+P 产物，不触发生图。
   saveScenes: (id: string, scenes: Scene[]) =>
@@ -181,25 +184,39 @@ export const api = {
     }),
   // 单张图重试：只重生成第 index 张，可带新提示词。一次高质量尝试，失败返回原因，
   // 不在后台自动改写重生——是否再试、是否改文案由用户决定。
-  retryImage: (id: string, index: number, prompt?: string) =>
+  // preset：本次出图模型「单次覆盖」（如默认 GPT 失败后换豆包重生），只影响这一次、不动全局配置；
+  // 不传则后端走当前生效配置。
+  retryImage: (id: string, index: number, prompt?: string,
+               preset?: { model?: string; base_url?: string; unit_price?: number | null }) =>
     request<{ index: number; image: GeneratedImage; failed: boolean; reason?: string | null
       rewritten?: boolean; new_prompt?: string | null }>(
       `/tasks/${id}/images/${index}/retry`, {
-        // 单张生图后端最坏要跑满重试(约3次×60s+退避≈186s)，给 5 分钟兜底，别用默认 120s
-        method: 'POST', body: JSON.stringify({ prompt: prompt ?? null }),
-        signal: AbortSignal.timeout(300_000),
+        // 单张生图后端最坏要跑满重试(gpt 断连重试4次×90s+退避≈420s)，给 10 分钟兜底
+        method: 'POST', body: JSON.stringify({
+          prompt: prompt ?? null,
+          model: preset?.model ?? null,
+          base_url: preset?.base_url ?? null,
+          unit_price: preset?.unit_price ?? null,
+        }),
+        signal: AbortSignal.timeout(600_000),  // 从 300 秒提高到 600 秒
       }),
   // 多张图一起重新组图：传选中的图片下标，后端合并成一次组图请求生成（省请求、
   // 风格统一、人物一致）。后端按 ref 把图合并成最多两组、各一次请求出多张并发下载，
-  // 不随张数线性变慢。九宫格单组最坏要跑满退避重试(约3次×180s+退避≈546s)，给 10 分钟兜底。
+  // 不随张数线性变慢。逐张模式并发数=5，多张需分批：9张=两批(5+4)，每批最坏420s，给 15 分钟兜底。
   // genMode 可当场指定本次出图方式（grid 九宫格省成本 / per_image 逐张画质优先）；
   // 不传则跟随建任务时选的模式。
-  batchRetryImages: (id: string, indices: number[], genMode?: string) =>
+  batchRetryImages: (id: string, indices: number[], genMode?: string,
+                     preset?: { model?: string; base_url?: string; unit_price?: number | null }) =>
     request<{ count: number; cost?: number; results: { index: number; failed: boolean
       reason?: string | null; image: GeneratedImage }[] }>(
       `/tasks/${id}/images/batch-retry`, {
-        method: 'POST', body: JSON.stringify({ indices, gen_mode: genMode ?? null }),
-        signal: AbortSignal.timeout(600_000),
+        method: 'POST', body: JSON.stringify({
+          indices, gen_mode: genMode ?? null,
+          model: preset?.model ?? null,
+          base_url: preset?.base_url ?? null,
+          unit_price: preset?.unit_price ?? null,
+        }),
+        signal: AbortSignal.timeout(900_000),  // 从 600 秒提高到 900 秒（15 分钟）
       }),
   // 单步重跑：清掉该步及下游产物，从该步重算（上游走缓存）。
   rerunStep: (id: string, module: string) =>
@@ -228,6 +245,12 @@ export const api = {
   // 用最新的图重新合成视频，复用上次上传的音频，无需重传
   recompose: (id: string, outputMode: 'jianying' | 'mp4' = 'jianying') =>
     request<TaskOut>(`/tasks/${id}/recompose?output_mode=${outputMode}`, { method: 'POST' }),
+  // 更换配音重新生成：只更新音色/语速后重跑配音+草稿，复用文案和配图
+  reconfigVoice: (id: string, voice?: string, voiceSpeed?: number) =>
+    request<TaskOut>(`/tasks/${id}/reconfig-voice`, {
+      method: 'POST',
+      body: JSON.stringify({ voice: voice ?? null, voice_speed: voiceSpeed ?? null }),
+    }),
   // 手动修改任务标题（用作草稿名/下载文件名）
   updateTitle: (id: string, title: string) =>
     request<TaskOut>(`/tasks/${id}/title`, { method: 'PATCH', body: JSON.stringify({ title }) }),

@@ -122,17 +122,17 @@ def init_database_health_check():
         is_healthy, msg = check_database_integrity(db_path)
 
         if is_healthy:
-            print(f"✓ {msg}")
+            print(f"[OK] {msg}")
 
             # 自动备份（每次启动）
             try:
                 backup_path = auto_backup_database(db_path, max_backups=7)
-                print(f"✓ 已自动备份数据库: {os.path.basename(backup_path)}")
+                print(f"[OK] 已自动备份数据库: {os.path.basename(backup_path)}")
             except Exception as e:
-                print(f"⚠ 自动备份失败: {e}")
+                print(f"[WARN] 自动备份失败: {e}")
         else:
-            print(f"✗ {msg}")
-            print("⚠ 检测到数据库损坏！请尝试从备份恢复。")
+            print(f"[FAIL] {msg}")
+            print("[WARN] 检测到数据库损坏！请尝试从备份恢复。")
             raise RuntimeError("数据库损坏，无法启动应用")
 
 
@@ -142,8 +142,8 @@ def shutdown_database_safely():
 
     # 执行WAL checkpoint
     if safe_checkpoint():
-        print("✓ WAL checkpoint完成")
+        print("[OK] WAL checkpoint完成")
 
     # 关闭所有连接
     engine.dispose()
-    print("✓ 数据库连接已关闭")
+    print("[OK] 数据库连接已关闭")

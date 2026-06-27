@@ -18,6 +18,33 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 自定义滚动条样式 - 暗色主题 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.6);
+}
+
+/* Firefox 滚动条样式 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.4) rgba(15, 23, 42, 0.3);
+}
+
 @layer components {
   /* 统一的表单控件外观：深色底，聚焦时蓝色高亮描边。 */
   .field {

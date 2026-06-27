@@ -9,9 +9,10 @@ IMG_RETRY = 2
 # gpt-image 协议：失败/超时请求中转站【照样收费】，故瞬时故障重试收紧到 1 次（最多 2 次请求），
 # 不像豆包失败 $0 可放心重试 3 次。避免一张顽固失败的图按次烧钱。
 IMG_RETRY_GPT = 1
-# 连接层断连(Server disconnected/请求错误)例外：服务器没受理、没扣费，重试不烧钱且常能成。
-# gpt 九宫格大图易被网关偶发掐断，给断连更高的重试预算（与计费无关，不怕烧钱）。
-IMG_DISCONNECT_RETRY = 4
+# ⚠️ 断连重试已收紧：实测中转站(tu-zi)断连也扣费！重试=反复烧钱。
+# 之前假设"断连=没扣费"给了4次预算，导致6月22日后成本暴涨7倍(0.2→1.5元/任务)。
+# 现改为1次：只给一次翻盘机会，避免网络抖动反复扣费。
+IMG_DISCONNECT_RETRY = 1
 
 
 def _img_retry_for(model: str | None) -> int:
@@ -370,7 +371,7 @@ def _strip_wrap(style: dict, full_prompt: str) -> str:
 
 def render_images_grouped(provider, api_key, tasks, model=None,
                           aspect_ratio="9:16", grid_mode=False, style=None,
-                          base_url=None, proxy=None, rewrite_fn=None):
+                          base_url=None, proxy=None, rewrite_fn=None, no_crop=False):
     """组图模式批量生图：把 tasks 按「是否带参考图」分组、每组≤9 张。
     每个 task 五元组 (prompt, sub_type, out_path, duration, ref_uri)；prompt 已是套风格的完整提示词。
     grid_mode=True：每组用「3×3 模板图生图」一次出 1 张大图本地切 9 张（按 1 张计费，省 89%）。

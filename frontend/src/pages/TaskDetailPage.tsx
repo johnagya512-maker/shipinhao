@@ -9,6 +9,7 @@ import StepTimeline from '../components/StepTimeline'
 import SceneGallery from '../components/SceneGallery'
 import ProductPreview from '../components/ProductPreview'
 import ScriptReview from '../components/ScriptReview'
+import VoiceReconfigDialog from '../components/VoiceReconfigDialog'
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '待处理', processing: '处理中', awaiting_confirm: '待确认', awaiting_audio: '待上传音频',
@@ -33,6 +34,9 @@ export default function TaskDetailPage() {
   const [titleDraft, setTitleDraft] = useState('')
   // 发布物料「复制」反馈：记录刚复制的项 key，短暂显示「已复制」。
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [refreshingTitles, setRefreshingTitles] = useState(false)
+  // 更换配音对话框
+  const [showVoiceReconfig, setShowVoiceReconfig] = useState(false)
   const copyText = useCallback((key: string, text: string) => {
     navigator.clipboard?.writeText(text).then(() => {
       setCopiedKey(key)
@@ -211,7 +215,7 @@ export default function TaskDetailPage() {
         <div className="mb-4 px-4 py-2.5 rounded-lg text-sm bg-red-50 text-red-700 border border-red-100">{error}</div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] xl:grid-cols-[340px_1fr] 2xl:grid-cols-[380px_1fr] gap-5">
         {/* ── 左栏：信息 + 指标 + 操作 + 时间线 ── */}
         <aside className="space-y-4">
           {/* 指标卡 */}
@@ -255,7 +259,20 @@ export default function TaskDetailPage() {
           {/* 发布物料：短标题 / 长标题 / 热门标签，一键复制，直接拿去发布 */}
           {(task.long_title || task.short_title || task.title || (task.hashtags && task.hashtags.length > 0)) && (
             <div className="card !p-4 space-y-3">
-              <div className="text-sm font-semibold text-slate-100">发布物料 <span className="text-[11px] text-slate-500 font-normal">· 复制即用</span></div>
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold text-slate-100">发布物料 <span className="text-[11px] text-slate-500 font-normal">· 复制即用</span></div>
+                <button onClick={async () => {
+                  setRefreshingTitles(true)
+                  try {
+                    await api.regenerateTitles(id)
+                    load()
+                  } catch { /* 静默失败 */ }
+                  finally { setRefreshingTitles(false) }
+                }} disabled={refreshingTitles}
+                  className="text-[11px] text-brand-300 hover:text-brand-200 disabled:opacity-40 flex items-center gap-1">
+                  {refreshingTitles ? '⟳ 生成中…' : '⟳ 换一换'}
+                </button>
+              </div>
               {task.long_title && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -299,6 +316,49 @@ export default function TaskDetailPage() {
             </div>
           )}
 
+          {/* 评论区下单话术（图书带货）：发布后置顶到评论区，强化价格/稀缺性 + 二次种草 */}
+          {task.comment_cta && (task.comment_cta.pinned || task.comment_cta.price_scarcity || task.comment_cta.second_seed) && (
+            <div className="card !p-4 space-y-3">
+              <div className="text-sm font-semibold text-slate-100">评论区下单话术 <span className="text-[11px] text-slate-500 font-normal">· 发布后置顶到评论区</span></div>
+              {task.comment_cta.pinned && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-slate-500">置顶引导</span>
+                    <button onClick={() => copyText('cta_pinned', task.comment_cta!.pinned!)}
+                      className="text-[11px] text-brand-300 hover:text-brand-200">
+                      {copiedKey === 'cta_pinned' ? '✓ 已复制' : '复制'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-slate-200 leading-relaxed">{task.comment_cta.pinned}</p>
+                </div>
+              )}
+              {task.comment_cta.price_scarcity && (
+                <div className="pt-2 border-t border-slate-800/60">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-slate-500">价格/稀缺性</span>
+                    <button onClick={() => copyText('cta_price', task.comment_cta!.price_scarcity!)}
+                      className="text-[11px] text-brand-300 hover:text-brand-200">
+                      {copiedKey === 'cta_price' ? '✓ 已复制' : '复制'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-slate-200 leading-relaxed">{task.comment_cta.price_scarcity}</p>
+                </div>
+              )}
+              {task.comment_cta.second_seed && (
+                <div className="pt-2 border-t border-slate-800/60">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[11px] text-slate-500">二次种草回复</span>
+                    <button onClick={() => copyText('cta_seed', task.comment_cta!.second_seed!)}
+                      className="text-[11px] text-brand-300 hover:text-brand-200">
+                      {copiedKey === 'cta_seed' ? '✓ 已复制' : '复制'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-slate-200 leading-relaxed">{task.comment_cta.second_seed}</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 待确认：通用继续按钮（文案步 B 用右栏聚焦窗口，这里不重复显示） */}
           {awaitingConfirm && !awaitingScript && (
             <div className="card !p-4 border border-brand-500/30">
@@ -335,8 +395,12 @@ export default function TaskDetailPage() {
             )}
             {canRecompose && (
               <>
-                <button onClick={onRetryTTS} disabled={busy || uploading}
+                <button onClick={() => setShowVoiceReconfig(true)} disabled={busy || uploading}
                   className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition-colors">
+                  🎙️ 更换配音重新生成
+                </button>
+                <button onClick={onRetryTTS} disabled={busy || uploading}
+                  className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-slate-700/70 text-slate-200 hover:bg-slate-700 disabled:opacity-50 transition-colors">
                   {busy ? '重新配音中…' : '🔊 重新 AI 配音并出片'}
                 </button>
                 <button onClick={onRecompose} disabled={busy || uploading}
@@ -401,6 +465,17 @@ export default function TaskDetailPage() {
           {tab === 'gallery' && <SceneGallery taskId={id} modules={modules} onChanged={load} />}
         </main>
       </div>
+
+      {/* 更换配音对话框 */}
+      {showVoiceReconfig && (
+        <VoiceReconfigDialog
+          taskId={id}
+          currentVoice={task.voice || undefined}
+          currentSpeed={task.voice_speed || 1.0}
+          onClose={() => setShowVoiceReconfig(false)}
+          onSuccess={load}
+        />
+      )}
     </div>
   )
 }

@@ -3,7 +3,7 @@
 // 改完点「保存全部修改」写回后端；单张可「改提示词重试」只重生成那一张。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { Scene, GeneratedImage, ModuleResult } from '../api/types'
+import type { Scene, GeneratedImage, ModuleResult, ImagePreset } from '../api/types'
 
 interface Props {
   taskId: string
@@ -50,9 +50,28 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   // 多选「一起重新组图」：selected 记录勾选的分镜下标；batchRunning 标记组图请求进行中
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [batchRunning, setBatchRunning] = useState(false)
+  // 防双击锁：React 状态更新异步，用同步 ref 防止快速双击时两次都通过 batchRunning 检查
+  const batchLockRef = useRef(false)
   // 本次重组的出图方式：''=跟随建任务时选的模式；'grid'=九宫格省成本；'per_image'=逐张画质优先。
   // 让用户在画廊当场切换，不必回建任务页改。
   const [batchMode, setBatchMode] = useState<'' | 'grid' | 'per_image'>('')
+  // 本次重生的出图模型：''=跟随当前生效配置；否则按所选预设名覆盖（默认 GPT 失败后可换豆包重生）。
+  // 同时作用于单张重生和批量「一起重新组图」，只影响这一次、不改全局配置。
+  const [presets, setPresets] = useState<ImagePreset[]>([])
+  const [curModel, setCurModel] = useState<string>('')
+  const [modelName, setModelName] = useState<string>('')
+  // 当前选中的预设对象（null=跟随配置，重生时不传覆盖）。用 ref 让并发/排队闭包拿到最新值。
+  const selPreset = useMemo(
+    () => presets.find((p) => p.name === modelName) ?? null, [presets, modelName])
+  const presetRef = useRef<ImagePreset | null>(null)
+  useEffect(() => { presetRef.current = selPreset }, [selPreset])
+
+  // 拉一次配置，取「配图预设」列表 + 当前生效模型，供顶部「出图模型」下拉用。
+  useEffect(() => {
+    api.getConfig()
+      .then((c) => { setPresets(c.image_presets ?? []); setCurModel(c.image_model ?? '') })
+      .catch(() => { /* 取不到就只剩默认项，行为=现状 */ })
+  }, [])
   // 点击缩略图放大查看：lightbox 存当前放大的图片 URL（null = 关闭）
   const [lightbox, setLightbox] = useState<string | null>(null)
   // 并发重试时读取最新 scenes（避免闭包拿到旧值）
@@ -109,7 +128,9 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
       // 传当前画廊里的提示词。若该图被审核拦截、当前词仍过不了，后端会自动升级到
       // 安全画面再生成（点一次即出图，不原样重发必败词）。
       const prompt = scenesRef.current[i]?.desc_prompt
-      const r = await api.retryImage(taskId, imgIndex, prompt)
+      const ov = presetRef.current
+      const r = await api.retryImage(taskId, imgIndex, prompt,
+        ov ? { model: ov.model, base_url: ov.base_url, unit_price: ov.unit_price } : undefined)
       setBust((b) => ({ ...b, [imgIndex]: (b[imgIndex] ?? 0) + 1 }))
       // 后端自动改写并成功时，把改写后的安全提示词回填到画廊输入框，让用户看到改成了什么
       if (r.rewritten && r.new_prompt) {
@@ -129,6 +150,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   }
 
   // 点击重试：支持多张并行（上限 MAX_PARALLEL），超出的进队列，名额释放后自动顶上。
+  // 加入队列是原子操作，防止双击时重复加入（如果已在 retrying/queued 则直接返回）。
   async function retryOne(i: number) {
     if (retrying.has(i) || queued.has(i)) return
     setErr(null)
@@ -141,9 +163,15 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
       setQueued((q) => new Set(q).add(i))
       return
     }
+    // 先检查再设置：防止快速双击时第二次调用在第一次 setRetrying 完成前通过检查。
+    // 虽然 React 状态更新是批处理的，但 has() 检查在同步执行，存在极小窗口期。
+    // 解决：先同步标记到 retrying，再开始异步执行。
     setRetrying((r) => new Set(r).add(i))
-    await runRetry(i)
-    setRetrying((r) => { const n = new Set(r); n.delete(i); return n })
+    try {
+      await runRetry(i)
+    } finally {
+      setRetrying((r) => { const n = new Set(r); n.delete(i); return n })
+    }
   }
 
   // 勾选/取消勾选某张（用于多选「一起重新组图」）
@@ -160,19 +188,27 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
 
   // 把选中的几张合并成一次组图请求重新生成（省请求、风格统一、人物一致）。
   async function runBatchRetry() {
-    if (selected.size === 0 || batchRunning) return
+    // 防重复：用同步 ref 锁防止快速双击，比异步的 batchRunning 状态更可靠
+    if (selected.size === 0 || batchLockRef.current) return
+    batchLockRef.current = true
     setErr(null)
     // 有未保存编辑先存，保证后端用最新提示词
     if (dirty) {
       try { await api.saveScenes(taskId, scenes); setDirty(false) }
-      catch (e) { setErr((e as ApiError).message); return }
+      catch (e) {
+        setErr((e as ApiError).message)
+        batchLockRef.current = false  // 保存失败时释放锁
+        return
+      }
     }
     setBatchRunning(true)
     const sel = [...selected].sort((a, b) => a - b)
     // 分镜与图一一对应：分镜下标 i → 图片下标 i
     const imgIndices = sel.map((i) => i)
     try {
-      const r = await api.batchRetryImages(taskId, imgIndices, batchMode || undefined)
+      const ov = presetRef.current
+      const r = await api.batchRetryImages(taskId, imgIndices, batchMode || undefined,
+        ov ? { model: ov.model, base_url: ov.base_url, unit_price: ov.unit_price } : undefined)
       setBust((b) => {
         const n = { ...b }
         imgIndices.forEach((idx) => { n[idx] = (n[idx] ?? 0) + 1 })
@@ -194,6 +230,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
       setErr((e as ApiError).message)
     } finally {
       setBatchRunning(false)
+      batchLockRef.current = false  // 无论成功失败都释放锁
     }
   }
 
@@ -215,7 +252,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className="space-y-3 mb-3">
         <div className="text-sm text-slate-400">
           共 {scenes.length} 个分镜 · 编辑后保存，或单张换图；勾选多张可「一起重新组图」（同批生成，风格统一、人物一致）
           {(retrying.size > 0 || queued.size > 0) && (
@@ -225,7 +262,20 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 出图模型：单张重生与批量重组共用。默认跟随当前配置（即默认 GPT）；
+              失败/不满意的图可当场切到豆包等预设重生，只影响这一次、不动全局配置。
+              标签不内嵌长模型名（会撑宽挤坏布局），完整模型名放 title。 */}
+          <select value={modelName}
+            onChange={(e) => setModelName(e.target.value)}
+            title={`本次重生用哪个出图模型：默认跟随当前配置${curModel ? `（${curModel}）` : ''}；可临时换成已存的预设（如默认 GPT 失败后换豆包），只影响这次重生、不改全局配置`}
+            className="max-w-[160px] px-2 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-200 border-none
+              focus:ring-1 focus:ring-brand-500">
+            <option value="">出图模型：跟随配置</option>
+            {presets.map((p) => (
+              <option key={p.name} value={p.name}>{p.name}</option>
+            ))}
+          </select>
           <select value={batchMode}
             onChange={(e) => setBatchMode(e.target.value as '' | 'grid' | 'per_image')}
             title="本次重组的出图方式：九宫格一次请求出多张省钱；逐张每张单独出、画质优先（黑白等强约束更稳）"
@@ -257,7 +307,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
 
       {err && <div className="mb-3 px-3 py-2 rounded-lg text-sm bg-red-500/10 text-red-400">{err}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
         {scenes.map((s, i) => {
           const imgIndex = i
           const img = images[imgIndex]

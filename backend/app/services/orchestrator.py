@@ -91,6 +91,26 @@ def _get_result(db: Session, task_id: str, module: str) -> ModuleResult | None:
     return db.query(ModuleResult).filter_by(task_id=task_id, module=module).first()
 
 
+def _merge_segments_evenly(parts: list[str], n: int) -> list[str]:
+    """把 parts 个原文切片【均匀合并】成 n 段（相邻拼接，一字不改、不丢内容）。
+    用于切片数超过出图上限时压到 n 段：前 (len%n) 段各多 1 个切片，其余各少 1 个，
+    使每段长度尽量均衡。绝不把超出部分全堆到最后一段（否则最后一镜吞大半脚本→配音几百秒→
+    视频里一张图定格几分钟）。返回非空段列表。"""
+    n = max(1, n)
+    total = len(parts)
+    if total <= n:
+        return list(parts)
+    base, extra = divmod(total, n)
+    out, idx = [], 0
+    for g in range(n):
+        size = base + (1 if g < extra else 0)
+        chunk = "".join(parts[idx:idx + size])
+        idx += size
+        if chunk:
+            out.append(chunk)
+    return out
+
+
 def _voice_segments_from_scenes(db: Session, task_id: str, fallback_segments: list) -> tuple[list, str]:
     """配音/字幕分段统一取自分镜 cap（与图片同源 → 图-字-音三轨一一对齐）。
     从 P 产物读 scenes，每个分镜的 cap 作为一段配音文本；返回 ([{"text": cap}, ...], "scene")。
@@ -289,7 +309,8 @@ def run_pipeline(db: Session, task_id: str):
         if not (task.short_title or "").strip() or not (task.long_title or "").strip() or not task.hashtags:
             try:
                 (short_title, long_title, tags), _tt = tm.run_gen_title_tags(
-                    cfg.llm_provider, cfg.llm_model, llm_key, script, task.keyword)
+                    cfg.llm_provider, cfg.llm_model, llm_key, script, task.keyword,
+                    track=task.track)
                 if short_title and not (task.short_title or "").strip():
                     task.short_title = short_title
                 if long_title and not (task.long_title or "").strip():
@@ -371,6 +392,21 @@ def run_pipeline(db: Session, task_id: str):
             except Exception as e:
                 _save_result(db, task.id, "D", "failed", output={"error": str(e)})
 
+        # 评论区下单引导话术（仅图书带货模式）：发布后置顶用，强化价格/稀缺性 + 二次种草。
+        # 接在 D 识别之后，能带上识别到的书名。锦上添花，失败不阻断。
+        if task.monetization_mode == "book_sales" and not task.comment_cta:
+            try:
+                _book_title = (book_info or {}).get("title") if isinstance(book_info, dict) else ""
+                (pinned, price_scarcity, second_seed), _cc = tm.run_gen_comment_cta(
+                    cfg.llm_provider, cfg.llm_model, llm_key, script,
+                    book_title=_book_title or "", keyword=task.keyword)
+                if pinned or price_scarcity or second_seed:
+                    task.comment_cta = {"pinned": pinned, "price_scarcity": price_scarcity,
+                                        "second_seed": second_seed}
+                    db.commit()
+            except Exception:
+                db.rollback()
+
         # E 配图（必选）。拆两步：P 提示词生成（不调绘图 API）→ E 批量生图。
         if "E" in task.modules:
             out_dir = storage_root(db) / task.id / "images"
@@ -417,12 +453,12 @@ def run_pipeline(db: Session, task_id: str):
                 # cap 由程序强制填为原文片，LLM 不碰文案 → 配音/字幕念的就是你的原文、且与画面
                 # 按段一一对齐。失败不阻断——回退 build_image_prompts 的 segment 截字。
                 seg_texts = tm.split_for_storyboard(script)
-                # 夹到 [MIN,MAX] 张：过多则合并尾部、过少不补（由切片自然决定）。
+                # 夹到 [MIN,MAX] 张：过多则【均匀合并】成 MAX 段，过少不补。
+                # 注意：绝不能把超出部分全倒进最后一段——那样最后一镜会吞掉大半脚本(实测 2520 字)，
+                # 配音几百秒，视频里最后一张图定格好几分钟(task_7e246655893b 的 8 分钟定格教训)。
+                # 正确做法：相邻段雨露均沾地合并，让 MAX 段时长大致均衡。
                 if len(seg_texts) > im.MAX_IMAGES:
-                    # 极长文案：把超出部分并入最后一段，保证不丢原文、张数不爆。
-                    head = seg_texts[:im.MAX_IMAGES - 1]
-                    tail = "".join(seg_texts[im.MAX_IMAGES - 1:])
-                    seg_texts = head + [tail]
+                    seg_texts = _merge_segments_evenly(seg_texts, im.MAX_IMAGES)
                 sb_segments = [{"text": t} for t in seg_texts]
                 scenes = None
                 try:
@@ -485,6 +521,11 @@ def run_pipeline(db: Session, task_id: str):
             #     失败整组占位、不回退逐张（控成本），用户可在画廊手动重新组图。
             mode = (getattr(task, "image_gen_mode", None) or "per_image")
             img_ratio = tracks.image_ratio_for(task)  # center_h 版式强制 16:9，与画布解耦
+            # center_h 中央横图：gpt 便宜线只能出 3:2，强裁 16:9 会切头。no_crop 让归一化
+            # 只等比缩放不裁切、保留完整横图（黑边交剪映 center_h 自动加，见 image._normalize）。
+            img_no_crop = getattr(task, "layout", "full") == "center_h"
+            # 横版九宫格：gpt 1536x1024 / 豆包 3072x1728，都支持（commit 5d36faa已验证）
+            # 按原设计，gpt和豆包都省成本89%，不再强制降级
             existing_e = _get_result(db, task.id, "E")
             if not (existing_e and existing_e.status == "success"):
                 # 生图是最烧钱的步骤，开跑前再查一次取消/超限——用户点了取消就别再发这批图。
@@ -500,7 +541,7 @@ def run_pipeline(db: Session, task_id: str):
                                                       aspect_ratio=img_ratio,
                                                       grid_mode=True, style=grid_style,
                                                       base_url=getattr(cfg, "image_base_url", None),
-                                                      proxy=_img_proxy)
+                                                      proxy=_img_proxy, no_crop=img_no_crop)
                 else:
                     # 逐张模式：每张内部已有瞬时故障(超时/限流)退避重试+失败占位，
                     # 不再套外层整批重发(后台反复烧钱)。审核拦截的图保留占位+原因等手动重生。
@@ -511,7 +552,8 @@ def run_pipeline(db: Session, task_id: str):
                                               base_url=getattr(cfg, "image_base_url", None),
                                               proxy=_img_proxy,
                                               grayscale=im.is_monochrome_style(
-                                                  tracks.get_style(task.image_style, task.track)))
+                                                  tracks.get_style(task.image_style, task.track)),
+                                              no_crop=img_no_crop)
                 # 失败不在后台自动改写重生（那样会在用户看不见的地方反复烧钱，
                 # task_472 一次烧 16 次就是这么来的）。被审核拦截的图保留占位+原因，
                 # 等用户在画廊手动「重新生成」或「重新组图」——花不花钱、花几次由用户决定。
@@ -631,7 +673,10 @@ def _run_collect_asr(db: Session, task: Task, cfg: Config, started: float):
                             "platform": cr.platform,
                             **cr.raw_meta}
         if cr.title and not task.title:
-            task.title = cr.title[:200]
+            # 采集原标题常带换行/制表符，折叠成单空格再存——否则下游拼草稿目录会触发
+            # WinError 123（目录名语法错误）；草稿名另有 _safe_name 兜底，这里先把 title 本身清干净。
+            import re as _re
+            task.title = _re.sub(r"\s+", " ", cr.title).strip()[:200]
         if cr.author and not task.author:
             task.author = cr.author[:100]
         db.commit()
