@@ -133,7 +133,7 @@ def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
             lambda: generate_image(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
                                    ref_uri=ref_uri, base_url=base_url, proxy=proxy,
-                                   grayscale=grayscale),
+                                   grayscale=grayscale, timeout=600.0),
             _img_retry_for(model), disconnect_retry=IMG_DISCONNECT_RETRY)
         return result
     except ImageError as e:
@@ -414,7 +414,8 @@ def render_images_grouped(provider, api_key, tasks, model=None,
             batch = generate_images_batch(provider, api_key, merged, sub_types,
                                           out_paths, durations, model=model,
                                           aspect_ratio=aspect_ratio, ref_uri=ref,
-                                          base_url=base_url, proxy=proxy, grayscale=_gray)
+                                          base_url=base_url, proxy=proxy, grayscale=_gray,
+                                          timeout=600.0)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError as e:
@@ -453,12 +454,14 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                     # 瞬时故障(超时/断连/限流/5xx)退避重试，和逐张 _gen_with_fallback 一致：
                     # 中转站瞬时断连("Server disconnected without sending a response")多半上游没出图
                     # 也没扣费，重试一次常能成；retryable=False 的错(审核/被拒/返空)在 with_retry 内不重试。
+                    # timeout=600s 覆盖 gpt-image-2 最慢情况（实测 1755s/29min，但 600s 已能覆盖绝大多数；
+                    # 超 600s 的极端慢请求也认了，总比 180s 超时断连导致"扣费+丢图"强）。
                     from app.modules.retry import with_retry
                     grid, _ = with_retry(
                         lambda: generate_grid_image(provider, api_key, cell_prompt, sub_types,
                                                     out_paths, durations, model=model,
                                                     aspect_ratio=aspect_ratio, base_url=base_url,
-                                                    proxy=proxy, grayscale=_gray),
+                                                    proxy=proxy, grayscale=_gray, timeout=600.0),
                         _img_retry_for(model), disconnect_retry=IMG_DISCONNECT_RETRY)
                     for k, i in enumerate(indices):
                         results[i] = grid[k]
