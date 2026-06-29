@@ -423,15 +423,13 @@ def regenerate_titles(task_id: str, db: Session = Depends(get_db)):
         raise HTTPException(400, detail="未配置大模型 API Key")
     # 取最终文案：优先 edited_script，其次 B 改写输出，再其次 A 清洗后正文，最后原始逐字稿
     script = ""
-    for m in (task.modules or []):
-        if m.get("step") == "B" and m.get("output", {}).get("script"):
-            script = m["output"]["script"]
-            break
+    b = db.query(ModuleResult).filter_by(task_id=task_id, module="B").first()
+    if b and b.output and b.output.get("script"):
+        script = b.output["script"]
     if not script:
-        for m in (task.modules or []):
-            if m.get("step") == "A" and m.get("output", {}).get("cleaned"):
-                script = m["output"]["cleaned"]
-                break
+        a = db.query(ModuleResult).filter_by(task_id=task_id, module="A").first()
+        if a and a.output and a.output.get("cleaned_text"):
+            script = a.output["cleaned_text"]
     if not script:
         script = task.transcript or ""
     if len(script.strip()) < 10:
@@ -594,6 +592,7 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
             "long_title": getattr(task, "long_title", None),
             "short_title": getattr(task, "short_title", None),
             "hashtags": getattr(task, "hashtags", None),
+            "comment_cta": getattr(task, "comment_cta", None),
             "error_code": task.error_code, "error_message": task.error_message,
             "cost_breakdown": cost_breakdown,
             "created_at": task.created_at, "updated_at": task.updated_at,
@@ -832,6 +831,11 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
         except Exception:
             ref_uri = None
 
+    # 模型/地址/单价：本次请求显式指定的优先，否则跟随全局配置。
+    _model = body.model or (cfg.image_model if cfg else None)
+    _base_url = body.base_url or (getattr(cfg, "image_base_url", None) if cfg else None)
+    _unit_price = body.unit_price if body.unit_price is not None else getattr(cfg, "image_unit_price", None)
+
     def _gen(subj):
         """裸主体 → 套风格 → 生成。人物镜头带参考图图生图保持一致性。"""
         text = _wrap(style, subj)
@@ -841,10 +845,10 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
         return _gen_with_fallback(cfg.image_provider if cfg else "mock", img_key,
                                   text,
                                   sub_type, out_path, img.get("suggested_duration", 6),
-                                  model=cfg.image_model if cfg else None,
+                                  model=_model,
                                   aspect_ratio=tracks.image_ratio_for(task),
                                   ref_uri=ref_uri,
-                                  base_url=getattr(cfg, "image_base_url", None) if cfg else None,
+                                  base_url=_base_url,
                                   proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
                                   grayscale=is_monochrome_style(style))
 
@@ -1031,6 +1035,11 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     # 不同于已砍掉的「后台首次生成偷偷反复烧」。无 LLM Key 则不改写。
     from app.modules import text_modules as _tm
     _llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+    # 模型/地址/单价：本次请求显式指定的优先，否则跟随全局配置。
+    _model = body.model or (cfg.image_model if cfg else None)
+    _base_url = body.base_url or (getattr(cfg, "image_base_url", None) if cfg else None)
+    _unit_price = body.unit_price if body.unit_price is not None else getattr(cfg, "image_unit_price", None)
+
     def _grid_rewrite(brief, attempt):
         try:
             # 用传入的真实 attempt，走阶梯式改写（保人物剧情优先），不一步跳到空镜。
@@ -1040,10 +1049,10 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         except Exception:
             return brief
     results = render_images_grouped(cfg.image_provider if cfg else "mock", img_key,
-                                    tasks, model=cfg.image_model if cfg else None,
+                                    tasks, model=_model,
                                     aspect_ratio=tracks.image_ratio_for(task),
                                     grid_mode=_grid, style=style,
-                                    base_url=getattr(cfg, "image_base_url", None) if cfg else None,
+                                    base_url=_base_url,
                                     proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
                                     rewrite_fn=_grid_rewrite if _llm_key else None)
 
@@ -1104,9 +1113,7 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     # 重新组图替换旧图、不叠加历史账，避免反复重组把 total_cost 越滚越高误判超限。
     # 九宫格按 grid 标记折算 ceil(张数/9)、一次请求出9张只算1张钱；逐张按实际张数。
     provider = cfg.image_provider if cfg else "mock"
-    e_cost = cost_svc.image_cost(final_imgs, provider,
-                                 getattr(cfg, "image_unit_price", None) if cfg else None,
-                                 model=getattr(cfg, "image_model", None) if cfg else None)
+    e_cost = cost_svc.image_cost(final_imgs, provider, _unit_price, model=_model)
     total = cost_svc.rebill_module(db, task, "E", provider, e_cost)
 
     for r in out:

@@ -59,17 +59,25 @@ class ScenesPatch(BaseModel):
 
 
 class ImageRetryRequest(BaseModel):
-    """单张图重试：可带新的提示词；为空则用该分镜当前提示词重生成。"""
+    """单张图重试：可带新的提示词；为空则用该分镜当前提示词重生成。
+    可选指定本次出图模型/地址/单价，不传则跟随全局配置。"""
     prompt: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    unit_price: float | None = None
 
 
 class ImageBatchRetryRequest(BaseModel):
     """多张图一起重新组图：传选中的图片下标（封面0、内容图1..、cta末尾）。
     选中的图合并成一次组图请求生成 → 省请求、风格统一、人物一致。
     gen_mode 可选当场指定本次重组方式（grid 九宫格省成本 / per_image 逐张画质优先）；
-    不传则跟随建任务时选的 image_gen_mode。"""
+    不传则跟随建任务时选的 image_gen_mode。
+    可选指定本次出图模型/地址/单价，不传则跟随全局配置。"""
     indices: list[int]
     gen_mode: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    unit_price: float | None = None
 
 
 class StepRerunRequest(BaseModel):
