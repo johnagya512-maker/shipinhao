@@ -218,23 +218,18 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
         prompt = f"{prompt}\n\n【额外要求】\n{extra}"
     guide = _structure_to_guide(structure_guide or {})
     if guide:
-        prompt = (f"【★拆解结构二创：最高级别改写★】\n"
-                  f"这不是普通改写，是【拆解结构后按骨架重写】。你必须做到：\n"
-                  f"1. 【绝不照抄原文任何完整句子】——连续相同字不得超过8个（日期、人名、书名除外）\n"
-                  f"2. 【重排叙事顺序】——不要按原文段落顺序写，可以倒叙、插叙、换开头方式\n"
-                  f"3. 【换叙述角度】——原文如果是旁观者视角，你可以换成亲历者/对话者视角\n"
-                  f"4. 【换句式结构】——原文用长句你就用短句，原文用陈述你就用设问/反问\n"
-                  f"5. 【保留事实内核】——人物、时间、地点、事件、数据不能改，但表达方式必须全换\n"
-                  f"\n"
-                  f"下面是从原文拆出的'爆款手法说明书'。你要做的是：\n"
-                  f"- 看懂它每一步为什么抓人（钩子招式、叙事手法、情绪节奏、收尾）\n"
-                  f"- 用【完全不同的措辞和句子】把同样的'爆点'重新写一遍\n"
-                  f"- 目标：读起来是另一个人写的稿子，却同样有这条的钩子力和节奏感\n"
-                  f"\n"
-                  f"{guide}\n"
-                  f"\n"
-                  f"【原文】：\n") + prompt + f"\n\n【开始重写，记住：连续相同字不得超过8个！】"
-    r = call_llm(provider, model, key, prompt, temperature=0.9)
+        # 有结构指导时，使用专用的"结构重写"prompt，不用基础赛道prompt。
+        # 基础prompt里的"保留真实历史脉络""娓娓道来"等保守指令会抵消激进要求。
+        ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
+                  else prompts.ENDING_REVENUE_SHARE)
+        prompt = _render(prompts.MODULE_B_STRUCTURE_REWRITE,
+                         cleaned_text=cleaned_text,
+                         target_audience=target_audience,
+                         structure_guide=guide,
+                         ending_instruction=ending)
+        r = call_llm(provider, model, key, prompt, temperature=0.9)
+        return {"script": r.text.strip()}, r
+    r = call_llm(provider, model, key, prompt, temperature=0.7)
     return {"script": r.text.strip()}, r
 
 
