@@ -140,7 +140,11 @@ def _structure_to_guide(structure: dict) -> str:
         lines.append("  → 用同样的手法，给新内容写一个全新钩子（不要照抄原句，照搬的是'招式'）")
     parts = structure.get("structure") or []
     if parts:
-        lines.append("◆ 中段逐段手法（按顺序对照着写）：")
+        reorder = structure.get("_reorder", False)
+        if reorder:
+            lines.append("◆ 中段爆点手法（保留这些爆点机制，但自由重排顺序和叙述角度）：")
+        else:
+            lines.append("◆ 中段逐段手法（按顺序对照着写）：")
         for i, p in enumerate(parts, 1):
             seg = f"  {i}. 【{p.get('part','')}·{p.get('emotion','')}·{p.get('pace','')}】"
             if p.get("technique"):
@@ -219,9 +223,12 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
     guide = _structure_to_guide(structure_guide or {})
     if guide:
         # 有结构指导时，使用专用的"结构重写"prompt，不用基础赛道prompt。
-        # 基础prompt里的"保留真实历史脉络""娓娓道来"等保守指令会抵消激进要求。
+        # 同时设置 _reorder=True，让 guide 去掉"按顺序"指令，改为"自由重排"。
         ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
                   else prompts.ENDING_REVENUE_SHARE)
+        reorder_guide = dict(structure_guide or {})
+        reorder_guide["_reorder"] = True
+        guide = _structure_to_guide(reorder_guide)
         prompt = _render(prompts.MODULE_B_STRUCTURE_REWRITE,
                          cleaned_text=cleaned_text,
                          target_audience=target_audience,
