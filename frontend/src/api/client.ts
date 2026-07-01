@@ -169,6 +169,7 @@ export const api = {
     }),
   cancel: (id: string) => request<TaskOut>(`/tasks/${id}/cancel`, { method: 'POST' }),
   resume: (id: string) => request<TaskOut>(`/tasks/${id}/resume`, { method: 'POST' }),
+  deleteTask: (id: string) => request<{ ok: boolean }>(`/tasks/${id}`, { method: 'DELETE' }),
 
   // 一键 AI 合规改写：针对停在 H 的残余违规点定向软化一轮，改完重审仍停确认页。
   complianceFix: (id: string) => request<TaskOut>(`/tasks/${id}/compliance-fix`, { method: 'POST' }),

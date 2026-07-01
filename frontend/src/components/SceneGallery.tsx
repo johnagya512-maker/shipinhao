@@ -1,7 +1,7 @@
 // 分镜画廊：对齐竞品的卡片网格。每张卡 = 一个分镜，展示缩略图 + 可编辑的
 // 口播原文(cap)/绘图提示词(desc_prompt) + 「参考」角标(has_character) + 重试按钮。
 // 改完点「保存全部修改」写回后端；单张可「改提示词重试」只重生成那一张。
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { Scene, GeneratedImage, ModuleResult, ImagePreset } from '../api/types'
 
@@ -49,9 +49,20 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
   const [failReason, setFailReason] = useState<Record<number, string>>({})
   // 多选「一起重新组图」：selected 记录勾选的分镜下标；batchRunning 标记组图请求进行中
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [batchRunning, setBatchRunning] = useState(false)
+  // 用 sessionStorage 持久化 batchRunning 状态，防止切换任务时丢失（后端是同步执行，切任务后仍在运行）
+  const [batchRunning, setBatchRunning] = useState(() => {
+    try { return sessionStorage.getItem(`batch_retry_${taskId}`) === '1' } catch { return false }
+  })
   // 防双击锁：React 状态更新异步，用同步 ref 防止快速双击时两次都通过 batchRunning 检查
   const batchLockRef = useRef(false)
+  // 统一更新 batchRunning 状态并持久化到 sessionStorage
+  const setBatchRunningPersisted = useCallback((v: boolean) => {
+    setBatchRunning(v)
+    try {
+      if (v) sessionStorage.setItem(`batch_retry_${taskId}`, '1')
+      else sessionStorage.removeItem(`batch_retry_${taskId}`)
+    } catch { /* ignore */ }
+  }, [taskId])
   // 本次重组的出图方式：''=跟随建任务时选的模式；'grid'=九宫格省成本；'per_image'=逐张画质优先。
   // 让用户在画廊当场切换，不必回建任务页改。
   const [batchMode, setBatchMode] = useState<'' | 'grid' | 'per_image'>('')
@@ -201,7 +212,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
         return
       }
     }
-    setBatchRunning(true)
+    setBatchRunningPersisted(true)
     const sel = [...selected].sort((a, b) => a - b)
     // 分镜与图一一对应：分镜下标 i → 图片下标 i
     const imgIndices = sel.map((i) => i)
@@ -229,7 +240,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     } catch (e) {
       setErr((e as ApiError).message)
     } finally {
-      setBatchRunning(false)
+      setBatchRunningPersisted(false)
       batchLockRef.current = false  // 无论成功失败都释放锁
     }
   }

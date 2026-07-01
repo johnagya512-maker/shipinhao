@@ -63,6 +63,8 @@ class Task(Base):
     pause_steps: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # 当前暂停在哪个 step（awaiting_confirm 时有值；恢复后清空）
     paused_at: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    # 评论区下单引导话术（图书带货模式），JSON: {pinned, price_scarcity, second_seed}
+    comment_cta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     total_cost: Mapped[float] = mapped_column(Numeric(8, 4), default=0)
     error_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

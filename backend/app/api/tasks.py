@@ -152,12 +152,16 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
                 prov, model, llm_key, text,
                 target_audience=body.get("target_audience") or "50+女性",
                 title=body.get("title"), lite=True,
+                monetization_mode=body.get("monetization_mode") or "revenue_share",
                 keyword=body.get("keyword") or "", author=body.get("author") or ""), 2)
         elif _mode == "remix":
             (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
                 prov, model, llm_key, text,
                 target_audience=body.get("target_audience") or "50+女性",
                 title=body.get("title"), remix=True,
+                monetization_mode=body.get("monetization_mode") or "revenue_share",
+                rewrite_strength=body.get("rewrite_strength") or "medium",
+                narrative_perspective=body.get("narrative_perspective") or "auto",
                 keyword=body.get("keyword") or "", author=body.get("author") or ""), 2)
         else:
             if _mode != "none":
@@ -462,6 +466,41 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)):
     task.status = "cancelled"
     db.commit()
     return task
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task(task_id: str, db: Session = Depends(get_db)):
+    """删除任务：仅终态（completed/failed/cancelled/blocked）可删。
+    清理模块结果、配图目录、剪映草稿等产物，然后删除任务记录。"""
+    import shutil
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    if task.status not in ("completed", "failed", "cancelled", "blocked"):
+        raise HTTPException(400, detail="仅已完成/失败/已取消/已拦截的任务可删除")
+    # 从调度队列移除（防边缘情况）
+    scheduler.cancel_queued(task_id)
+    # 删除模块结果
+    db.query(ModuleResult).filter_by(task_id=task_id).delete()
+    # 删除配图目录
+    img_dir = storage_root(db) / task_id / "images"
+    if img_dir.exists():
+        shutil.rmtree(img_dir, ignore_errors=True)
+    # 删除剪映草稿/成片目录
+    draft_dir = storage_root(db) / task_id / "jianying"
+    if draft_dir.exists():
+        shutil.rmtree(draft_dir, ignore_errors=True)
+    # 删除音频/视频目录
+    audio_dir = storage_root(db) / task_id / "audio"
+    if audio_dir.exists():
+        shutil.rmtree(audio_dir, ignore_errors=True)
+    video_dir = storage_root(db) / task_id / "video"
+    if video_dir.exists():
+        shutil.rmtree(video_dir, ignore_errors=True)
+    # 删除任务记录
+    db.delete(task)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/tasks/{task_id}/resume", response_model=TaskOut)

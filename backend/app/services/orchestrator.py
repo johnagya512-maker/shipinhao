@@ -251,7 +251,9 @@ def run_pipeline(db: Session, task_id: str):
                 b_out = _llm_step(db, task, cfg, llm_key, "B",
                                   lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
                                                          cleaned, task.target_audience, task.title,
-                                                         lite=True, keyword=task.keyword or "",
+                                                         lite=True,
+                                                         monetization_mode=task.monetization_mode,
+                                                         keyword=task.keyword or "",
                                                          author=getattr(task, "author", "") or ""),
                                   started)
                 script = b_out["script"]
@@ -260,7 +262,11 @@ def run_pipeline(db: Session, task_id: str):
                 b_out = _llm_step(db, task, cfg, llm_key, "B",
                                   lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
                                                          cleaned, task.target_audience, task.title,
-                                                         remix=True, keyword=task.keyword or "",
+                                                         remix=True,
+                                                         monetization_mode=task.monetization_mode,
+                                                         rewrite_strength=task.rewrite_strength,
+                                                         narrative_perspective=task.narrative_perspective,
+                                                         keyword=task.keyword or "",
                                                          author=getattr(task, "author", "") or ""),
                                   started)
                 script = b_out["script"]

@@ -25,6 +25,8 @@ const FILTERS: Array<{ key: string; label: string }> = [
 ]
 const PAGE_SIZE = 20
 
+const DELETABLE: TaskStatus[] = ['completed', 'failed', 'cancelled', 'blocked']
+
 export default function TaskListPage() {
   const [items, setItems] = useState<TaskListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -32,6 +34,7 @@ export default function TaskListPage() {
   const [status, setStatus] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [queue, setQueue] = useState<QueueStats | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -47,6 +50,20 @@ export default function TaskListPage() {
   const loadQueue = useCallback(async () => {
     try { setQueue(await api.queueStats()) } catch { /* 忽略，非关键 */ }
   }, [])
+
+  async function onDelete(id: string) {
+    if (!confirm('确定删除此任务？配图和草稿等产物将一并清除。')) return
+    setDeleting(id)
+    try {
+      await api.deleteTask(id)
+      // 删除后刷新列表
+      load()
+    } catch (e) {
+      setError((e as ApiError).message)
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   useEffect(() => { load() }, [load])
   useEffect(() => { loadQueue() }, [loadQueue])
@@ -116,6 +133,7 @@ export default function TaskListPage() {
                 <th className="px-5 py-3 font-medium w-28">状态</th>
                 <th className="px-5 py-3 font-medium w-24">成本</th>
                 <th className="px-5 py-3 font-medium w-40">创建时间</th>
+                <th className="px-5 py-3 font-medium w-20">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -138,6 +156,14 @@ export default function TaskListPage() {
                   <td className="px-5 py-3.5 text-slate-600">{t.total_cost.toFixed(4)} 元</td>
                   <td className="px-5 py-3.5 text-slate-400 text-xs">
                     {new Date(t.created_at).toLocaleString('zh-CN')}
+                  </td>
+                  <td className="px-5 py-3.5">
+                    {DELETABLE.includes(t.status) && (
+                      <button onClick={() => onDelete(t.id)} disabled={deleting === t.id}
+                        className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40">
+                        {deleting === t.id ? '删除中...' : '删除'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

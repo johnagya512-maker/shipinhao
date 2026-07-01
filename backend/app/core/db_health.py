@@ -15,20 +15,17 @@ def check_database_integrity(db_path: str) -> tuple[bool, str]:
         (is_healthy, message)
     """
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # SQLite内置的完整性检查
-        cursor.execute('PRAGMA integrity_check')
-        result = cursor.fetchone()
-
-        conn.close()
+        # Use SQLAlchemy engine which has proper PRAGMAs set up
+        with engine.connect() as conn:
+            result = conn.execute(text("PRAGMA integrity_check")).fetchone()
 
         if result and result[0] == 'ok':
             return True, "数据库完整性检查通过"
         else:
             return False, f"数据库损坏: {result}"
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return False, f"检查失败: {e}"
 
 

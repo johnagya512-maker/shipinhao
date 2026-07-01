@@ -1,0 +1,32 @@
+[
+  {
+    "name": "豆包 Seedream（兔子）",
+    "model": "doubao-seedream-4-5-251128",
+    "base_url": "https://api.tu-zi.com/v1/images/generations",
+    "unit_price": 0.25
+  },
+  {
+    "name": "gpt-image-2（兔子）",
+    "model": "gpt-image-2",
+    "base_url": "https://api.tu-zi.com/v1/images/generations",
+    "unit_price": 0.058
+  },
+  {
+    "name": "豆包 Seedream（Apimart）",
+    "model": "doubao-seedream-4-5-251128",
+    "base_url": "https://api.apimart.ai/v1/images/generations",
+    "unit_price": 0.058
+  },
+  {
+    "name": "gpt-image-2（Apimart）",
+    "model": "gpt-image-2",
+    "base_url": "https://api.apimart.ai/v1/images/generations",
+    "unit_price": 0.042
+  },
+  {
+    "name": "豆包 Seedream（官方）",
+    "model": "doubao-seedream-4-5-251128",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+    "unit_price": 0.2
+  }
+]

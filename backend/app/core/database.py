@@ -13,11 +13,12 @@ if _is_sqlite:
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _record):
         """多任务并行时 SQLite 默认整库锁会导致 database is locked。
-        WAL 让读写不互斥；busy_timeout 把瞬时锁冲突改为短暂等待而非立即报错。"""
+        busy_timeout 把瞬时锁冲突改为短暂等待而非立即报错。
+        使用 DELETE 模式避免 WAL 文件丢失导致的启动问题。"""
         cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA busy_timeout=5000")
-        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA journal_mode=DELETE")
+        cur.execute("PRAGMA busy_timeout=10000")
+        cur.execute("PRAGMA synchronous=FULL")
         cur.close()
 
 

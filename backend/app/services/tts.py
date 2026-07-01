@@ -436,13 +436,23 @@ def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
     1. 残缺：只念了开头就结束——音频过短、字/秒畸高（如 41 字仅 4 秒 = 10 字/秒）。
     2. 静音填充：念几个字后填大段静音到几十秒——时长畸长、静音过半。
     正常中文播报约 4~6 字/秒，故以 8 字/秒为上限阈值。
+    3. HTTP 错误：TTS 接口返回 400/500 等状态码（火山偶发），同样触发重试。
     """
     cps_limit = 8.0          # 字/秒上限，超过视为没念全
     expect = len(text) / 5.0  # 正常时长估计（5 字/秒）
     best = None              # (越小越好的偏差, 音频字节)
     for attempt in range(4):
-        audio = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed,
-                           emotion=emotion)
+        try:
+            audio = _synth_one(text, provider, api_key, voice, appid, model, timeout, speed,
+                               emotion=emotion)
+        except TTSError as e:
+            # HTTP 错误（如 400/500）也重试，记录日志并退避
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"TTS 合成异常（第 {attempt+1}/4 次）: {e}")
+            if attempt < 3:
+                time.sleep(1.0 * (attempt + 1))  # 指数退避：1s, 2s, 3s
+            continue
         out_path.write_bytes(audio)
         dur = _probe_duration(out_path)
         cps = (len(text) / dur) if dur > 0 else 999
@@ -461,6 +471,9 @@ def _synth_one_checked(text: str, provider, api_key, voice, appid, model,
     if best is not None:
         out_path.write_bytes(best[1])
         _remove_long_silence(out_path)
+    else:
+        # 4 次全部 HTTP 错误，抛最后一次异常
+        raise TTSError(f"E6208: TTS 合成失败（已重试 4 次）: {text[:50]}...")
 
 
 def _trim_trailing_silence(path: Path) -> None:

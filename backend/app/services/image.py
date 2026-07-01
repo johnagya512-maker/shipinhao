@@ -269,20 +269,21 @@ def _apib_request(url: str, api_key: str, prompt: str, aspect_ratio: str, n: int
 
 def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
                  model: str, timeout: float, proxy: str | None,
-                 label: str = "配图") -> list[bytes]:
-    """调 gpt-image 文生图，返回 n 张图的原始字节列表（base64 解码后）。
+                 label: str = "配图", ref_uri: str | None = None) -> list[bytes]:
+    """调 gpt-image 文生图/图生图，返回 n 张图的原始字节列表（base64 解码后）。
+    有 ref_uri 时走图生图（JSON 传 image 字段），中转站支持；edits/multipart 接口中转站不支持。
     错误语义沿用 ImageError（含审核 audit 标记），与豆包分支保持一致。"""
     import base64
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {
         "model": model,
         "prompt": prompt,
-        "size": size,
         "n": max(1, n),
         "response_format": "b64_json",  # gpt-image-2 必需参数：明确返回 base64 格式
         "quality": "high",  # 高质量渲染
-        "output_format": "png"  # PNG 格式输出
     }
+    if ref_uri:
+        payload["image"] = ref_uri  # 图生图：JSON 传 data URI（中转站支持，edits 接口不支持）
     _kw = {"timeout": timeout}
     if proxy:
         _kw["proxy"] = proxy
@@ -347,10 +348,8 @@ def _gpt_edit_request(url: str, api_key: str, prompt: str, size: str, n: int,
         "image": ("image.png", io.BytesIO(image_bytes), "image/png"),
         "prompt": (None, prompt),
         "n": (None, str(n)),
-        "size": (None, size),
         "response_format": (None, "b64_json"),  # gpt-image-2 必需参数
         "quality": (None, "high"),  # 高质量渲染
-        "output_format": (None, "png"),  # PNG 格式输出
     }
     if model:
         files["model"] = (None, model)
@@ -482,13 +481,10 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         # OpenAI 兼容协议分支（中转站或 gpt 模型）：简化 payload，与豆包官方API不同。
         # 中转站(tu-zi等)不管模型名是 gpt 还是 doubao，都必须用 OpenAI 标准格式。
         if _is_gpt(model, base_url):
-            # 图生图：有参考图时走 /v1/images/edits (multipart)，否则走 /v1/images/generations (JSON)
-            if ref_uri:
-                imgs = _gpt_edit_request(url, api_key, prompt, _gpt_size(aspect_ratio), 1,
-                                        model, ref_uri, timeout, proxy, label="配图(图生图)")
-            else:
-                imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio), 1,
-                                    model, timeout, proxy, label="配图")
+            # 图生图：统一走 JSON 格式传 image 字段（edits/multipart 接口中转站不支持，会报 451 InvalidParam）。
+            # 组图也用同样方式，两条路径保持一致。
+            imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio), 1,
+                                model, timeout, proxy, label="配图", ref_uri=ref_uri)
             out_path.write_bytes(imgs[0])
             _normalize(out_path, size=(w, h), grayscale=grayscale)
             return ImageResult(str(out_path), sub_type, suggested_duration, {})
@@ -521,10 +517,14 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         raise ImageError(f"绘图服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
     if resp.status_code >= 400:
         body = resp.text[:300]
+        low = body.lower()
+        # 451 = 内容审核拦截（HTTP 451 Unavailable For Legal Reasons，国内中转站常用此码表示审核）。
+        # 原样重试无用，标 audit=True 交上层 LLM 改写补救。
+        if resp.status_code == 451:
+            raise ImageError(f"配图被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
         # 区分两类审核：输入文案敏感（InputText…）重试无用——同一 prompt 必然再被拒，
         # 直接判不可重试、由编排降级占位，省得白烧请求和钱；输出图片误判（OutputImage…）
         # 有随机性，标记可重试让上层 re-roll。
-        low = body.lower()
         if "inputtext" in low and "sensitive" in low:
             # 输入文案敏感：原样重发必再被拒(retryable=False不盲目重试), 但标 audit=True
             # 让上层降级占位+LLM改写补救(改个说法就能过)——这才是输入敏感的正确解法。
@@ -676,10 +676,13 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
             pass
         return res
 
-    # OpenAI 兼容协议九宫格分支：中转站或 gpt 模型，纯文字让它画 3×3（不传模板图）。
-    # 中转站不支持豆包模板图方式，统一用文字提示画九宫格。
+    # OpenAI 兼容协议九宫格分支：仅 gpt/dall-e 模型走纯文字九宫格。
+    # 豆包模型即使走中转站，也用带模板图的九宫格（豆包不支持 OpenAI 标准尺寸档位）。
     # 注：文字画 3×3 规整度依赖模型能力，切图可能偏格。
-    if _is_gpt(model, base_url):
+    # 竖版九宫格用正方形画布（兔子中转站不支持 1024x1536 竖版尺寸，会断连）。
+    m = (model or "").lower()
+    is_gpt_model = "gpt" in m or "dall" in m
+    if _is_gpt(model, base_url) and is_gpt_model:
         url = _endpoint(provider, base_url)
         grid_prompt = (
             "请把整张图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
@@ -687,7 +690,9 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
             "对应画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
             + cell_prompt + "\n\n不要在图片里放任何文字说明。"
         )
-        imgs = _gpt_request(url, api_key, grid_prompt, _gpt_size(aspect_ratio), 1,
+        # 横版用 1536x1024（兔子支持），竖版用正方形 1024x1024（兔子不支持 1024x1536）
+        grid_size = "1536x1024" if (aspect_ratio or "9:16") == "16:9" else "1024x1024"
+        imgs = _gpt_request(url, api_key, grid_prompt, grid_size, 1,
                             model, timeout, proxy, label="九宫格")
         raw = out_paths[0].parent / "_grid_raw.png"
         raw.write_bytes(imgs[0])
@@ -775,13 +780,10 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
     # 支持参考图：有 ref_uri 时走 /v1/images/edits 实现人物一致性。
     if _is_gpt(model, base_url):
         try:
-            # 图生图：有参考图时走 edits，否则走 generations
-            if ref_uri:
-                imgs = _gpt_edit_request(url, api_key, prompt, _gpt_size(aspect_ratio),
-                                        min(n, 10), model, ref_uri, timeout, proxy, label="组图(图生图)")
-            else:
-                imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio),
-                                    min(n, 10), model, timeout, proxy, label="组图")
+            # 图生图：统一走 JSON 格式传 image 字段（edits/multipart 接口中转站不支持，会报 451 InvalidParam）。
+            # 单张和组图路径保持一致。
+            imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio),
+                                min(n, 10), model, timeout, proxy, label="组图", ref_uri=ref_uri)
         except ImageError:
             raise
         res = []

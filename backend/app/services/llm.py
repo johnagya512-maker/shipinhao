@@ -26,7 +26,7 @@ class LLMError(Exception):
 
 
 def call_llm(provider: str, model: str, api_key: str, prompt: str,
-             timeout: float = 90.0) -> LLMResult:
+             timeout: float = 90.0, temperature: float = 0.7) -> LLMResult:
     """同步调用 LLM。返回文本与 token 用量。
     超时默认 90s：第三方中转网关（如 packy 等）响应偏慢，30s 易触发 504/超时。"""
     url = LLM_ENDPOINTS.get(provider)
@@ -36,7 +36,7 @@ def call_llm(provider: str, model: str, api_key: str, prompt: str,
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
+        "temperature": temperature,
     }
     try:
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)

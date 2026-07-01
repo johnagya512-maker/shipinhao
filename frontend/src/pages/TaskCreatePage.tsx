@@ -432,6 +432,29 @@ export default function TaskCreatePage() {
           </label>
         )}
 
+        {/* 变现模式：决定文案结尾风格（带货/互动），属于二创核心参数，放在二创方式前面 */}
+        {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
+        <div>
+          <span className="text-sm text-slate-400">变现模式 <span className="text-[11px] text-slate-600">· 决定文案结尾风格</span></span>
+          <div className="mt-2 flex gap-2">
+            {MONETIZATIONS.map((m) => {
+              const on = form.monetization_mode === m.key
+              return (
+                <button key={m.key} type="button" onClick={() => {
+                  set({ monetization_mode: m.key })
+                }}
+                  className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
+                    on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                  }`}>
+                  <div className={`text-sm ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</div>
+                  <div className="text-[10px] text-slate-500">{m.desc}</div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        )}
+
         {/* 二创方式：拆解爆款结构 → 复刻骨架重写。核心卖点。「不改文案」走 semi_auto，原文一字不改。 */}
         <div>
           <div className="flex items-center justify-between">
@@ -465,10 +488,7 @@ export default function TaskCreatePage() {
               return (
                 <button key={key} type="button" onClick={() => {
                   set({ creation_mode: cm, processing_mode: pm })
-                  if (pm === 'full_auto') {
-                    // 改写类：切换即重新生成预览，所见即所得。无文案则跳过。
-                    if ((form.transcript ?? '').trim().length >= 20 && !analyzing) doAnalyzeStructure(cm)
-                  } else {
+                  if (pm !== 'full_auto') {
                     setPreviewScript(''); setStructure(null)   // 不改写：清掉残留的二创预览
                   }
                 }}
@@ -914,27 +934,7 @@ export default function TaskCreatePage() {
 
               {/* 改写强度 / 叙事视角已移到上方「二创方式」区，调完即可预览，所见即所得 */}
               {/* 配音语速已挪到上方「配音员」区（紧挨音色、可边调边试听），不再放在高级选项里 */}
-
-              {/* 带货模式：仅全自动模式有效（改写时才决定带货段落，整块隐藏，对齐竞品） */}
-              {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
-              <div>
-                <span className="text-sm text-slate-400">带货模式</span>
-                <div className="mt-2 flex gap-2">
-                  {MONETIZATIONS.map((m) => {
-                    const on = form.monetization_mode === m.key
-                    return (
-                      <button key={m.key} type="button" onClick={() => set({ monetization_mode: m.key })}
-                        className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
-                          on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-                        }`}>
-                        <div className={`text-sm ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</div>
-                        <div className="text-[10px] text-slate-500">{m.desc}</div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-              )}
+              {/* 带货模式已移到上方「二创方式」区，属于二创核心参数 */}
 
               <div>
                 <span className="text-sm text-slate-400">背景音乐 BGM（仅 mp4 合成时混入，剪映草稿可在剪映里加）</span>

@@ -1,0 +1,62 @@
+{
+  "id": 1,
+  "llm_provider": "deepseek",
+  "llm_model": "deepseek-chat",
+  "llm_api_key_enc": "67414141414142714a6c71556f364d4948426a4c446a475a7269704a61736b7a506a6135434c52634f6638634a5478527837672d774e437767644a4562443537397141474c363575776967636170434b5251767766614d42484250584e513069784967454933575234665554464a327a75725446366735394236434637393573352d72464f34754d6b666f31",
+  "image_provider": "doubao",
+  "image_model": "doubao-seedream-4-5-251128",
+  "image_api_key_enc": "67414141414142714d66316c435068655258623544316d4f36766d79443335386941353947674a55366b6d78315f416e764459716336494a435541434d7275566c506d4f6566556143586350626446745a363755457533536b6b50326d476d73467559536f37702d6b6b2d56636c4f4965584c627369594f4d624433745a626b372d414733367669467a70502d6178546b4d754e4f78546d4e683462616b4a4663513d3d",
+  "collect_provider": "tikhub",
+  "collect_api_key_enc": "67414141414142714b68527838476d4b4c645f7545714a31686651455f50484d5f6759724235396d79526c6748446f52744f464a6b62485032726a73694155524d4f732d2d7a5066754967465577326d77474d414a474f6453616e7347574855326458704e676f756f7a6e5a76356a6633712d6a6f69703730736a71366c63536853484c594f36416a684351436c7450507965626a626753683846704e494d4c31773d3d",
+  "asr_provider": "volcano",
+  "asr_api_key_enc": "67414141414142714b6973464c34556365566c4d5f5959435a326a41637368424a7a61515655734247657a6558436a513841376e633365453750667a724d344e6b3433327448754c393156784c366f3679334f634266523846693776304a51544759417433724d7053417a49586b54576a4779345967424e6b67684d455a714d6e38595277686f6a374c394f",
+  "tts_provider": "volcano",
+  "tts_api_key_enc": "67414141414142714e305f537136416f766a61694670366a41364834634a527852455f5238425954684348454a5a4c71643552364f7a464d6f3833554750397145484a67633078424f66446d70544445314f314d366e6a326d4e714f3543774a58313067776254374c2d6a4d41723449364b784a6c332d327032746a3179436e49573232426f355553466c5a",
+  "tts_voice": "",
+  "tts_appid": "3926459083",
+  "jianying_draft_dir": "D:\\下载\\JianyingPro Drafts",
+  "daily_cost_cap": 100,
+  "concurrency": 3,
+  "updated_at": "2026-06-27 03:58:12.868817",
+  "bgm_dir": null,
+  "task_storage_dir": null,
+  "vision_model": "gpt-4o-mini",
+  "max_concurrent_tasks": 3,
+  "tts_favorites": [],
+  "proxy_url": "http://127.0.0.1:7897",
+  "default_image_gen_mode": "per_image",
+  "image_base_url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+  "image_unit_price": 0.2,
+  "image_presets": [
+    {
+      "name": "豆包 Seedream（兔子）",
+      "model": "doubao-seedream-4-5-251128",
+      "base_url": "https://api.tu-zi.com/v1/images/generations",
+      "unit_price": 0.25
+    },
+    {
+      "name": "gpt-image-2（兔子）",
+      "model": "gpt-image-2",
+      "base_url": "https://api.tu-zi.com/v1/images/generations",
+      "unit_price": 0.058
+    },
+    {
+      "name": "豆包 Seedream（Apimart）",
+      "model": "doubao-seedream-4-5-251128",
+      "base_url": "https://api.apimart.ai/v1/images/generations",
+      "unit_price": 0.058
+    },
+    {
+      "name": "gpt-image-2（Apimart）",
+      "model": "gpt-image-2",
+      "base_url": "https://api.apimart.ai/v1/images/generations",
+      "unit_price": 0.042
+    },
+    {
+      "name": "豆包 Seedream（官方）",
+      "model": "doubao-seedream-4-5-251128",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+      "unit_price": 0.2
+    }
+  ]
+}

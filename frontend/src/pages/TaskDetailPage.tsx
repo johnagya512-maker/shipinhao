@@ -266,7 +266,9 @@ export default function TaskDetailPage() {
                   try {
                     await api.regenerateTitles(id)
                     load()
-                  } catch { /* 静默失败 */ }
+                  } catch (e) {
+                    setError((e as Error).message || '换一换失败，请重试')
+                  }
                   finally { setRefreshingTitles(false) }
                 }} disabled={refreshingTitles}
                   className="text-[11px] text-brand-300 hover:text-brand-200 disabled:opacity-40 flex items-center gap-1">
