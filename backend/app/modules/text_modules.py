@@ -196,7 +196,7 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
         extra = _rewrite_directives(rewrite_strength, narrative_perspective)
         if extra:
             prompt = f"{prompt}\n\n【额外要求】\n{extra}"
-        r = call_llm(provider, model, key, prompt)
+        r = call_llm(provider, model, key, prompt, temperature=0.9)
         return {"script": r.text.strip()}, r
     extra = _rewrite_directives(rewrite_strength, narrative_perspective)
     tk = tracks.get_track(track)
