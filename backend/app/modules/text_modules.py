@@ -234,7 +234,7 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
                   f"{guide}\n"
                   f"\n"
                   f"【原文】：\n") + prompt + f"\n\n【开始重写，记住：连续相同字不得超过8个！】"
-    r = call_llm(provider, model, key, prompt)
+    r = call_llm(provider, model, key, prompt, temperature=0.9)
     return {"script": r.text.strip()}, r
 
 
