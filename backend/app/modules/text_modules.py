@@ -55,7 +55,7 @@ def run_gen_title(provider, model, key, script, keyword=None):
     返回 (标题 str, LLMResult)。截稿过长部分，标题净化去引号/换行/超长。"""
     snippet = (script or "")[:800]  # 标题只需开头大意，省 token
     prompt = _render(prompts.VIDEO_TITLE, script=snippet, keyword=keyword or "")
-    r: LLMResult = call_llm(provider, model, key, prompt)
+    r: LLMResult = call_llm(provider, model, key, prompt, temperature=1.0)
     title = r.text.strip().splitlines()[0] if r.text.strip() else ""
     title = title.strip().strip('"').strip("「」《》").strip()
     return title[:30], r
@@ -71,7 +71,7 @@ def run_gen_title_tags(provider, model, key, script, keyword=None, track="charac
     title_style = tracks.get_track(track).get("title_style") or "制造好奇、勾起点击的悬念或反差钩子。"
     prompt = _render(prompts.TITLE_TAGS, script=snippet, keyword=keyword or "",
                      title_style=title_style)
-    r: LLMResult = call_llm(provider, model, key, prompt)
+    r: LLMResult = call_llm(provider, model, key, prompt, temperature=1.0)
     short_title, long_title, tags = "", "", []
     try:
         data = _extract_json(r.text)
@@ -174,15 +174,24 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
     连续雷同≤10字过查重；介于拆解结构(改最狠)与轻量(改最轻)之间，同样是单一通用提示词。"""
     from app.modules import tracks
     if lite:
+        ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
+                  else prompts.ENDING_REVENUE_SHARE)
         prompt = _render(prompts.MODULE_B_LITE, cleaned_transcript=cleaned_text,
                          keyword=keyword or "", title=title or "", author=author or "",
-                         rewrite_notes=rewrite_notes or "（无）")
+                         rewrite_notes=rewrite_notes or "（无）",
+                         ending_instruction=ending)
         r = call_llm(provider, model, key, prompt)
         return {"script": r.text.strip()}, r
     if remix:
+        ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
+                  else prompts.ENDING_REVENUE_SHARE)
         prompt = _render(prompts.MODULE_B_REMIX, cleaned_transcript=cleaned_text,
                          keyword=keyword or "", title=title or "", author=author or "",
-                         rewrite_notes=rewrite_notes or "（无）")
+                         rewrite_notes=rewrite_notes or "（无）",
+                         ending_instruction=ending)
+        extra = _rewrite_directives(rewrite_strength, narrative_perspective)
+        if extra:
+            prompt = f"{prompt}\n\n【额外要求】\n{extra}"
         r = call_llm(provider, model, key, prompt)
         return {"script": r.text.strip()}, r
     extra = _rewrite_directives(rewrite_strength, narrative_perspective)
@@ -209,16 +218,22 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
         prompt = f"{prompt}\n\n【额外要求】\n{extra}"
     guide = _structure_to_guide(structure_guide or {})
     if guide:
-        prompt = (f"{prompt}\n\n"
-                  f"【★核心要求：学它的爆款手法，用全新的话重写★】\n"
-                  f"下面是从原文里拆出的'爆款手法说明书'。注意：原文本身就是这套手法的范例，"
-                  f"但你绝不能照抄或微调原文——那样等于搬运。你要做的是：\n"
-                  f"1) 看懂它每一步为什么抓人（钩子招式、叙事手法、情绪节奏、收尾）；\n"
-                  f"2) 用【完全不同的措辞和句子】把同样的'爆点'重新写一遍——"
-                  f"换开头的说法、换叙述角度、换句式，但保留人物事实与数据；\n"
-                  f"3) 目标：读起来是另一个人写的稿子，却同样有这条的钩子力和节奏感。\n"
-                  f"衡量标准：和原文逐句比对，措辞重合度尽量低，但'为什么爆'的心理机制一致。\n"
-                  f"{guide}")
+        prompt = (f"【★拆解结构二创：最高级别改写★】\n"
+                  f"这不是普通改写，是【拆解结构后按骨架重写】。你必须做到：\n"
+                  f"1. 【绝不照抄原文任何完整句子】——连续相同字不得超过8个（日期、人名、书名除外）\n"
+                  f"2. 【重排叙事顺序】——不要按原文段落顺序写，可以倒叙、插叙、换开头方式\n"
+                  f"3. 【换叙述角度】——原文如果是旁观者视角，你可以换成亲历者/对话者视角\n"
+                  f"4. 【换句式结构】——原文用长句你就用短句，原文用陈述你就用设问/反问\n"
+                  f"5. 【保留事实内核】——人物、时间、地点、事件、数据不能改，但表达方式必须全换\n"
+                  f"\n"
+                  f"下面是从原文拆出的'爆款手法说明书'。你要做的是：\n"
+                  f"- 看懂它每一步为什么抓人（钩子招式、叙事手法、情绪节奏、收尾）\n"
+                  f"- 用【完全不同的措辞和句子】把同样的'爆点'重新写一遍\n"
+                  f"- 目标：读起来是另一个人写的稿子，却同样有这条的钩子力和节奏感\n"
+                  f"\n"
+                  f"{guide}\n"
+                  f"\n"
+                  f"【原文】：\n") + prompt + f"\n\n【开始重写，记住：连续相同字不得超过8个！】"
     r = call_llm(provider, model, key, prompt)
     return {"script": r.text.strip()}, r
 
@@ -588,22 +603,49 @@ def _normalize_risk(value) -> float:
     return 1.0
 
 
-# 违禁词库（PRD 10.2，可外置为配置文件）
+# 违禁词库（PRD 10.2 + 微信视频号运营规范，可外置为配置文件）
 # 注：「治疗」不入库——它中性，正向引导（"配合治疗""及时就医治疗"）远多于违规用法，
 # 裸词匹配会误杀合规的就医引导；真正的疗效承诺由"治愈/根治/包好/神效/替代药物"等覆盖，
 # 另有 LLM 语义判定兜底。
-_HIGH_WORDS = ["治愈", "根治", "100%有效", "包好", "彻底解决", "降血压",
-               "替代药物", "神效", "奇迹", "祖传秘方", "立竿见影",
-               "加微信", "私信我", "点击主页"]
-_WARN_WORDS = ["不看后悔", "致命"]
+_HIGH_WORDS = [
+    # 医疗承诺/疗效断言（规范 5.15-5.17）
+    "治愈", "根治", "100%有效", "包好", "彻底解决", "降血压",
+    "替代药物", "神效", "奇迹", "祖传秘方", "立竿见影",
+    "一招见效", "根治根除", "包治百病", "灵丹妙药",
+    # 诱导导流（规范 4.4）
+    "加微信", "私信我", "点击主页", "关注领取", "扫码进群",
+    "点赞领取", "分享抽奖", "转发有礼", "集赞", "拆礼盒",
+    # 胁迫煽动（规范 4.4.2）
+    "不点赞不是", "不转不是", "是中国人就",
+    # 低俗/性暗示（规范 5.9）
+    "裸体", "暴露", "性暗示", "情趣", "隐私部位",
+    # 伪科学/迷信（规范 5.13）
+    "食物相克", "风水", "运势", "排毒功效",
+    # 卖惨扮丑（规范 5.10）
+    "卖惨", "扮丑",
+    # 绝对化/夸大（规范 5.5）
+    "暴瘦", "逆转", "飙升", "第一", "唯一", "最",
+    # 血腥暴力（规范 5.8）
+    "自杀", "自残", "尸体", "家暴",
+]
+_WARN_WORDS = [
+    "不看后悔", "致命", "震惊", "速转", "紧急通知",
+    "不看吃亏", "错过后悔", "赶紧转", "火速转发",
+]
 
 # 否定词：违禁词紧邻这些字眼时为合规表达（如"不求根治""无法治愈"），不算违规。
-_NEGATIONS = ["不", "无", "非", "别", "勿", "没", "未"]
+_NEGATIONS = [
+    # 单字否定
+    "不", "无", "非", "别", "勿", "没", "未",
+    # 多字否定
+    "没有", "无法", "并非", "从不", "不必", "无须", "难以", "不能", "不会", "未曾",
+    "无须", "不用", "不该", "不可", "未曾", "并未",
+]
 
 
 def _is_negated(text: str, pos: int) -> bool:
-    """判断 text 中 pos 位置的违禁词是否处于否定语境（前 4 字内有否定词）。"""
-    window = text[max(0, pos - 4):pos]
+    """判断 text 中 pos 位置的违禁词是否处于否定语境（前 12 字内有否定词）。"""
+    window = text[max(0, pos - 12):pos]
     return any(neg in window for neg in _NEGATIONS)
 
 
@@ -620,8 +662,8 @@ def _match_word(text: str, word: str) -> bool:
 
 
 def _rule_match(text: str, track: str = "character_story"):
-    """按赛道选词库。人物故事用赛道自带词库（史实/敏感），
-    健康书单（或赛道未配词库）用内置医疗词库。"""
+    """按赛道选词库。优先用赛道自带词库（tracks.py 配置），
+    未配置或空列表时回退到内置通用词库。"""
     from app.modules import tracks
     tk = tracks.get_track(track)
     high_words = tk.get("compliance_high") or _HIGH_WORDS
