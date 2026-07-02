@@ -33,12 +33,15 @@ export interface TaskCreate {
   enable_subtitles?: boolean
   enable_animations?: boolean
   draft_template?: string
+  video_mode?: string       // vlog(口播) | music(唱歌·MV)
   creation_mode?: string
   image_gen_mode?: string
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]
   edited_script?: string   // 预览二创后用户编辑确认的定稿；非空则后端跳过清洗+改写直接用
+  audio_file?: string       // 唱歌·MV模式：上传的音频文件路径
+  lyrics?: string           // 唱歌·MV模式：歌词文本
 }
 
 export interface TaskOut {
@@ -118,6 +121,7 @@ export interface TaskDetail {
   modules: string[]
   target_audience: string
   monetization_mode: string
+  video_mode?: string
   enable_subtitles: boolean
   enable_animations: boolean
   processing_mode?: string

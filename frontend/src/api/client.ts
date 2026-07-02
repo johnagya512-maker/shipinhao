@@ -100,6 +100,20 @@ export const api = {
     }
     return res.json() as Promise<{ reference_image: string }>
   },
+  uploadAudioTemp: async (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${BASE}/tasks/upload-audio`, {
+      method: 'POST', headers: { ...authHeaders() }, body: fd,
+    })
+    if (!res.ok) {
+      let detail: unknown = res.statusText
+      try { detail = (await res.json()).detail } catch { /* 非 JSON */ }
+      const { message, code } = parseDetail(detail)
+      throw new ApiError(message, res.status, code)
+    }
+    return res.json() as Promise<{ audio_file: string }>
+  },
   testTts: () =>
     request<{ ok: boolean; provider: string; audio_bytes: number }>('/config/test-tts', { method: 'POST' }),
   // 试听：返回 mp3 Blob，前端用 Audio 播放。可传音色/语速覆盖配置。
@@ -229,9 +243,10 @@ export const api = {
   },
 
   // 上传音频用 FormData，不能带 JSON Content-Type，单独处理。
-  uploadAudio: async (id: string, file: File, outputMode: 'jianying' | 'mp4' = 'jianying') => {
+  uploadAudio: async (id: string, file: File, outputMode: 'jianying' | 'mp4' = 'jianying', lyrics?: string) => {
     const fd = new FormData()
     fd.append('file', file)
+    if (lyrics?.trim()) fd.append('lyrics', lyrics.trim())
     const res = await fetch(`${BASE}/tasks/${id}/audio?output_mode=${outputMode}`, {
       method: 'POST', headers: authHeaders(), body: fd,
     })

@@ -28,6 +28,7 @@ export default function TaskDetailPage() {
   const [uploading, setUploading] = useState(false)
   const [rerunText, setRerunText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [lyricsText, setLyricsText] = useState('')
   const [tab, setTab] = useState<Tab>('preview')
   const fileRef = useRef<HTMLInputElement>(null)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -46,12 +47,17 @@ export default function TaskDetailPage() {
 
   const load = useCallback(async () => {
     try {
-      setData(await api.getTaskResults(id))
+      const d = await api.getTaskResults(id)
+      setData(d)
       setError(null)
+      // 唱歌模式：预填歌词（用文案/歌词原文）
+      if (d?.task?.video_mode === 'music' && d?.task?.transcript && !lyricsText) {
+        setLyricsText(d.task.transcript)
+      }
     } catch (e) {
       setError((e as ApiError).message)
     }
-  }, [id])
+  }, [id, lyricsText])
 
   useEffect(() => { load() }, [load])
 
@@ -84,7 +90,7 @@ export default function TaskDetailPage() {
     if (!file) return
     setUploading(true); setError(null)
     try {
-      await api.uploadAudio(id, file, 'jianying')
+      await api.uploadAudio(id, file, 'jianying', lyricsText)
       await load()
     } catch (err) {
       setError((err as ApiError).message)
@@ -388,11 +394,20 @@ export default function TaskDetailPage() {
                   className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition-colors">
                   {busy ? '重试中…' : '🔊 重试 AI 配音'}
                 </button>
-                <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
-                  uploading ? 'bg-slate-700 text-slate-400' : 'bg-slate-700/70 text-slate-200 hover:bg-slate-700'}`}>
-                  {uploading ? '上传中…' : '或上传自己的配音音频'}
-                  <input ref={fileRef} type="file" accept="audio/*" className="hidden" disabled={uploading} onChange={onUpload} />
-                </label>
+                <div className="flex flex-col gap-2 w-full">
+                  <textarea
+                    value={lyricsText}
+                    onChange={(e) => setLyricsText(e.target.value)}
+                    placeholder="歌词文本（可选，每句一行）—— 提供后图片会按歌词句切换"
+                    rows={3}
+                    className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-300 placeholder-slate-500 focus:outline-none focus:border-brand-500 resize-none"
+                  />
+                  <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
+                    uploading ? 'bg-slate-700 text-slate-400' : 'bg-slate-700/70 text-slate-200 hover:bg-slate-700'}`}>
+                    {uploading ? '上传中…' : '或上传自己的配音音频'}
+                    <input ref={fileRef} type="file" accept="audio/*" className="hidden" disabled={uploading} onChange={onUpload} />
+                  </label>
+                </div>
               </>
             )}
             {canRecompose && (
@@ -409,11 +424,20 @@ export default function TaskDetailPage() {
                   className="px-4 py-2.5 rounded-lg text-sm font-medium text-center bg-slate-700/70 text-slate-200 hover:bg-slate-700 disabled:opacity-50 transition-colors">
                   {busy ? '重新生成中…' : '🎬 用现有配音+最新图重生成'}
                 </button>
-                <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
-                  uploading ? 'bg-slate-700 text-slate-400' : 'bg-slate-700/70 text-slate-200 hover:bg-slate-700'}`}>
-                  {uploading ? '上传中…' : '换配音音频重新生成'}
-                  <input ref={fileRef} type="file" accept="audio/*" className="hidden" disabled={uploading} onChange={onUpload} />
-                </label>
+                <div className="flex flex-col gap-2 w-full">
+                  <textarea
+                    value={lyricsText}
+                    onChange={(e) => setLyricsText(e.target.value)}
+                    placeholder="歌词文本（可选，每句一行）—— 提供后图片会按歌词句切换"
+                    rows={3}
+                    className="w-full rounded-lg bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-300 placeholder-slate-500 focus:outline-none focus:border-brand-500 resize-none"
+                  />
+                  <label className={`px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
+                    uploading ? 'bg-slate-700 text-slate-400' : 'bg-slate-700/70 text-slate-200 hover:bg-slate-700'}`}>
+                    {uploading ? '上传中…' : '换配音音频重新生成'}
+                    <input ref={fileRef} type="file" accept="audio/*" className="hidden" disabled={uploading} onChange={onUpload} />
+                  </label>
+                </div>
               </>
             )}
             {hasDownload && <a href={api.downloadUrl(id)} className="btn-ghost text-center">下载剪映草稿/成片</a>}
