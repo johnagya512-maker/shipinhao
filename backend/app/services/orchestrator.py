@@ -270,6 +270,19 @@ def run_pipeline(db: Session, task_id: str):
                                                          author=getattr(task, "author", "") or ""),
                                   started)
                 script = b_out["script"]
+            elif _mode == "book_remix":
+                # 图书带货深度二创：保留开篇黄金钩子和末尾转化闭环100%，深度重构中段。跳过结构拆解。
+                b_out = _llm_step(db, task, cfg, llm_key, "B",
+                                  lambda: tm.run_rewrite(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                         cleaned, task.target_audience, task.title,
+                                                         book_remix=True,
+                                                         monetization_mode=task.monetization_mode,
+                                                         rewrite_strength=task.rewrite_strength,
+                                                         narrative_perspective=task.narrative_perspective,
+                                                         keyword=task.keyword or "",
+                                                         author=getattr(task, "author", "") or ""),
+                                  started)
+                script = b_out["script"]
             else:
                 # S2 结构拆解：creation_mode != none 时，先拆出爆款结构骨架，
                 # 供 B 改写复刻其节奏。拆解失败不阻断（骨架为空即退回普通改写）。
@@ -454,11 +467,14 @@ def run_pipeline(db: Session, task_id: str):
                     except Exception as e:
                         _save_result(db, task.id, "CP", "failed", output={"error": str(e)})
 
-                # 画面脚本（"SB"）：【配音严格用原文】模式——先用程序把 script 按句子合并成
-                # 约 40 字一段的原文切片（一字不改），再让 SB 为【每一片】配 desc_prompt。
+                # 画面脚本（"SB"）：【配音严格用原文】模式——先用 LLM 按视听分镜逻辑
+                # 把 script 拆成 50-80 字一段的原文切片（一字不改），失败再回退到程序规则切分。
                 # cap 由程序强制填为原文片，LLM 不碰文案 → 配音/字幕念的就是你的原文、且与画面
                 # 按段一一对齐。失败不阻断——回退 build_image_prompts 的 segment 截字。
-                seg_texts = tm.split_for_storyboard(script)
+                seg_texts = tm.run_split_for_storyboard(
+                    cfg.llm_provider, cfg.llm_model, llm_key, script)
+                if not seg_texts:
+                    seg_texts = tm.split_for_storyboard(script)
                 # 夹到 [MIN,MAX] 张：过多则【均匀合并】成 MAX 段，过少不补。
                 # 注意：绝不能把超出部分全倒进最后一段——那样最后一镜会吞掉大半脚本(实测 2520 字)，
                 # 配音几百秒，视频里最后一张图定格好几分钟(task_7e246655893b 的 8 分钟定格教训)。
@@ -583,13 +599,32 @@ def run_pipeline(db: Session, task_id: str):
                 _maybe_pause(db, task, "E")
 
         # F 分段完成后：尝试自动 TTS 配音 → 自动成片。
+        # 唱歌·MV模式：使用上传的音频文件，跳过 TTS 配音
         # 无 TTS Key 时降级为 awaiting_audio，等用户手动上传音频。
         tts_key = decrypt(cfg.tts_api_key_enc) if cfg.tts_api_key_enc else ""
         audio_path = None
         # 配音/字幕分段【统一用分镜 cap】（与图片同源，保证图-字-音三轨一一对齐）：
         # 从 P 产物读 scenes 的 cap 作为配音分段；cap 缺失/无分镜时回退 F 的 segments（老路）。
         tts_segments, tts_seg_source = _voice_segments_from_scenes(db, task.id, segments)
-        if tts_key:
+
+        # 唱歌·MV模式：使用上传的音频文件，按歌词对齐生成分段时长
+        if task.video_mode == "music" and task.audio_file:
+            audio_path = task.audio_file
+            try:
+                from app.services.lyrics_align import align_lyrics, _get_audio_duration
+                total_duration = _get_audio_duration(task.audio_file)
+                seg_texts, seg_durations = align_lyrics(task.lyrics or "", task.audio_file)
+                _save_result(db, task.id, "T", "success",
+                             output={"audio_path": task.audio_file, "duration": total_duration,
+                                     "segment_count": len(seg_texts),
+                                     "seg_durations": seg_durations,
+                                     "seg_texts": seg_texts,
+                                     "seg_source": "lyrics"})
+            except Exception as e:
+                _save_result(db, task.id, "T", "failed", output={"error": str(e)})
+                audio_path = None
+
+        if tts_key and not audio_path:
             try:
                 audio_dir = storage_root(db) / task.id / "audio"
                 existing_tts = _get_result(db, task.id, "T")

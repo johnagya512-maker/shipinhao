@@ -189,7 +189,7 @@ def _emit_caption_chunks(script, text, seg_start_us, seg_end_us, style, border, 
         except Exception:
             clip = None
     font = extra.get("font")
-    caps = _split_caption(text, max_chars=12)
+    caps = _split_caption(text, max_chars=10)
     total_chars = sum(len(c) for c in caps) or 1
     span = seg_end_us - seg_start_us
     cum = 0
@@ -369,10 +369,11 @@ def _pack_tokens(tokens: list, max_chars: int) -> list:
     return out
 
 
-def _split_caption(text: str, max_chars: int = 12) -> list:
+def _split_caption(text: str, max_chars: int = 10) -> list:
     """把一段字幕文字切成多条 ≤max_chars 的短字幕（一屏只显示几个字，像短视频）。
     流程：① 按标点切自然小句并去掉所有标点（短视频字幕惯例，不显示标点）；
-    ② 相邻小句贪心合并到接近 max_chars；③ 超长块均衡切分，数字整体不拆、不留孤字。"""
+    ② 相邻小句【优先不跨句合并】，仅在单句过短时谨慎合并到接近 max_chars；
+    ③ 超长块均衡切分，数字整体不拆、不留孤字；④ 避免任何一行以"的"开头。"""
     text = text.strip()
     if not text:
         return []
@@ -386,18 +387,40 @@ def _split_caption(text: str, max_chars: int = 12) -> list:
         p = p.strip(_PUNCT).strip()
         if not p:
             continue
-        if len(buf) + len(p) <= max_chars:
-            buf += p
+        # 优先保持句界：如果当前小句本身已接近上限，或与前一句合并会超限，先输出前一句。
+        if buf and (len(p) >= max_chars or len(buf) + len(p) > max_chars):
+            caps.append(buf)
+            buf = ""
+        if len(p) <= max_chars:
+            if not buf:
+                buf = p
+            elif len(buf) + len(p) <= max_chars:
+                buf += p
+            else:
+                caps.append(buf)
+                buf = p
         else:
+            # 单句超长：先输出已有 buf，再均衡切分当前长句。
             if buf:
                 caps.append(buf)
+                buf = ""
             chunks = _pack_tokens(_caption_tokens(p), max_chars)
-            # 末块若过短，并回前一块的尾部由 _pack_tokens 的均衡已大致避免；
-            # 这里把除最后一块外的整块先收下，最后一块留作 buf 继续与下一小句合并。
             caps.extend(chunks[:-1])
             buf = chunks[-1] if chunks else ""
     if buf:
         caps.append(buf)
+
+    # 后处理：避免某行以"的"开头。若出现，尝试把上一行末尾一个字挪到当前行开头。
+    i = 1
+    while i < len(caps):
+        if caps[i].startswith("的") and len(caps[i - 1]) > 1:
+            prev = caps[i - 1]
+            # 上一行末尾至少留 2 个字，避免把上一行削太短。
+            if len(prev) >= 3 and len(caps[i]) + 1 <= max_chars:
+                caps[i] = prev[-1] + caps[i]
+                caps[i - 1] = prev[:-1]
+                continue
+        i += 1
     return caps
 
 

@@ -137,7 +137,7 @@ export default function TaskCreatePage() {
     douyin_url: '', transcript: '', keyword: '', title: '', author: '',
     modules: ['A', 'B', 'E', 'F', 'G', 'H'],
     target_audience: '50+女性', track: 'character_story',
-    monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16', layout: 'full',
+    video_mode: 'vlog', monetization_mode: 'revenue_share', image_style: '', aspect_ratio: '9:16', layout: 'full',
     cost_limit: 5.0, time_limit: 900, enable_subtitles: true, enable_animations: true,
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
@@ -172,6 +172,10 @@ export default function TaskCreatePage() {
   const [refUploading, setRefUploading] = useState(false)
   const [refName, setRefName] = useState<string | null>(null)
   const [refPreview, setRefPreview] = useState<string | null>(null)
+  // 唱歌·MV 模式：音频文件上传
+  const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [audioFileName, setAudioFileName] = useState<string | null>(null)
+  const [audioUploading, setAudioUploading] = useState(false)
   // 音色库 + 收藏 + 选择器弹窗
   const [voices, setVoices] = useState<VoiceItem[]>([])
   const [voiceCats, setVoiceCats] = useState<VoiceCategory[]>([])
@@ -257,6 +261,9 @@ export default function TaskCreatePage() {
   }
 
   function hasInput() {
+    if (form.video_mode === 'music') {
+      return Boolean(audioFile && (form.transcript ?? '').trim())
+    }
     return Boolean((form.douyin_url ?? '').trim() || (form.transcript ?? '').trim())
   }
 
@@ -328,20 +335,28 @@ export default function TaskCreatePage() {
   }
 
   async function submit() {
-    if (!hasInput()) { setError('请填写视频链接或逐字稿'); return }
+    if (!hasInput()) { setError(form.video_mode === 'music' ? '请上传音频文件并填写歌词' : '请填写视频链接或逐字稿'); return }
     setSubmitting(true); setError(null)
     try {
-      // 预览过二创且未走「不改文案」：把编辑后的预览文案作为成片定稿一并提交，
-      // 后端据此跳过 A 清洗 + B 改写，直接用这份稿往下走（所见即所得，省两次 LLM）。
+      let audioPath: string | undefined
+      if (form.video_mode === 'music' && audioFile) {
+        setAudioUploading(true)
+        const r = await api.uploadAudioTemp(audioFile)
+        audioPath = r.audio_file
+      }
+
+      const lyricsText = form.video_mode === 'music' ? (form.transcript || undefined) : undefined
       const payload: TaskCreate = (previewScript.trim() && !noRewrite)
-        ? { ...form, edited_script: previewScript.trim() }
-        : form
+        ? { ...form, edited_script: previewScript.trim(), audio_file: audioPath, lyrics: lyricsText }
+        : { ...form, audio_file: audioPath, lyrics: lyricsText }
+
       const task = await api.createTask(payload)
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* 忽略 */ }
       nav(`/tasks/${task.id}`)
     } catch (e) {
       setError((e as ApiError).message)
     } finally {
+      setAudioUploading(false)
       setSubmitting(false)
     }
   }
@@ -424,16 +439,53 @@ export default function TaskCreatePage() {
           </div>
         ) : (
           <label className="block">
-            <span className="text-sm text-slate-400">逐字稿</span>
+            <span className="text-sm text-slate-400">{form.video_mode === 'music' ? '歌词' : '逐字稿'}</span>
             <textarea rows={8} className="field font-mono"
-              placeholder="粘贴口播逐字稿原文…"
+              placeholder={form.video_mode === 'music' ? '粘贴歌词，每句一行…' : '粘贴口播逐字稿原文…'}
               value={form.transcript ?? ''}
               onChange={(e) => { set({ transcript: e.target.value }); setEst(null) }} />
           </label>
         )}
 
+        {/* 视频类型：口播视频 / 唱歌·MV */}
+        <div>
+          <span className="text-sm text-slate-400">视频类型</span>
+          <div className="mt-2 flex gap-2">
+            <button type="button" onClick={() => set({ video_mode: 'vlog' })}
+              className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
+                form.video_mode === 'vlog' ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+              }`}>
+              <div className={`text-sm ${form.video_mode === 'vlog' ? 'text-brand-300' : 'text-slate-200'}`}>口播视频</div>
+              <div className="text-[10px] text-slate-500">讲解·叙事</div>
+            </button>
+            <button type="button" onClick={() => set({ video_mode: 'music' })}
+              className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
+                form.video_mode === 'music' ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+              }`}>
+              <div className={`text-sm ${form.video_mode === 'music' ? 'text-brand-300' : 'text-slate-200'}`}>唱歌·MV</div>
+              <div className="text-[10px] text-slate-500">上传音频+歌词对齐</div>
+            </button>
+          </div>
+        </div>
+
+        {/* 唱歌·MV 模式：音频文件上传 */}
+        {form.video_mode === 'music' && (
+          <div>
+            <span className="text-sm text-slate-400">音频文件</span>
+            <label className={`mt-2 block px-4 py-2.5 rounded-lg text-sm font-medium text-center cursor-pointer transition-colors ${
+              audioUploading ? 'bg-slate-700 text-slate-400' : audioFileName ? 'bg-green-600/20 text-green-300 border border-green-500/40' : 'bg-slate-800/40 border border-slate-700 text-slate-200 hover:bg-slate-700'
+            }`}>
+              {audioUploading ? '上传中…' : audioFileName || '点击上传音频文件（MP3/WAV/M4A）'}
+              <input type="file" accept="audio/*" className="hidden" onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) { setAudioFile(f); setAudioFileName(f.name) }
+              }} />
+            </label>
+          </div>
+        )}
+
         {/* 变现模式：决定文案结尾风格（带货/互动），属于二创核心参数，放在二创方式前面 */}
-        {(form.processing_mode ?? 'full_auto') === 'full_auto' && (
+        {form.video_mode !== 'music' && (form.processing_mode ?? 'full_auto') === 'full_auto' && (
         <div>
           <span className="text-sm text-slate-400">变现模式 <span className="text-[11px] text-slate-600">· 决定文案结尾风格</span></span>
           <div className="mt-2 flex gap-2">
@@ -475,6 +527,7 @@ export default function TaskCreatePage() {
               // 前四项=改写(full_auto)；后两项=不改写(用原文)，区别仅分句方式。
               ['same_topic', 'same_topic', 'full_auto', '拆解结构二创', '先拆原文爆款骨架 → 按骨架重写，学它为什么爆'],
               ['remix', 'remix', 'full_auto', '仿写·中度', '保留钩子和爆点节奏，逐句换措辞过查重（推荐）'],
+              ['book_remix', 'book_remix', 'full_auto', '图书·深度二创', '保留开头/结尾100%，只重构中段，适合图书带货'],
               ['lite', 'lite', 'full_auto', '轻量改写', '只改正文主体，保留原稿验证过的爆点和节奏，最省、过查重'],
               ['none', 'none', 'full_auto', '直接改写', '不拆结构，按常规套路改写'],
               ['semi_auto', 'same_topic', 'semi_auto', '不改写·智能分句', '用我写的原文一字不改，AI 智能分句断句'],

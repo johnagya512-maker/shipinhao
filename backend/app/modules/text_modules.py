@@ -167,15 +167,17 @@ def _structure_to_guide(structure: dict) -> str:
 def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性", title=None,
                 track="character_story", monetization_mode="revenue_share",
                 rewrite_strength="medium", narrative_perspective="auto",
-                structure_guide=None, lite=False, remix=False,
+                structure_guide=None, lite=False, remix=False, book_remix=False,
                 keyword="", author="", rewrite_notes=""):
     """B 改写。按赛道选提示词；人物故事赛道按变现模式切换结尾引导。
     rewrite_strength/narrative_perspective 作为附加指令注入提示词尾部。
     structure_guide（dict 骨架）非空时，要求改写严格复刻该爆款结构。
     lite=True 走手册轻量改写版（MODULE_B_LITE）：只改正文主体、保留原稿爆点、不激进重写、
-    不杜撰，过查重即可；此模式忽略赛道/骨架/强度档（手册轻量流是单一通用提示词）。
+    不杜撰，此模式忽略赛道/骨架/强度档（手册轻量流是单一通用提示词）。
     remix=True 走中度仿写版（MODULE_B_REMIX）：保留钩子类型/爆点顺序/情绪节奏，逐句重写措辞、
-    连续雷同≤10字过查重；介于拆解结构(改最狠)与轻量(改最轻)之间，同样是单一通用提示词。"""
+    连续雷同≤10字过查重；介于拆解结构(改最狠)与轻量(改最轻)之间，同样是单一通用提示词。
+    book_remix=True 走图书带货深度二创版（MODULE_B_BOOK_REMIX）：保留开篇黄金钩子和末尾
+    转化闭环100%，深度重构中段，通过信息重组/视角转换/句式重写等策略实现低相似度改写。"""
     from app.modules import tracks
     if lite:
         ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
@@ -190,6 +192,18 @@ def run_rewrite(provider, model, key, cleaned_text, target_audience="50+女性",
         ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
                   else prompts.ENDING_REVENUE_SHARE)
         prompt = _render(prompts.MODULE_B_REMIX, cleaned_transcript=cleaned_text,
+                         keyword=keyword or "", title=title or "", author=author or "",
+                         rewrite_notes=rewrite_notes or "（无）",
+                         ending_instruction=ending)
+        extra = _rewrite_directives(rewrite_strength, narrative_perspective)
+        if extra:
+            prompt = f"{prompt}\n\n【额外要求】\n{extra}"
+        r = call_llm(provider, model, key, prompt, temperature=0.9)
+        return {"script": r.text.strip()}, r
+    if book_remix:
+        ending = (prompts.ENDING_BOOK_SALES if monetization_mode == "book_sales"
+                  else prompts.ENDING_REVENUE_SHARE)
+        prompt = _render(prompts.MODULE_B_BOOK_REMIX, cleaned_transcript=cleaned_text,
                          keyword=keyword or "", title=title or "", author=author or "",
                          rewrite_notes=rewrite_notes or "（无）",
                          ending_instruction=ending)
@@ -310,6 +324,19 @@ def run_split(provider, model, key, script_text, keyword=None, title=None, targe
     # 估算每段时长：中文约 5 字/秒
     segments = [{"text": s, "estimated_duration": max(1, round(len(s) / 5))} for s in segs]
     return {"segments": segments, "segment_count": len(segments)}, r
+
+
+def run_split_for_storyboard(provider, model, key, script_text):
+    """分镜专用分段：按视听叙事逻辑把文案拆成 50-80 字左右的原文段，用于"配音严格用原文"模式。
+    失败时返回空列表，由调用方回退到规则切分（split_for_storyboard）。"""
+    prompt = _render(prompts.MODULE_F_STORYBOARD, script_text=script_text)
+    r = call_llm(provider, model, key, prompt)
+    try:
+        data = _extract_json(r.text)
+        segs = data.get("segments", [])
+    except Exception:
+        segs = []
+    return [str(s).strip() for s in segs if str(s).strip()]
 
 
 def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus="",

@@ -44,6 +44,8 @@ class Task(Base):
     voice_speed: Mapped[float] = mapped_column(Numeric(3, 2), default=1.0)
     voice: Mapped[str | None] = mapped_column(String(120), nullable=True)
     reference_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    audio_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    lyrics: Mapped[str | None] = mapped_column(Text, nullable=True)
     bgm: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cost_limit: Mapped[float] = mapped_column(Numeric(6, 2), default=5.0)
     time_limit: Mapped[int] = mapped_column(Integer, default=900)
@@ -51,7 +53,9 @@ class Task(Base):
     enable_animations: Mapped[bool] = mapped_column(Boolean, default=True)
     # 草稿动画模板：none/classic/narration/lively/cinematic/random（见 draft_templates.py）
     draft_template: Mapped[str] = mapped_column(String(20), default="classic")
-    # 二创方式：same_topic（拆爆款结构骨架 → 按骨架重写）/ none（不拆结构直接改写）
+    # 视频类型：vlog（口播）/ music（唱歌·MV）
+    video_mode: Mapped[str] = mapped_column(String(12), default="vlog")
+    # 二创方式：same_topic（拆爆款结构骨架 → 按骨架重写）/ lite（轻量改写）/ remix（中度仿写）/ book_remix（图书带货深度二创）/ none（不拆结构直接改写）
     creation_mode: Mapped[str] = mapped_column(String(16), default="same_topic")
     # 生图模式：per_image（逐张，画质优先）/ grid（九宫格省成本，一次出9张切割，省约89%）
     image_gen_mode: Mapped[str] = mapped_column(String(12), default="per_image")

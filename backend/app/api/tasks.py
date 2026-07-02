@@ -1,7 +1,7 @@
 """任务相关路由。"""
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Query, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.api.schemas import (TaskCreate, TaskOut, EstimateOut, RerunRequest,
 from app.models import Task, Config, ModuleResult
 from app.services import cost as cost_svc
 from app.services import orchestrator, compose
+from app.services.lyrics_align import align_lyrics
 from app.services.scheduler import scheduler
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_auth)])
@@ -73,13 +74,22 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         raise HTTPException(402, detail="E2003: 每日成本上限已达")
 
     # 入口二选一：填了抖音链接（自动采集+ASR）或手填逐字稿，至少其一。
+    # 唱歌·MV模式：可以不传逐字稿（用上传的音频），但必须传 lyrics 作为字幕和分镜依据
     transcript = (body.transcript or "").strip()
     douyin_url = (body.douyin_url or "").strip()
-    if not transcript and not douyin_url:
-        raise HTTPException(400, detail="E1001: 请填写抖音链接或粘贴逐字稿")
-    has_collect = bool(cfg.collect_api_key_enc and cfg.asr_api_key_enc)
-    if not transcript and douyin_url and not has_collect:
-        raise HTTPException(400, detail="E6001: 未配置采集/ASR Key，无法自动提取逐字稿，请手动粘贴")
+    is_music = body.video_mode == "music"
+    if is_music:
+        lyrics = (body.lyrics or "").strip()
+        if not lyrics:
+            raise HTTPException(400, detail="E1005: 唱歌·MV模式必须填写歌词")
+        if not body.audio_file:
+            raise HTTPException(400, detail="E1006: 唱歌·MV模式必须上传音频文件")
+    else:
+        if not transcript and not douyin_url:
+            raise HTTPException(400, detail="E1001: 请填写抖音链接或粘贴逐字稿")
+        has_collect = bool(cfg.collect_api_key_enc and cfg.asr_api_key_enc)
+        if not transcript and douyin_url and not has_collect:
+            raise HTTPException(400, detail="E6001: 未配置采集/ASR Key，无法自动提取逐字稿，请手动粘贴")
 
     # 预览二创定稿：用户在预览框编辑确认的文案，作为最终成片文案直接使用，
     # 跳过 A 清洗 + B 改写（走 direct 模式），保证所见即所得、省两次 LLM。
@@ -110,6 +120,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         cost_limit=body.cost_limit, time_limit=body.time_limit,
         enable_subtitles=body.enable_subtitles, enable_animations=body.enable_animations,
         draft_template=body.draft_template or "classic",
+        video_mode=body.video_mode or "vlog",
         creation_mode=body.creation_mode or "same_topic",
         image_gen_mode=body.image_gen_mode or "per_image",
         processing_mode=_processing_mode, pause_mode=body.pause_mode,
@@ -118,6 +129,22 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
     )
     db.add(task)
     db.commit()
+
+    # 唱歌·MV模式：将上传的音频文件从暂存区移动到任务目录
+    if is_music and body.audio_file:
+        from shutil import move
+        task_storage = storage_root(db) / task.id
+        audio_dir = task_storage / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        src_path = Path(body.audio_file)
+        if src_path.exists():
+            ext = src_path.suffix or ".mp3"
+            dst_path = audio_dir / f"audio{ext}"
+            move(str(src_path), str(dst_path))
+            task.audio_file = str(dst_path)
+            task.lyrics = (body.lyrics or "").strip()
+            db.commit()
+
     scheduler.submit(task.id, _run_pipeline_bg, task.id)
     return task
 
@@ -143,6 +170,7 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
     prov, model = cfg.llm_provider, cfg.llm_model
     _mode = body.get("creation_mode") or "same_topic"
     # lite=手册轻量改写（不拆结构）；remix=中度仿写（不拆结构）；
+    # book_remix=图书带货深度二创（不拆结构）；
     # none=不拆直接改写；其余=先拆爆款骨架再按骨架重写。
     # 接入 with_retry：第三方网关 504/超时自动重试，和正式任务一致。
     structure = {}
@@ -159,6 +187,15 @@ def analyze_structure(body: dict, db: Session = Depends(get_db)):
                 prov, model, llm_key, text,
                 target_audience=body.get("target_audience") or "50+女性",
                 title=body.get("title"), remix=True,
+                monetization_mode=body.get("monetization_mode") or "revenue_share",
+                rewrite_strength=body.get("rewrite_strength") or "medium",
+                narrative_perspective=body.get("narrative_perspective") or "auto",
+                keyword=body.get("keyword") or "", author=body.get("author") or ""), 2)
+        elif _mode == "book_remix":
+            (b_out, _b), _ = with_retry(lambda: tm.run_rewrite(
+                prov, model, llm_key, text,
+                target_audience=body.get("target_audience") or "50+女性",
+                title=body.get("title"), book_remix=True,
                 monetization_mode=body.get("monetization_mode") or "revenue_share",
                 rewrite_strength=body.get("rewrite_strength") or "medium",
                 narrative_perspective=body.get("narrative_perspective") or "auto",
@@ -320,9 +357,12 @@ def _compose_bg(task_id: str, audio_path: str, subs: bool, anim: bool, output_mo
 
 @router.post("/tasks/{task_id}/audio", response_model=TaskOut)
 async def upload_audio(task_id: str, bg: BackgroundTasks, file: UploadFile = File(...),
-                       output_mode: str = "jianying", db: Session = Depends(get_db)):
+                       output_mode: str = "jianying",
+                       lyrics: str = Form(""),
+                       db: Session = Depends(get_db)):
     """上传配音音频，自动触发成片（PRD 6.5）。
-    output_mode: jianying（剪映草稿，秒级，默认）/ mp4（合成视频，较慢）。"""
+    output_mode: jianying（剪映草稿，秒级，默认）/ mp4（合成视频，较慢）。
+    lyrics: 歌词文本（可选），提供后按歌词行对齐图片切换与字幕。"""
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, detail="任务不存在")
@@ -342,6 +382,29 @@ async def upload_audio(task_id: str, bg: BackgroundTasks, file: UploadFile = Fil
     audio_dir.mkdir(parents=True, exist_ok=True)
     audio_path = audio_dir / f"audio{ext}"
     audio_path.write_bytes(data)
+
+    # 如果提供了歌词 → 做歌词对齐，写入 T 模块产物供合成使用
+    if lyrics.strip():
+        try:
+            seg_texts, seg_durations = align_lyrics(lyrics.strip(), str(audio_path))
+            t_mr = db.query(ModuleResult).filter_by(task_id=task_id, module="T").first()
+            if not t_mr:
+                t_mr = ModuleResult(task_id=task_id, module="T")
+                db.add(t_mr)
+            t_mr.status = "success"
+            t_mr.output = {
+                "seg_texts": seg_texts,
+                "seg_durations": seg_durations,
+                "seg_source": "scene",
+                "aligned_by": "lyrics",
+            }
+            db.commit()
+        except Exception as e:
+            # 歌词对齐失败不打断主流程，记日志后继续
+            import logging
+            logging.getLogger("uvicorn").warning(
+                "歌词对齐失败 task=%s: %s", task_id, e
+            )
 
     task.status = "processing"
     db.commit()
@@ -395,6 +458,22 @@ async def upload_reference(file: UploadFile = File(...), db: Session = Depends(g
     ref_path = ref_dir / f"ref_{uuid.uuid4().hex[:12]}{ext}"
     ref_path.write_bytes(data)
     return {"reference_image": str(ref_path)}
+
+
+@router.post("/tasks/upload-audio")
+async def upload_audio(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """上传音频文件（唱歌·MV模式），存到暂存区，返回路径。创建任务时把该路径填到 audio_file。"""
+    if file.content_type not in ALLOWED_AUDIO:
+        raise HTTPException(400, detail="仅支持 MP3 / WAV / M4A")
+    data = await file.read()
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(400, detail="音频文件过大（上限 50MB）")
+    ext = Path(file.filename or "audio.mp3").suffix or ".mp3"
+    audio_dir = storage_root(db) / "_audio_uploads"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = audio_dir / f"audio_{uuid.uuid4().hex[:12]}{ext}"
+    audio_path.write_bytes(data)
+    return {"audio_file": str(audio_path)}
 
 
 @router.patch("/tasks/{task_id}/title", response_model=TaskOut)
@@ -623,6 +702,7 @@ def get_task_results(task_id: str, db: Session = Depends(get_db)):
             "target_audience": task.target_audience, "monetization_mode": task.monetization_mode,
             "enable_subtitles": task.enable_subtitles, "enable_animations": task.enable_animations,
             "draft_template": getattr(task, "draft_template", "classic"),
+            "video_mode": getattr(task, "video_mode", "vlog"),
             "creation_mode": getattr(task, "creation_mode", "same_topic"),
             "processing_mode": task.processing_mode, "pause_mode": task.pause_mode,
             "pause_steps": task.pause_steps, "paused_at": task.paused_at,

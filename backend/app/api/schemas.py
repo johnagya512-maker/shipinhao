@@ -24,13 +24,16 @@ class TaskCreate(BaseModel):
     voice_speed: float = 1.0     # 配音语速 0.5~2.0
     voice: str | None = None     # 配音员音色 ID（空=用配置页默认）
     reference_image: str | None = None  # 主角参考图暂存路径（来自 /tasks/upload-reference）
+    audio_file: str | None = None       # 上传音频暂存路径（来自 /tasks/upload-audio，唱歌·MV模式用）
+    lyrics: str | None = None           # 歌词文本（唱歌·MV模式用，每句一行）
     bgm: str = ""                # 背景音乐：空=无；文件名（来自配置 bgm 目录）
     cost_limit: float = 5.0
     time_limit: int = Field(default=900, ge=60, le=3600)
     enable_subtitles: bool = True
     enable_animations: bool = True
     draft_template: str = "classic"      # none|classic|narration|lively|cinematic|random
-    creation_mode: str = "same_topic"    # same_topic(拆结构二创) | none(不拆直接改写)
+    video_mode: str = "vlog"             # vlog(口播) | music(唱歌·MV)
+    creation_mode: str = "same_topic"    # same_topic(拆结构二创) | lite(轻量改写) | remix(中度仿写) | book_remix(图书带货深度二创) | none(不拆直接改写)
     image_gen_mode: str = "grid"    # grid(九宫格省成本,默认) | per_image(逐张,画质优先)
     processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
     # 预览二创后用户编辑确认的定稿文案。非空时：作为最终文案，跳过 A 清洗 + B 改写
