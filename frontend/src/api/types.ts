@@ -27,6 +27,7 @@ export interface TaskCreate {
   voice_speed?: number
   voice?: string
   reference_image?: string
+  reference_images?: { key: string; path: string }[]  // 多参考图：key 匹配分镜中的角色名
   bgm?: string
   cost_limit?: number
   time_limit?: number

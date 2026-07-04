@@ -172,6 +172,8 @@ export default function TaskCreatePage() {
   const [refUploading, setRefUploading] = useState(false)
   const [refName, setRefName] = useState<string | null>(null)
   const [refPreview, setRefPreview] = useState<string | null>(null)
+  // 多参考图：每个条目 { key: 角色名, file: File, preview: URL, path?: string(上传后) }
+  const [multiRefs, setMultiRefs] = useState<{ key: string; preview: string; path?: string }[]>([])
   // 唱歌·MV 模式：音频文件上传
   const [audioFile, setAudioFile] = useState<File | null>(null)
   const [audioFileName, setAudioFileName] = useState<string | null>(null)
@@ -346,9 +348,11 @@ export default function TaskCreatePage() {
       }
 
       const lyricsText = form.video_mode === 'music' ? (form.transcript || undefined) : undefined
+      // 多参考图：已上传的才带上
+      const refImages = multiRefs.filter(r => r.path).map(r => ({ key: r.key, path: r.path! }))
       const payload: TaskCreate = (previewScript.trim() && !noRewrite)
-        ? { ...form, edited_script: previewScript.trim(), audio_file: audioPath, lyrics: lyricsText }
-        : { ...form, audio_file: audioPath, lyrics: lyricsText }
+        ? { ...form, edited_script: previewScript.trim(), audio_file: audioPath, lyrics: lyricsText, reference_images: refImages.length > 0 ? refImages : undefined }
+        : { ...form, audio_file: audioPath, lyrics: lyricsText, reference_images: refImages.length > 0 ? refImages : undefined }
 
       const task = await api.createTask(payload)
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* 忽略 */ }
@@ -744,6 +748,91 @@ export default function TaskCreatePage() {
             )}
           </div>
           <p className="mt-1 text-[10px] text-slate-600">上传主角图片后，分镜配图会以这张为参考保持人物一致（取决于绘图模型支持，不支持则自动退回纯文生图）。</p>
+        </div>
+
+        {/* 多参考图：多角色各自绑定参考图（唱歌/人物故事可用） */}
+        <div>
+          <span className="text-sm text-slate-400">多角色参考图（可选）<span className="text-[10px] text-slate-600"> · 不同角色各自保持面部一致</span></span>
+          <div className="mt-2 space-y-2">
+            {multiRefs.map((r, i) => (
+              <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-slate-800/40 border border-slate-700">
+                <img src={r.preview} alt={r.key} className="w-10 h-10 rounded-lg object-cover border border-slate-600" />
+                <input type="text" placeholder="角色名（如：霍英东）" value={r.key}
+                  onChange={(e) => {
+                    const next = [...multiRefs]
+                  next[i] = { ...next[i], key: e.target.value }
+                  setMultiRefs(next)
+                }}
+                  className="flex-1 text-sm bg-slate-900/50 border border-slate-600 rounded px-2 py-1 text-slate-200 outline-none focus:border-brand-500" />
+                {r.path && <span className="text-[10px] text-emerald-400">✓</span>}
+                <button type="button" className="text-xs text-slate-500 hover:text-red-400"
+                  onClick={() => setMultiRefs(multiRefs.filter((_, j) => j !== i))}>移除</button>
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <label className="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-200 text-sm cursor-pointer bg-slate-800/40 hover:bg-slate-800">
+                + 添加角色参考图
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" multiple
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files || [])
+                    if (!files.length) return
+                    setRefUploading(true)
+                    try {
+                      // 用文件名当默认 key 时避免与已有角色重名——重名会导致 ref_map[key] 互相
+                      // 覆盖，两个角色最终共用同一张参考图（见 orchestrator.py 的 ref_map 构建）。
+                      const usedKeys = new Set(multiRefs.map(r => r.key))
+                      const newEntries = await Promise.all(files.map(async (f) => {
+                        let key = f.name.replace(/\.[^.]+$/, '')
+                        let n = 2
+                        while (usedKeys.has(key)) key = `${f.name.replace(/\.[^.]+$/, '')}_${n++}`
+                        usedKeys.add(key)
+                        return { key, preview: URL.createObjectURL(f) }
+                      }))
+                      setMultiRefs([...multiRefs, ...newEntries])
+                    } finally {
+                      setRefUploading(false)
+                      if (e.target) e.target.value = ''
+                    }
+                  }} />
+              </label>
+              {multiRefs.length > 0 && !multiRefs.every(r => r.path) && (
+                <button type="button" className="px-3 py-1.5 rounded-lg border border-brand-500/40 text-brand-300 text-sm hover:bg-brand-600/10"
+                  onClick={async () => {
+                    setRefUploading(true); setError(null)
+                    try {
+                      const toUpload = multiRefs.filter(r => !r.path)
+                      const files = await Promise.all(
+                        toUpload.map(async (r) => {
+                          const resp = await fetch(r.preview)
+                          const blob = await resp.blob()
+                          const type = blob.type || 'image/png'
+                          const ext = type.split('/')[1] || 'png'
+                          return new File([blob], `${r.key}.${ext}`, { type })
+                        })
+                      )
+                      const keys = toUpload.map(r => r.key)
+                      const r = await api.uploadReferenceMulti(files, keys)
+                      // 更新 path：按上传顺序（与 keys 一一对应）取值，而不是按 key 去重合并，
+                      // 避免多个角色使用相同默认 key 时 Object.fromEntries 互相覆盖丢路径。
+                      const failed: string[] = []
+                      setMultiRefs(multiRefs.map(item => {
+                        const idx = toUpload.indexOf(item)
+                        if (idx === -1) return item
+                        const result = r.reference_images[idx]
+                        if (result?.error) failed.push(`${item.key}: ${result.error}`)
+                        return { ...item, path: item.path || result?.path || undefined }
+                      }))
+                      if (failed.length > 0) setError(`部分参考图上传失败：${failed.join('；')}`)
+                    } catch (err) {
+                      setError((err as ApiError).message)
+                    } finally {
+                      setRefUploading(false)
+                    }
+                  }}>上传全部</button>
+              )}
+            </div>
+          </div>
+          <p className="mt-1 text-[10px] text-slate-600">上传多个角色照片后，生图时会按角色名匹配对应参考图，让各角色在分镜中保持自己的面部特征。</p>
         </div>
 
         <div className={dimImg}>

@@ -4,7 +4,7 @@ import { api, ApiError } from '../api/client'
 import type { ConfigOut, ConfigUpdate, ImagePreset } from '../api/types'
 
 const LLM_PROVIDERS = ['deepseek', 'openai', 'qwen', 'doubao']
-const IMAGE_PROVIDERS = ['doubao', 'openai']
+const IMAGE_PROVIDERS = ['doubao', 'openai', 'jimeng']
 const COLLECT_PROVIDERS = ['tikhub']
 const ASR_PROVIDERS = ['volcano', 'siliconflow']
 const TTS_PROVIDERS = ['edge_local', 'volcano', 'siliconflow', 'yuntts_edge']
@@ -22,6 +22,9 @@ const BUILTIN_PRESETS: ImagePreset[] = [
 
   // 豆包官方（ark.cn-beijing.volces.com）
   { name: '豆包 Seedream（官方）', model: 'doubao-seedream-4-5-251128', base_url: 'https://ark.cn-beijing.volces.com/api/v3/images/generations', unit_price: 0.20 },
+
+  // 即梦（jimeng.ai）- OpenAI 兼容格式
+  { name: '即梦 jimeng-3.0（官方）', model: 'jimeng-3.0', base_url: 'https://api.jimeng.ai/v1/images/generations', unit_price: 0.15 },
 ]
 
 export default function ConfigPage() {

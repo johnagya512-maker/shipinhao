@@ -11,6 +11,14 @@ interface Props {
   onChanged: () => void
 }
 
+interface OriginalityResult {
+  passed: boolean
+  similarity_ratio: number
+  longest_overlap: number
+  overlap_fragments: string[]
+  details: Record<string, unknown>
+}
+
 // 取要确认的文案：优先 B 改写稿，无则退回 A 清洗稿。
 function pickScript(modules: ModuleResult[]): { text: string; module: string } {
   const b = modules.find((m) => m.module === 'B' && m.status === 'success')
@@ -27,8 +35,9 @@ export default function ScriptReview({ taskId, modules, onChanged }: Props) {
   const { text, module } = pickScript(modules)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
-  const [busy, setBusy] = useState<'' | 'resume' | 'save' | 'rewrite' | 'cfix'>('')
+  const [busy, setBusy] = useState<'' | 'resume' | 'save' | 'rewrite' | 'cfix' | 'ocheck' | 'orewrite'>('')
   const [err, setErr] = useState('')
+  const [checkResult, setCheckResult] = useState<OriginalityResult | null>(null)
 
   // 合规风险横幅：停在 H 且自动改写后仍有残余风险时展示，让用户知情后再定夺。
   const h = modules.find((m) => m.module === 'H')
@@ -37,6 +46,19 @@ export default function ScriptReview({ taskId, modules, onChanged }: Props) {
     ? { score: Number(ho.risk_score ?? 0), fixed: Number(ho.auto_fixed ?? 0),
         violations: (ho.violations as { type?: string; severity?: string; snippet?: string }[]) ?? [] }
     : null
+
+  // 取已保存的 O 模块检测结果，作为初始展示。
+  const o = modules.find((m) => m.module === 'O')
+  const savedResult: OriginalityResult | null = o?.output
+    ? {
+        passed: Boolean(o.output.passed),
+        similarity_ratio: Number(o.output.similarity_ratio ?? 0),
+        longest_overlap: Number(o.output.longest_overlap ?? 0),
+        overlap_fragments: Array.isArray(o.output.overlap_fragments) ? o.output.overlap_fragments as string[] : [],
+        details: (o.output.details as Record<string, unknown>) ?? {},
+      }
+    : null
+  const activeResult = checkResult ?? savedResult
 
   async function onResume() {
     setBusy('resume'); setErr('')
@@ -66,6 +88,31 @@ export default function ScriptReview({ taskId, modules, onChanged }: Props) {
     try { await api.complianceFix(taskId); onChanged() }
     catch (e) { setErr((e as ApiError).message) }
     finally { setBusy('') }
+  }
+
+  async function onOriginalityCheck() {
+    setBusy('ocheck'); setErr('')
+    try {
+      const r = await api.originalityCheck(taskId)
+      setCheckResult(r)
+    } catch (e) {
+      setErr((e as ApiError).message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function onOriginalityRewrite() {
+    setBusy('orewrite'); setErr('')
+    try {
+      await api.originalityRewrite(taskId)
+      setCheckResult(null)
+      onChanged()
+    } catch (e) {
+      setErr((e as ApiError).message)
+    } finally {
+      setBusy('')
+    }
   }
 
   const working = busy !== ''
@@ -132,7 +179,50 @@ export default function ScriptReview({ taskId, modules, onChanged }: Props) {
               className="px-4 py-2 rounded-lg bg-slate-700/70 text-slate-200 text-sm hover:bg-slate-700 disabled:opacity-50">
               {busy === 'rewrite' ? '重写中…' : '🔄 让 AI 重写'}
             </button>
+            <button onClick={onOriginalityCheck} disabled={working}
+              title="对比原文检测相似度"
+              className="px-4 py-2 rounded-lg bg-slate-700/70 text-slate-200 text-sm hover:bg-slate-700 disabled:opacity-50">
+              {busy === 'ocheck' ? '检测中…' : '🔍 检测相似度'}
+            </button>
           </div>
+
+          {activeResult && (
+            <div className={`mt-3 rounded-lg border p-3 ${activeResult.passed ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/5'}`}>
+              <div className="flex items-center gap-3 mb-2">
+                <span className={`text-sm font-semibold ${activeResult.passed ? 'text-emerald-300' : 'text-amber-300'}`}>
+                  {activeResult.passed ? '✅ 原创度通过' : '⚠️ 相似度偏高'}
+                </span>
+                <span className="text-sm text-slate-300">
+                  综合相似度：<span className={`font-bold ${activeResult.passed ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {(activeResult.similarity_ratio * 100).toFixed(2)}%
+                  </span>
+                </span>
+                <span className="text-xs text-slate-500">
+                  最长连续雷同 {activeResult.longest_overlap} 字
+                </span>
+              </div>
+              {!activeResult.passed && (
+                <>
+                  {activeResult.overlap_fragments.length > 0 && (
+                    <div className="mb-2">
+                      <p className="text-[11px] text-slate-400 mb-1">雷同片段：</p>
+                      <ul className="space-y-0.5">
+                        {activeResult.overlap_fragments.slice(0, 5).map((f, i) => (
+                          <li key={i} className="text-[11px] text-amber-400/90 font-mono truncate">· {f}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <button onClick={onOriginalityRewrite} disabled={working}
+                    title="让 AI 针对雷同片段继续降重（会调用大模型）"
+                    className="px-3.5 py-1.5 rounded-lg bg-amber-600/90 text-white text-[13px] font-medium hover:bg-amber-600 disabled:opacity-50">
+                    {busy === 'orewrite' ? '降重中…' : '📝 继续降重'}
+                  </button>
+                  <span className="ml-2 text-[10px] text-slate-500">改完仍停在这页，可再次检测</span>
+                </>
+              )}
+            </div>
+          )}
         </>
       ) : (
         <div className="mt-2 flex items-center gap-2">

@@ -69,6 +69,8 @@ def call_llm(provider: str, model: str, api_key: str, prompt: str,
 def call_vision(provider: str, model: str, api_key: str, prompt: str,
                 image_data_uri: str, timeout: float = 60.0, proxy: str | None = None,
                 base_url: str | None = None) -> LLMResult:
+    import logging
+    _logger = logging.getLogger("uvicorn")
     """多模态调用：看图 + 文字提示，返回文本。走 OpenAI 兼容的 content 数组格式
     （text + image_url）。豆包视觉模型与绘图模型同在火山方舟，可复用 image_api_key。
     image_data_uri 形如 data:image/png;base64,xxx。
@@ -110,13 +112,20 @@ def call_vision(provider: str, model: str, api_key: str, prompt: str,
         raise LLMError(f"视觉模型请求错误: {e}", retryable=True)
 
     if resp.status_code == 401:
+        _logger.error("[call_vision] 认证失败: url=%s, model=%s, status=401, body=%s", url, model, resp.text[:200])
         raise LLMError("API Key 无效", retryable=False)
     if resp.status_code == 429:
+        _logger.warning("[call_vision] 限流: url=%s, model=%s", url, model)
         raise LLMError("触发限流", retryable=True)
     if resp.status_code >= 500:
-        raise LLMError(f"视觉模型服务端错误 {resp.status_code}", retryable=True)
+        _logger.error("[call_vision] 服务端错误: url=%s, model=%s, status=%d, body=%s",
+                      url, model, resp.status_code, resp.text[:300])
+        raise LLMError(f"视觉模型服务端错误 {resp.status_code}: {resp.text[:200]}", retryable=True)
     if resp.status_code >= 400:
+        _logger.error("[call_vision] 请求被拒: url=%s, model=%s, status=%d, body=%s",
+                      url, model, resp.status_code, resp.text[:200])
         raise LLMError(f"视觉模型请求被拒 {resp.status_code}: {resp.text[:200]}", retryable=False)
+    _logger.info("[call_vision] 成功: url=%s, model=%s, tokens=%s", url, model, resp.json().get("usage", {}))
 
     data = resp.json()
     text = data["choices"][0]["message"]["content"]

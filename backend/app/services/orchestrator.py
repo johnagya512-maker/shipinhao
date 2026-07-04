@@ -3,10 +3,13 @@
 执行顺序：A 清洗 → B 改写 → H 合规 → (D 识别) → E 配图 → F 分段。
 G 视频合成在用户上传音频后单独触发（见 services/compose）。
 """
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("uvicorn")
 
 from app.models import Task, ModuleResult, Config
 from app.core.config import settings
@@ -159,11 +162,14 @@ def _check_limits(db: Session, task: Task, started: float):
         raise TaskAborted("COST_EXCEEDED", "成本超过上限")
 
 
-def _llm_step(db, task, cfg, llm_key, module, fn, started, pausable=True):
+def _llm_step(db, task, cfg, llm_key, module, fn, started, pausable=True, cache_key=None):
     """执行一个 LLM 模块：断点复用 + 重试 + 计费 + 限额检查。返回 output。
     pausable=True 时，仅在“本次新算完”后检查暂停点（缓存复用直接返回，不再暂停，
-    保证 resume 能越过上次的暂停点继续）。"""
-    existing = _get_result(db, task.id, module)
+    保证 resume 能越过上次的暂停点继续）。
+    cache_key 缺省时等于 module；同一 module 需要多份缓存（如多角色 CP 各存各的）时传入
+    互不相同的 cache_key，同时 module 仍传原名以保持暂停点/计费口径按步骤名归并。"""
+    ck = cache_key or module
+    existing = _get_result(db, task.id, ck)
     if existing and existing.status == "success":
         return existing.output  # 断点续跑：复用已成功结果，不重复扣费，也不再触发暂停
 
@@ -175,7 +181,7 @@ def _llm_step(db, task, cfg, llm_key, module, fn, started, pausable=True):
     cost_svc.record_cost(db, task.id, module, cfg.llm_provider, c)
     task.total_cost = float(task.total_cost) + c
     db.commit()
-    _save_result(db, task.id, module, "success", output=output, cost=c,
+    _save_result(db, task.id, ck, "success", output=output, cost=c,
                  tokens_in=llm_result.tokens_in, tokens_out=llm_result.tokens_out, retry=attempts)
     _check_limits(db, task, started)
     if pausable:
@@ -309,6 +315,39 @@ def run_pipeline(db: Session, task_id: str):
         else:
             script = cleaned
 
+        # O 原创度检测（full_auto 且非 lite 模式）：改写后与原文对比，
+        # 相似度过高则自动触发一次针对性降重。
+        if task.processing_mode == "full_auto" and _mode != "lite":
+            _o_max_rounds = 2
+            for _o_round in range(_o_max_rounds):  # 首次检测 + 一次自动降重后复测
+                o_result = tm.check_originality(cleaned, script,
+                                                 max_similarity_ratio=0.40)
+                _save_result(db, task.id, "O", "success", output=o_result)
+                # 最后一轮：只检测不再改写，避免"改写完不复检"导致 O 结果与 B 最终稿脱节
+                # （旧代码每轮先检后写，最后一轮写完循环即结束，O 停在改写前的旧结果上）。
+                if o_result["passed"] or _o_round == _o_max_rounds - 1:
+                    break
+                try:
+                    fix_out, _or = tm.run_rewrite_decrease_similarity(
+                        cfg.llm_provider, cfg.llm_model, llm_key,
+                        cleaned, script, o_result)
+                    new_script = (fix_out or {}).get("script", "").strip()
+                    if new_script and new_script != script:
+                        script = new_script
+                        # 回写 B 产物，让详情页/后续分句用降重后的稿
+                        _save_result(db, task.id, "B", "success",
+                                     output={"script": script})
+                        # 记录降重这次 LLM 调用成本
+                        c = cost_svc.actual_llm_cost(_or.tokens_in, _or.tokens_out,
+                                                     cfg.llm_provider)
+                        cost_svc.record_cost(db, task.id, "O", cfg.llm_provider, c)
+                        task.total_cost = float(task.total_cost) + c
+                        db.commit()
+                    else:
+                        break
+                except Exception:
+                    break
+
         # 自动命名：用户没填标题时，让 LLM 读定稿文案生成一个钩子短标题，
         # 用于剪映草稿箱/下载文件名一眼识别（如「屠呦呦·190次失败」）。
         # title 过长（>30字）多半是误填或复用草稿残留的采集长描述/上一篇正文，
@@ -437,35 +476,89 @@ def run_pipeline(db: Session, task_id: str):
 
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
             # 参考图 data URI 不落库（体积大），每次现编码，供人物镜头图生图用。
-            ref_uri = None
-            if task.reference_image:
+            # 多参考图：构建 ref_map {key: ref_uri}，按分镜的 character_key 匹配
+            ref_uri = None  # 单参考图（向后兼容）
+            ref_map = {}    # 多参考图：{角色key: data_uri}
+            character_keys = []  # 所有可用的角色 key，供 SB 提示词引用
+            from app.services.image import _encode_reference
+
+            # 多图模式：reference_images = [{"key": "霍英东", "path": "..."}, ...]
+            if task.reference_images:
+                for item in task.reference_images:
+                    key = (item.get("key") or "").strip()
+                    path = item.get("path") or ""
+                    if not key or not path:
+                        continue
+                    try:
+                        uri = _encode_reference(path)
+                        if uri:
+                            ref_map[key] = uri
+                            character_keys.append(key)
+                    except Exception:
+                        pass
+                if ref_map:
+                    logger.info("[P] 多参考图加载: keys=%s", list(ref_map.keys()))
+                # 兜底：如果没有多图或全部加载失败，尝试单图
+                if not ref_map and task.reference_image:
+                    try:
+                        ref_uri = _encode_reference(task.reference_image)
+                    except Exception:
+                        pass
+            elif task.reference_image:
                 try:
-                    from app.services.image import _encode_reference
                     ref_uri = _encode_reference(task.reference_image)
                 except Exception:
                     ref_uri = None
+
             existing_p = _get_result(db, task.id, "P")
             if existing_p and existing_p.status == "success":
                 prompts_list = [(p["prompt"], p["sub_type"], Path(p["out_path"]), p["duration"],
                                  ref_uri if p.get("has_char") else None)
                                 for p in existing_p.output["prompts"]]
             else:
-                # 反推人物特征（"CP"）：先于画面脚本。有参考图时用视觉模型看一次参考图，
-                # 生成稳定外貌特征文字（文字锚定，供 SB 写进分镜）；参考图 data URI（上面已编码）
-                # 留作图生图入参（人物镜头保持主角一致：同一个人、不同场景）。失败不阻断。
+                # 反推人物特征（"CP"）：先于画面脚本。
+                # 多参考图时：对每张图分别反推外貌特征；单图时只反推一张。
                 character_desc = None
+                character_profiles = {}  # {key: profile_text}
+                cp_targets = []
                 if ref_uri:
+                    cp_targets.append(("_主角", ref_uri))
+                for key, uri in ref_map.items():
+                    cp_targets.append((key, uri))
+
+                # 多个反推目标（多角色参考图）时，每个角色的结果必须各存各的缓存行，
+                # 否则全部复用同一条 "CP" 记录会导致除首个角色外的人物拿到别人的特征。
+                _multi_cp = len(cp_targets) > 1
+                for ck, cu in cp_targets:
+                    _cp_cache_key = f"CP_{ck}" if _multi_cp else "CP"
                     try:
+                        logger.info("[CP] 反推人物特征: key=%s, ref_uri_len=%d", ck, len(cu))
                         cp_out = _llm_step(db, task, cfg, llm_key, "CP",
-                                           lambda: tm.run_character_profile(
+                                           lambda u=cu: tm.run_character_profile(
                                                cfg.image_provider, cfg.vision_model,
-                                               img_key, ref_uri,
+                                               img_key, u,
                                                proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None,
                                                base_url=getattr(cfg, "image_base_url", None)),
-                                           started)
-                        character_desc = (cp_out.get("profile") or "").strip() or None
+                                           started, cache_key=_cp_cache_key)
+                        profile = (cp_out.get("profile") or "").strip() or None
+                        if profile:
+                            character_profiles[ck] = profile
+                            logger.info("[CP] 反推成功 [%s]: %s", ck, profile[:80])
                     except Exception as e:
-                        _save_result(db, task.id, "CP", "failed", output={"error": str(e)})
+                        logger.error("[CP] 反推失败 [%s]: %s", ck, str(e)[:200])
+                        _save_result(db, task.id, _cp_cache_key, "failed", output={"error": str(e), "key": ck})
+
+                if character_profiles:
+                    # 多角色时拼成多段描述供 SB 使用
+                    if len(character_profiles) > 1:
+                        parts = [f"[{k}]：{v}" for k, v in character_profiles.items()]
+                        character_desc = "；".join(parts)
+                    else:
+                        character_desc = next(iter(character_profiles.values()))
+                elif ref_uri or ref_map:
+                    logger.info("[CP] 反推全部失败，SB 将只用 key 文字匹配")
+                else:
+                    logger.info("[CP] 跳过: 无参考图")
 
                 # 画面脚本（"SB"）：【配音严格用原文】模式——先用 LLM 按视听分镜逻辑
                 # 把 script 拆成 50-80 字一段的原文切片（一字不改），失败再回退到程序规则切分。
@@ -489,7 +582,8 @@ def run_pipeline(db: Session, task_id: str):
                                            cfg.llm_provider, cfg.llm_model, llm_key,
                                            sb_segments,
                                            rewrite_focus=tracks.get_track(task.track).get("rewrite_focus", ""),
-                                           character_desc=character_desc),
+                                           character_desc=character_desc,
+                                           character_keys=character_keys if character_keys else None),
                                        started)
                     scenes = sb_out.get("scenes") or None
                 except Exception as e:
@@ -511,13 +605,21 @@ def run_pipeline(db: Session, task_id: str):
                     n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, suggest_images))
                     aligned_scenes = []
 
+                # 唱歌·MV模式强制逐张（不支持九宫格，因每张需用对应角色的参考图）
+                is_music = getattr(task, "video_mode", "vlog") == "music"
+                if is_music:
+                    task.image_gen_mode = "per_image"
+                    logger.info("[P] 唱歌·MV模式强制逐张生图")
+
                 prompts_list, used_items = im.build_image_prompts(
                     book_info, segments, out_dir,
                     image_count=n_images,
                     track=task.track, image_style=task.image_style,
                     scenes=aligned_scenes or None,
                     character_desc=character_desc,
-                    ref_uri=ref_uri)
+                    ref_uri=ref_uri,
+                    ref_map=ref_map if ref_map else None,  # 多参考图映射
+                    character_keys=character_keys if character_keys else None)
                 # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑、
                 # 及配音/字幕取 cap。用 build_image_prompts 实际使用的 used_items 落库（不是
                 # aligned_scenes）——保证 P.scenes 与图（prompts_list）严格同源同长，配音段数
@@ -555,6 +657,9 @@ def run_pipeline(db: Session, task_id: str):
                 _img_proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
                 if mode == "grid":
                     grid_style = tracks.get_style(task.image_style, task.track)
+                    logger.info("[E] 九宫格模式: image_style=%s, style=%s, grayscale=%s",
+                                task.image_style, grid_style.get("prefix", "None") if grid_style else "None",
+                                im.is_monochrome_style(grid_style))
                     # 后台首次生成不自动改写重发：九宫格失败即整组占位+原因，
                     # 等用户在画廊手动「重新组图」(可顺便改文案)。是否再花钱由用户决定，
                     # 不在后台用看不见的多次改写反复烧钱。故不传 rewrite_fn。
@@ -567,14 +672,18 @@ def run_pipeline(db: Session, task_id: str):
                 else:
                     # 逐张模式：每张内部已有瞬时故障(超时/限流)退避重试+失败占位，
                     # 不再套外层整批重发(后台反复烧钱)。审核拦截的图保留占位+原因等手动重生。
+                    _style = tracks.get_style(task.image_style, task.track)
+                    _grayscale = im.is_monochrome_style(_style)
+                    logger.info("[E] 逐张模式: image_style=%s, style_prefix=%s, grayscale=%s",
+                                task.image_style, _style.get("prefix", "None") if _style else "None",
+                                _grayscale)
                     images = im.render_images(cfg.image_provider, img_key, prompts_list,
                                               model=cfg.image_model,
                                               concurrency=cfg.concurrency,
                                               aspect_ratio=img_ratio,
                                               base_url=getattr(cfg, "image_base_url", None),
                                               proxy=_img_proxy,
-                                              grayscale=im.is_monochrome_style(
-                                                  tracks.get_style(task.image_style, task.track)),
+                                              grayscale=_grayscale,
                                               no_crop=img_no_crop)
                 # 失败不在后台自动改写重生（那样会在用户看不见的地方反复烧钱，
                 # task_472 一次烧 16 次就是这么来的）。被审核拦截的图保留占位+原因，
@@ -613,12 +722,13 @@ def run_pipeline(db: Session, task_id: str):
             try:
                 from app.services.lyrics_align import align_lyrics, _get_audio_duration
                 total_duration = _get_audio_duration(task.audio_file)
-                seg_texts, seg_durations = align_lyrics(task.lyrics or "", task.audio_file)
+                seg_texts, seg_durations, paragraph_breaks = align_lyrics(task.lyrics or "", task.audio_file)
                 _save_result(db, task.id, "T", "success",
                              output={"audio_path": task.audio_file, "duration": total_duration,
                                      "segment_count": len(seg_texts),
                                      "seg_durations": seg_durations,
                                      "seg_texts": seg_texts,
+                                     "paragraph_breaks": paragraph_breaks,
                                      "seg_source": "lyrics"})
             except Exception as e:
                 _save_result(db, task.id, "T", "failed", output={"error": str(e)})

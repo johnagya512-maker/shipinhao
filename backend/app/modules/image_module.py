@@ -38,6 +38,11 @@ def count_for_duration(total_duration: float,
     n = round(total_duration / max(1.0, seconds_per_image))
     return max(min_images, min(max_images, int(n)))
 
+# 面部质量增强提示词：减少AI绘图常见的面部畸形问题
+# 豆包 Seedream 不支持独立 negative_prompt 参数，故把负面词转成正文禁止句追加
+FACE_QUALITY_SUFFIX = "面部清晰对称，五官端正，高质量人像摄影，自然表情"
+FACE_NEGATIVE_SUFFIX = "。严格避免：面部畸形、五官扭曲、表情怪异、眼睛不对称、嘴巴变形"
+
 # 人物故事赛道配图：封面=人物主体，内容=情节场景，结尾=悬念/引导
 # 健康书单赛道配图：封面=书籍，内容=健康场景，结尾=CTA
 # 各赛道用 tracks 的画风三层包裹，主体描述按赛道切换。
@@ -124,16 +129,17 @@ def _wrap(style: dict, subject: str) -> str:
 
 def _gen_with_fallback(provider, api_key, prompt, sub_type, out_path,
                        suggested_duration, model, aspect_ratio="9:16", ref_uri=None,
-                       base_url=None, proxy=None, grayscale=False):
+                       base_url=None, proxy=None, grayscale=False, no_crop=False):
     """生成单张：可重试错误(超时/限流/审核误判)退避重试，耗尽则降级占位图。
-    单张失败不中断整批，保证链路产出（PRD 11.2 必选模块尽量不整体失败）。"""
+    单张失败不中断整批，保证链路产出（PRD 11.2 必选模块尽量不整体失败）。
+    no_crop=True 时 _normalize 只等比缩放不裁切（保留完整画面）。"""
     from app.modules.retry import with_retry
     try:
         result, _ = with_retry(
             lambda: generate_image(provider, api_key, prompt, sub_type, out_path,
                                    suggested_duration, model=model, aspect_ratio=aspect_ratio,
                                    ref_uri=ref_uri, base_url=base_url, proxy=proxy,
-                                   grayscale=grayscale, timeout=600.0),
+                                   grayscale=grayscale, no_crop=no_crop, timeout=600.0),
             _img_retry_for(model), disconnect_retry=IMG_DISCONNECT_RETRY)
         return result
     except ImageError as e:
@@ -177,15 +183,19 @@ _SHOT_VARIATIONS = [
 
 def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
                         track="character_story", image_style=None, scenes=None,
-                        character_desc=None, ref_uri=None):
+                        character_desc=None, ref_uri=None,
+                        ref_map=None, character_keys=None):
     """Step 3「提示词生成」：组装绘图任务列表（提示词+落盘路径），不调用绘图 API。
     返回 [(prompt, sub_type, out_path, suggested_duration, ref_uri), ...]，封面→内容→结尾顺序。
     scenes 非空时用画面脚本（视觉化分镜描述）作内容图主体，否则回退到 segment 截字。
-    scenes 每项可为 dict {"desc","has_character"} 或纯字符串（兼容老格式，视为有人物）。
+    scenes 每项可为 dict {"desc","has_character","character_key"} 或纯字符串（兼容老格式，视为有人物）。
     character_desc 非空时，仅在「需要人物出场」的画面（封面 + has_character 的内容图）
     注入主角特征文字做一致性锚定；空镜/物件镜头不带人物特征，让画面紧贴文案。
     ref_uri（参考图 data URI）非空时，人物镜头走图生图（保持主角一致：同一个人、不同场景），
-    每个人物镜头的 prompt 用「保持面部不变、改变场景姿势」句式包裹，并带上 ref_uri。"""
+    每个人物镜头的 prompt 用「保持面部不变、改变场景姿势」句式包裹，并带上 ref_uri。
+    ref_map（{key: data_uri}）非空时，按 scene.character_key 匹配对应参考图，实现多角色各自一致；
+    未匹配到 key 时回退到 ref_uri（全局参考图）或纯文生图。
+    character_keys 是可选的角色 key 列表，用于在 prompt 未标注时匹配文案中的角色名。"""
     image_count = max(MIN_IMAGES, min(MAX_IMAGES, image_count))
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,18 +215,21 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
         title = (book_info or {}).get("title") or subject
         fallback_subject = f"{subject}，{title}，吸睛开场画面"
 
-    # 把 scenes 归一成 [{"cap","desc_prompt","has_character"}]，兼容老格式（desc 字段 / 纯字符串）。
+    # 把 scenes 归一成 [{"cap","desc_prompt","has_character","character_key"}]，兼容老格式。
     norm_scenes = []
     for x in (scenes or []):
         if isinstance(x, dict):
             dp = _sanitize_imagery(str(x.get("desc_prompt") or x.get("desc") or ""))
             if dp.strip():
-                norm_scenes.append({"cap": str(x.get("cap", "")),
-                                    "desc_prompt": dp,
-                                    "has_character": bool(x.get("has_character", True))})
+                norm_scenes.append({
+                    "cap": str(x.get("cap", "")),
+                    "desc_prompt": dp,
+                    "has_character": bool(x.get("has_character", True)),
+                    "character_key": str(x.get("character_key", "") or "").strip() or None,
+                })
         elif str(x).strip():
             norm_scenes.append({"cap": "", "desc_prompt": _sanitize_imagery(str(x)),
-                                "has_character": True})
+                                "has_character": True, "character_key": None})
 
     # 图片与分镜【严格一一对应】：N 个分镜 = N 张图，下标对齐（image[i] = scene[i]），
     # 不再额外加抽象封面/CTA。首张标 sub_type="cover"（仅供剪映草稿封面缩略图用），
@@ -234,9 +247,12 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
 
     # 图生图人物镜头的提示词包裹：强调"保持参考人物面部/外貌不变，改变场景姿势"
     # （实测此句式能做到同一个人、不同场景，而非复刻参考图构图）。
+    # 关键：必须极度强调面部完全不变，否则模型会自由发挥生成不同人物
     def _persona(subject):
-        return (f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
-                f"但改为以下全新画面（不同的姿势、表情、构图）：{subject}")
+        return (f"【重要】生成与参考图中完全相同的人物：保持此人的面部特征、五官比例、发型、肤色、性别、年龄完全不变，"
+                f"与参考图是同一个人。仅改变以下部分——场景背景、服装、姿势、表情：{subject}。"
+                f"绝对不要改变此人的面部外观和身份特征。"
+                f"面部质量要求：{FACE_QUALITY_SUFFIX}{FACE_NEGATIVE_SUFFIX}")
 
     tasks = []
     for i, item in enumerate(scene_items):
@@ -250,13 +266,38 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
             # 老格式/回退：截字描述 + 镜头轮换 + 一致性锚定。
             shot = _SHOT_VARIATIONS[i % len(_SHOT_VARIATIONS)]
             if has_char:
-                anchor = f"，主角形象：{character_desc}" if character_desc else "，同一主角保持外貌一致"
+                if character_desc:
+                    anchor = f"，主角形象：{character_desc}【严禁改变主角性别，必须是「{character_desc[:20]}」中描述的性别】"
+                else:
+                    anchor = "，同一主角保持外貌一致"
             else:
                 anchor = "，画面中无人物，聚焦场景与物件本身"
             content_subject = f"{desc}，{shot}{anchor}"
         # 仅"需要人物出场"的镜头走图生图（带参考图）；空镜/物件镜头纯文生图。
-        item_ref = ref_uri if has_char else None
-        content_text = _persona(content_subject) if item_ref else content_subject
+        item_ref = None
+        if has_char:
+            # 多角色模式：按 character_key 匹配对应参考图
+            if ref_map and item.get("character_key"):
+                item_ref = ref_map.get(item["character_key"])
+            # 未匹配到 key 时：尝试从文案中检测角色名
+            if not item_ref and ref_map and character_keys:
+                cap_lower = (item.get("cap") or "").lower()
+                desc_lower = desc.lower()
+                for ck in character_keys:
+                    if ck.lower() in cap_lower or ck.lower() in desc_lower:
+                        item_ref = ref_map.get(ck)
+                        break
+            # 兜底：全局单参考图
+            if not item_ref:
+                item_ref = ref_uri
+        # 有人出场时：有参考图走图生图（_persona 已含面部质量提示），无参考图也追加面部质量提示
+        if item_ref:
+            content_text = _persona(content_subject)
+        elif has_char:
+            # 纯文生图但有人脸：追加面部质量提示词减少畸形
+            content_text = f"{content_subject}，{FACE_QUALITY_SUFFIX}{FACE_NEGATIVE_SUFFIX}"
+        else:
+            content_text = content_subject
         # 首张标 cover（剪映草稿封面用），其余 content。落盘文件名按下标，保证稳定。
         sub_type = "cover" if i == 0 else "content"
         fname = "cover.png" if i == 0 else f"content_{i}.png"
@@ -268,18 +309,20 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
 
 
 def render_images(provider, api_key, tasks, model=None, concurrency=5,
-                  aspect_ratio="9:16", base_url=None, proxy=None, grayscale=False):
+                  aspect_ratio="9:16", base_url=None, proxy=None, grayscale=False,
+                  no_crop=False):
     """Step 4「批量生图」：按 build_image_prompts 产出的任务列表并发生成。
     单张失败降级占位图，不中断整批。保持任务列表顺序返回。
     base_url 非空时所有请求打中转站（OpenAI 兼容），用于降单价。
     proxy 非空时所有请求走代理（中转站如 tu-zi.com 需代理才能访问）。
-    grayscale=True 时所有图本地强制转黑白（黑白风格模型常不听文字、图生图照彩色参考出彩色）。"""
+    grayscale=True 时所有图本地强制转黑白（黑白风格模型常不听文字、图生图照彩色参考出彩色）。
+    no_crop=True 时 _normalize 只等比缩放不裁切（保留完整画面，用于 center_h 版式）。"""
     from concurrent.futures import ThreadPoolExecutor
     results: list = [None] * len(tasks)
     workers = max(1, min(concurrency, len(tasks)))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_gen_with_fallback, provider, api_key, p, st, op, sd, model,
-                          aspect_ratio, rf, base_url, proxy, grayscale): idx
+                          aspect_ratio, rf, base_url, proxy, grayscale, no_crop): idx
                 for idx, (p, st, op, sd, rf) in enumerate(tasks)}
         for fut in futs:
             idx = futs[fut]
@@ -316,11 +359,24 @@ def build_grid_prompt(cell_briefs: list, style_bible: str | None = None) -> str:
     style_bible 非空时用它作统一风格说明（来自用户所选画风）；为空回退内置 GRID_STYLE_BIBLE。"""
     lines = "\n".join(f"{i+1}. {b}" for i, b in enumerate(cell_briefs))
     bible = (style_bible or "").strip() or GRID_STYLE_BIBLE
+    # 九宫格全局面部质量约束：作为风格圣经的补充，确保所有人物画面面部质量。
+    # 每格分辨率本来就低，人脸越大越容易崩——所以除了要求五官对称，还明确让人物
+    # 别怼脸大特写、格子间脸部特征不要互相混合（多张脸挤在一张画布里容易互相"借"五官）。
+    face_quality = (
+        "【人脸质量·最高优先】每格若出现人物：五官必须完整、比例正常——两眼对称等高、"
+        "鼻梁居中、嘴唇轮廓单一不重叠，脸部干净清晰，不融合、不重影、不扭曲、不出现多余"
+        "或缺失的眼睛/嘴巴/鼻子。人物脸部占格子画面的比例不宜过大，避免顶格大特写正脸，"
+        "优先半身或中近景，让五官有自然的呈现空间。每个格子里的人物都是独立个体，"
+        "不要把相邻格子的人脸特征相互混合或叠加。宁可五官画得简单干净，也不要画得精致但错位。"
+    )
     return (
         "参考图是一张 3×3 九宫格模板，由白色分隔线划分成 9 个完全等大的灰色格子。\n"
         "请严格保持参考图的网格结构和白色格线位置不变，只在每个灰色格子里填入对应编号的"
-        "照片画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
+        "照片画面。\n"
+        "【关键要求】每格的背景/环境要完全填满整个格子，不能有留白或空白区域，"
+        "但画面主体不必贴近特写——主体完整入镜、四周留出安全边距，不要越过白色分隔线。\n\n"
         + bible + "\n\n"
+        + face_quality + "\n\n"
         "九格画面（从左到右、从上到下）：\n" + lines + "\n\n"
         "不要在图片里放任何文字。不要输出解释。"
     )
@@ -415,7 +471,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                                           out_paths, durations, model=model,
                                           aspect_ratio=aspect_ratio, ref_uri=ref,
                                           base_url=base_url, proxy=proxy, grayscale=_gray,
-                                          timeout=600.0)
+                                          no_crop=no_crop, timeout=600.0)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError as e:
@@ -461,7 +517,8 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                         lambda: generate_grid_image(provider, api_key, cell_prompt, sub_types,
                                                     out_paths, durations, model=model,
                                                     aspect_ratio=aspect_ratio, base_url=base_url,
-                                                    proxy=proxy, grayscale=_gray, timeout=600.0),
+                                                    proxy=proxy, grayscale=_gray, timeout=600.0,
+                                                    ref_uri=ref),
                         _img_retry_for(model), disconnect_retry=IMG_DISCONNECT_RETRY)
                     for k, i in enumerate(indices):
                         results[i] = grid[k]

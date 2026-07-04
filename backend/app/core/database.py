@@ -76,6 +76,10 @@ def _ensure_columns():
         ("configs", "image_unit_price", "NUMERIC(8,4)"),
         ("configs", "image_presets", "JSON"),
         ("tasks", "layout", "VARCHAR(16) DEFAULT 'full'"),
+        ("tasks", "video_mode", "VARCHAR(12) DEFAULT 'vlog'"),
+        ("tasks", "audio_file", "VARCHAR(500)"),
+        ("tasks", "lyrics", "TEXT"),
+        ("tasks", "reference_images", "JSON"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

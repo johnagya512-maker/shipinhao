@@ -9,6 +9,7 @@ const STEP_FLOW: { key: string; name: string }[] = [
   { key: 'A', name: '文案清洗' },
   { key: 'H', name: '合规审查' },
   { key: 'B', name: '智能改写' },
+  { key: 'O', name: '原创度检测' },
   { key: 'F', name: '分句分段' },
   { key: 'D', name: '图书识别' },
   { key: 'CP', name: '人物反推' },

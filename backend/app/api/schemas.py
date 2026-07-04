@@ -24,6 +24,8 @@ class TaskCreate(BaseModel):
     voice_speed: float = 1.0     # 配音语速 0.5~2.0
     voice: str | None = None     # 配音员音色 ID（空=用配置页默认）
     reference_image: str | None = None  # 主角参考图暂存路径（来自 /tasks/upload-reference）
+    # 多参考图：[{"key": "角色名/场景", "path": "暂存路径"}, ...]，key 用于匹配分镜中的出场角色
+    reference_images: list[dict] | None = None
     audio_file: str | None = None       # 上传音频暂存路径（来自 /tasks/upload-audio，唱歌·MV模式用）
     lyrics: str | None = None           # 歌词文本（唱歌·MV模式用，每句一行）
     bgm: str = ""                # 背景音乐：空=无；文件名（来自配置 bgm 目录）

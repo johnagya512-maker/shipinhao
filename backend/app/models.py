@@ -43,7 +43,9 @@ class Task(Base):
     narrative_perspective: Mapped[str] = mapped_column(String(10), default="auto")
     voice_speed: Mapped[float] = mapped_column(Numeric(3, 2), default=1.0)
     voice: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    reference_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reference_image: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 单参考图（向后兼容）
+    # 多参考图：[{"key": "角色名/场景", "path": "绝对路径"}, ...]，用于多人物/多场景各自绑定参考图
+    reference_images: Mapped[list | None] = mapped_column(JSON, nullable=True)
     audio_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
     lyrics: Mapped[str | None] = mapped_column(Text, nullable=True)
     bgm: Mapped[str | None] = mapped_column(String(120), nullable=True)

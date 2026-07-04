@@ -100,6 +100,22 @@ export const api = {
     }
     return res.json() as Promise<{ reference_image: string }>
   },
+  // 批量上传多参考图（多角色各自绑定），keys 为角色名数组
+  uploadReferenceMulti: async (files: File[], keys: string[]) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f)
+    fd.append('keys', JSON.stringify(keys))
+    const res = await fetch(`${BASE}/tasks/upload-reference-multi`, {
+      method: 'POST', headers: { ...authHeaders() }, body: fd,
+    })
+    if (!res.ok) {
+      let detail: unknown = res.statusText
+      try { detail = (await res.json()).detail } catch { /* 非 JSON */ }
+      const { message, code } = parseDetail(detail)
+      throw new ApiError(message, res.status, code)
+    }
+    return res.json() as Promise<{ reference_images: { key: string; path: string | null; error?: string }[] }>
+  },
   uploadAudioTemp: async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -187,6 +203,18 @@ export const api = {
 
   // 一键 AI 合规改写：针对停在 H 的残余违规点定向软化一轮，改完重审仍停确认页。
   complianceFix: (id: string) => request<TaskOut>(`/tasks/${id}/compliance-fix`, { method: 'POST' }),
+
+  // 相似度检测：对比原文与改写稿，返回检测结果。
+  originalityCheck: (id: string) => request<{
+    passed: boolean
+    similarity_ratio: number
+    longest_overlap: number
+    overlap_fragments: string[]
+    details: Record<string, unknown>
+  }>(`/tasks/${id}/originality-check`, { method: 'POST' }),
+
+  // 继续降重：对当前改写稿再做一次针对性降重，回写 B 产物并复测。
+  originalityRewrite: (id: string) => request<TaskOut>(`/tasks/${id}/originality-rewrite`, { method: 'POST' }),
 
   // 只换标题/标签：重新生成短标题+长标题+热门标签，其他产物不动。
   regenerateTitles: (id: string) => request<TaskOut>(`/tasks/${id}/regenerate-titles`, { method: 'POST' }),

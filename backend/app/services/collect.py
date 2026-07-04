@@ -49,7 +49,8 @@ _PLATFORM_HINTS = [
     ("xiaohongshu", ("xiaohongshu.com", "xhslink.com", "xhs.cn")),
     ("bilibili", ("bilibili.com", "b23.tv", "bili2233")),
     ("weibo", ("weibo.com", "weibo.cn", "t.cn")),
-    ("wechat", ("channels.weixin.qq.com", "finder", "weixin.qq.com/finder")),
+    ("wechat", ("channels.weixin.qq.com", "finder", "weixin.qq.com/finder",
+                "v.weixin.qq.com", "wxaurl.cn", "support.weixin.qq.com")),
 ]
 
 

@@ -1,4 +1,5 @@
 """文案类模块 A/B/D/F/H。每个函数接收输入与 LLM 配置，返回结果与 token 用量。"""
+import difflib
 import json
 import re
 from app.modules import prompts
@@ -340,23 +341,31 @@ def run_split_for_storyboard(provider, model, key, script_text):
 
 
 def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus="",
-                   character_desc=None):
+                   character_desc=None, character_keys=None):
     """Step「画面脚本」：把口播文案拆成 n_scenes 个分镜，每个分镜含：
-      cap=对应口播原文, desc_prompt=完整绘图提示词, has_character=是否主角出场。
+      cap=对应口播原文, desc_prompt=完整绘图提示词, has_character=是否主角出场,
+      character_key=出场角色标识（可选）。
     character_desc 非空时，要求人物出场的分镜把该特征写进 desc_prompt（角色一致性）。
+    character_keys 非空时，要求 LLM 输出 character_key 以标识出场角色（匹配多参考图）。
     生成后做质检：检测批次内 desc_prompt 末尾模板化雷同，命中则让 LLM 整批重写一次。
     返回 {"scenes": [...], "diagnostic": {...}}, r。
     失败/数量不符时由调用方兜底。兼容老格式（纯字符串/desc 字段）。"""
     n = max(1, int(n_scenes))
     if character_desc:
         char_clause = (f"主角形象统一为：{character_desc}。"
-                       "在 has_character=true 的分镜里，把这个主角特征自然融进 desc_prompt，"
-                       "保证是同一个人；不同分镜只变姿态/角度/环境/景别。")
+                       "在 has_character=true 的分镜里，必须严格使用上述主角特征（尤其是性别）融进 desc_prompt，"
+                       "【严禁改变主角性别】，保证是同一个人；不同分镜只变姿态/角度/环境/景别。"
+                       f"主角性别必须是「{character_desc[:20]}」中描述的性别，不得生成异性角色。")
     else:
         char_clause = "若有主角贯穿，保持其外貌在各分镜一致（同一发型/脸型/服饰风格），只变姿态角度环境。"
 
+    # 多角色参考图：让 LLM 输出 character_key 标识出场角色
+    character_key_field, character_key_json = _build_character_key_clause(character_keys)
+
     prompt = _render(prompts.MODULE_S, script=script_text, n_scenes=n,
-                     rewrite_focus=rewrite_focus or "", char_clause=char_clause)
+                     rewrite_focus=rewrite_focus or "", char_clause=char_clause,
+                     character_key_field=character_key_field,
+                     character_key_json=character_key_json)
     r = call_llm(provider, model, key, prompt)
     try:
         data = _extract_json(r.text)
@@ -372,7 +381,8 @@ def run_storyboard(provider, model, key, script_text, n_scenes, rewrite_focus=""
         try:
             rewrite_prompt = _render(prompts.MODULE_S_REWRITE, reason=reason,
                                      char_clause=char_clause,
-                                     scenes_json=json.dumps(scenes, ensure_ascii=False))
+                                     scenes_json=json.dumps(scenes, ensure_ascii=False),
+                                     character_key_json=character_key_json)
             r2 = call_llm(provider, model, key, rewrite_prompt)
             data2 = _extract_json(r2.text)
             rewritten = _parse_scenes(data2.get("scenes", []))
@@ -442,11 +452,12 @@ def split_for_storyboard(script_text: str, target_chars: int = 40,
 
 
 def run_storyboard_for_segments(provider, model, key, segments, rewrite_focus="",
-                                character_desc=None):
+                                character_desc=None, character_keys=None):
     """【配音严格用原文】模式的画面脚本：输入已切好的原文段列表，为每段配 desc_prompt。
     cap 由程序强制填为原文段（LLM 不碰文案），保证配音/字幕念的就是你的原文、一字不改，
     且画面与配音按段号一一对齐。
-    segments: [{"text": "原文段"}, ...]。返回 {"scenes":[{cap,desc_prompt,has_character}],...}, r。
+    segments: [{"text": "原文段"}, ...]。返回 {"scenes":[{cap,desc_prompt,has_character,character_key}],...}, r。
+    character_keys 非空时，要求 LLM 输出 character_key 以标识出场角色（匹配多参考图）。
     LLM 输出数量/解析异常时兜底：用原文段做 cap、desc_prompt 兜底为原文截断。"""
     texts = [str((s.get("text") if isinstance(s, dict) else s) or "").strip() for s in segments]
     texts = [t for t in texts if t]
@@ -456,14 +467,20 @@ def run_storyboard_for_segments(provider, model, key, segments, rewrite_focus=""
 
     if character_desc:
         char_clause = (f"主角形象统一为：{character_desc}。"
-                       "在 has_character=true 的段里，把这个主角特征自然融进 desc_prompt，"
-                       "保证是同一个人；不同段只变姿态/角度/环境/景别。")
+                       "在 has_character=true 的段里，必须严格使用上述主角特征（尤其是性别）融进 desc_prompt，"
+                       "【严禁改变主角性别】，保证是同一个人；不同段只变姿态/角度/环境/景别。"
+                       f"主角性别必须是「{character_desc[:20]}」中描述的性别，不得生成异性角色。")
     else:
         char_clause = "若有主角贯穿，保持其外貌在各段一致（同一发型/脸型/服饰风格），只变姿态角度环境。"
 
+    # 多角色参考图：让 LLM 输出 character_key 标识出场角色
+    character_key_field, character_key_json = _build_character_key_clause(character_keys)
+
     numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
     prompt = _render(prompts.MODULE_S_BY_SEG, n_scenes=n, rewrite_focus=rewrite_focus or "",
-                     char_clause=char_clause, numbered_segments=numbered)
+                     char_clause=char_clause, numbered_segments=numbered,
+                     character_key_field=character_key_field,
+                     character_key_json=character_key_json)
     r = call_llm(provider, model, key, prompt)
 
     # 解析 LLM 的画面，按 seg 段号对齐回原文段；缺失的段用兜底画面。cap 一律用原文段。
@@ -482,6 +499,7 @@ def run_storyboard_for_segments(provider, model, key, segments, rewrite_focus=""
                 desc_by_seg[idx] = {
                     "desc_prompt": str(item.get("desc_prompt") or "").strip(),
                     "has_character": bool(item.get("has_character", True)),
+                    "character_key": str(item.get("character_key", "") or "").strip() or None,
                 }
     except (json.JSONDecodeError, ValueError):
         pass
@@ -492,15 +510,17 @@ def run_storyboard_for_segments(provider, model, key, segments, rewrite_focus=""
         dp = d.get("desc_prompt") or text[:40]  # LLM 漏配的段：用原文截断兜底，不留空
         scenes.append({"id": i + 1, "cap": text,  # cap 强制=原文段，LLM 不碰
                        "desc_prompt": dp,
-                       "has_character": d.get("has_character", True)})
+                       "has_character": d.get("has_character", True),
+                       "character_key": d.get("character_key")})
     fell_back = len(desc_by_seg) < n
     return {"scenes": scenes, "diagnostic": {"fell_back": fell_back,
                                              "missing": n - len(desc_by_seg)}}, r
 
 
 def _parse_scenes(raw) -> list[dict]:
-    """把 scenes 原始输出归一成 [{"id", "cap", "desc_prompt", "has_character"}]。
-    兼容历史格式：dict 里旧字段名 desc → desc_prompt；纯字符串 → desc_prompt，默认有人物。"""
+    """把 scenes 原始输出归一成 [{"id", "cap", "desc_prompt", "has_character", "character_key"}]。
+    兼容历史格式：dict 里旧字段名 desc → desc_prompt；纯字符串 → desc_prompt，默认有人物。
+    character_key 标识该镜头出场的角色（用于匹配对应参考图），可选字段。"""
     out = []
     for i, x in enumerate(raw):
         if isinstance(x, dict):
@@ -512,12 +532,34 @@ def _parse_scenes(raw) -> list[dict]:
                 "cap": str(x.get("cap", "")).strip(),
                 "desc_prompt": dp,
                 "has_character": bool(x.get("has_character", True)),
+                "character_key": str(x.get("character_key", "") or "").strip() or None,
             })
         else:
             s = str(x).strip()
             if s:
-                out.append({"id": i + 1, "cap": "", "desc_prompt": s, "has_character": True})
+                out.append({"id": i + 1, "cap": "", "desc_prompt": s,
+                            "has_character": True, "character_key": None})
     return out
+
+
+def _build_character_key_clause(character_keys: list[str] | None) -> tuple[str, str]:
+    """根据可用的角色 key 列表，生成 SB 提示词中 character_key 字段说明和 JSON 示例片段。
+    返回 (character_key_field, character_key_json)：
+      - character_key_field: 插入到字段列表中的说明文字（无多角色时返回空字符串）
+      - character_key_json: 插入到 JSON 示例中的片段（如 ',"character_key": "霍英东"'）
+    """
+    if not character_keys:
+        return "", ""
+    # 过滤空值
+    keys = [k.strip() for k in character_keys if k and k.strip()]
+    if not keys:
+        return "", ""
+    keys_str = "、".join(keys)
+    field = (f"- character_key：此镜头出场角色的标识（从以下角色中选一个：{keys_str}）。"
+             f"无人物出场或无法确定时输出 null。")
+    # JSON 示例片段
+    json_seg = f',"character_key": "{keys[0]}"'
+    return field, json_seg
 
 
 def _detect_template_tail(scenes, min_batch=4, tail_len=12) -> str | None:
@@ -701,3 +743,194 @@ def _rule_match(text: str, track: str = "character_story"):
         "high": [w for w in high_words if _match_word(text, w)],
         "warn": [w for w in warn_words if _match_word(text, w)],
     }
+
+
+def _normalize_for_compare(text: str) -> str:
+    """去除标点、空格、数字，保留汉字和字母；用 '|' 保留句界，
+    避免跨句拼接后误把两段不相关的话算成连续雷同。"""
+    sentences = re.split(r"(?<=[。！？!?；;…])", text)
+    out: list[str] = []
+    for s in sentences:
+        s = re.sub(r"[\s\d]+", "", s)
+        s = re.sub(r"[^\u4e00-\u9fa5a-zA-Z]", "", s)
+        if s:
+            out.append(s)
+    return "|".join(out).lower()
+
+
+def _split_sentences(text: str) -> list[str]:
+    """按句末标点把文本切成句子列表，保留有效汉字/字母。"""
+    raw = re.split(r"(?<=[。！？!?；;…])", text)
+    out: list[str] = []
+    for s in raw:
+        s = re.sub(r"[^\u4e00-\u9fa5a-zA-Z]", "", s)
+        if s:
+            out.append(s)
+    return out
+
+
+def _sentence_pair_similarity(s1: str, s2: str) -> float:
+    """单句相似度：基于最长公共子串 / 平均句长。"""
+    if not s1 or not s2:
+        return 0.0
+    sm = difflib.SequenceMatcher(None, s1, s2)
+    m = sm.find_longest_match(0, len(s1), 0, len(s2))
+    avg_len = (len(s1) + len(s2)) / 2
+    if avg_len == 0:
+        return 0.0
+    return m.size / avg_len
+
+
+def _sentence_level_similarity(a: str, b: str) -> float:
+    """句子级相似度：对改写稿每句，找原文最相似的句子，取平均。
+    能发现"整句照搬但中间插了几个字"的改写偷懒。"""
+    a_sents = _split_sentences(a)
+    b_sents = _split_sentences(b)
+    if not a_sents or not b_sents:
+        return 0.0
+    total = 0.0
+    for bs in b_sents:
+        best = max(_sentence_pair_similarity(bs, ast) for ast in a_sents)
+        total += best
+    return total / len(b_sents)
+
+
+def _lcs_penalty(longest: int, avg_len: float) -> float:
+    """长段直接复制的惩罚分：连续雷同越长惩罚越重，超过 25 字接近顶格。"""
+    if longest < 8:
+        return 0.0
+    return min(1.0, longest / 25.0) * min(1.0, longest / max(avg_len, 1.0))
+
+
+def _find_long_matches(a: str, b: str, min_len: int) -> list[str]:
+    """用 SequenceMatcher 循环找出 a 与 b 中长度 >= min_len 的公共子串。
+    每次找到后遮蔽该区域，避免重复命中同一位置。"""
+    matches: list[str] = []
+    a_work = a
+    while True:
+        sm = difflib.SequenceMatcher(None, a_work, b)
+        m = sm.find_longest_match(0, len(a_work), 0, len(b))
+        if m.size < min_len:
+            break
+        matches.append(a_work[m.a:m.a + m.size])
+        a_work = a_work[:m.a] + "\x00" * m.size + a_work[m.a + m.size:]
+    return matches
+
+
+def _ngram_similarity(a: str, b: str, n: int = 3) -> float:
+    """计算 a、b 的 n-gram 集合重叠率（以较小集合为分母）。"""
+    if len(a) < n or len(b) < n:
+        return 0.0
+    a_grams = {a[i:i + n] for i in range(len(a) - n + 1)}
+    b_grams = {b[i:i + n] for i in range(len(b) - n + 1)}
+    if not a_grams or not b_grams:
+        return 0.0
+    inter = len(a_grams & b_grams)
+    return inter / min(len(a_grams), len(b_grams))
+
+
+def check_originality(original: str, rewritten: str,
+                      min_overlap_chars: int = 12,
+                      max_similarity_ratio: float = 0.40) -> dict:
+    """本地原创度检测：多维度综合评估改写稿与原文的相似度。
+
+    维度：
+    - 3-gram / 5-gram / 7-gram 集合重叠率（捕捉词汇级、短语级雷同）
+    - 句子级平均相似度（捕捉整句照搬/小改）
+    - 最长连续公共子串（捕捉直接复制长段）
+
+    综合相似度 = 0.30*sim3 + 0.25*sim5 + 0.20*sim7 + 0.15*sentence_sim + 0.10*lcs_penalty
+    通过条件：综合相似度 < max_similarity_ratio 且 longest_overlap < min_overlap_chars。
+    """
+    a = _normalize_for_compare(original or "")
+    b = _normalize_for_compare(rewritten or "")
+    if not a or not b:
+        return {
+            "passed": True,
+            "similarity_ratio": 0.0,
+            "longest_overlap": 0,
+            "overlap_fragments": [],
+            "details": {"reason": "空文本，跳过检测"},
+        }
+
+    fragments = _find_long_matches(a, b, min_overlap_chars)
+    longest = len(fragments[0]) if fragments else 0
+
+    sim_3 = _ngram_similarity(a, b, n=3)
+    sim_5 = _ngram_similarity(a, b, n=5)
+    sim_7 = _ngram_similarity(a, b, n=7)
+    sentence_sim = _sentence_level_similarity(a, b)
+    avg_len = (len(a) + len(b)) / 2
+    lcs_pen = _lcs_penalty(longest, avg_len)
+
+    similarity_ratio = (
+        0.30 * sim_3 +
+        0.25 * sim_5 +
+        0.20 * sim_7 +
+        0.15 * sentence_sim +
+        0.10 * lcs_pen
+    )
+    similarity_ratio = round(similarity_ratio, 4)
+
+    # 长段直接复制做兜底：即使综合得分没超，连续雷同过长也判不通过
+    passed = longest < min_overlap_chars and similarity_ratio < max_similarity_ratio
+
+    return {
+        "passed": bool(passed),
+        "similarity_ratio": similarity_ratio,
+        "longest_overlap": longest,
+        "overlap_fragments": fragments,
+        "details": {
+            "min_overlap_chars": min_overlap_chars,
+            "max_similarity_ratio": max_similarity_ratio,
+            "3gram_similarity": round(sim_3, 4),
+            "5gram_similarity": round(sim_5, 4),
+            "7gram_similarity": round(sim_7, 4),
+            "sentence_similarity": round(sentence_sim, 4),
+            "lcs_penalty": round(lcs_pen, 4),
+            "fragment_count": len(fragments),
+        },
+    }
+
+
+def run_rewrite_decrease_similarity(provider, model, key, original: str, rewritten: str,
+                                    check_result: dict) -> tuple[dict, LLMResult]:
+    """根据原创度检测结果，对雷同片段进行针对性降重改写。
+    返回 {"script": 改写后正文}, LLMResult。"""
+    fragments = check_result.get("overlap_fragments") or []
+    similarity_ratio = check_result.get("similarity_ratio", 0.0)
+    longest = check_result.get("longest_overlap", 0)
+
+    if fragments:
+        fragments_text = "\n".join(f"- {f}" for f in fragments[:10])
+    else:
+        fragments_text = "（全文表达与原文过于接近，需要整体换说法）"
+
+    prompt = f"""你是一位短视频口播文案降重专家。下面这段改写稿经程序检测与原文相似度过高，需要进一步降低字面相似度，但**必须保留爆款结构和情绪内核**，不能为了降重把稿子改废。
+
+【原文】
+{original}
+
+【当前改写稿】
+{rewritten}
+
+【检测结果】
+- 综合相似度：{similarity_ratio:.1%}
+- 最长连续雷同：{longest} 字
+- 必须改写的雷同片段：
+{fragments_text}
+
+【降重要求】
+1. **只改字面和句式，不改爆款骨架**：
+   - 保留开篇黄金钩子的「类型」和「心理机制」（悬念/反差/痛点/数字），可换措辞，不可把钩子改弱或改没。
+   - 保留原文的情绪节奏和爆点推进顺序，不可打乱叙事逻辑。
+   - 保留结尾转化/互动结构，只变表达。
+2. **彻底改写雷同片段**：换句式、换角度、换措辞、调整信息顺序，禁止直接复制原文连续12字以上。
+3. **保持核心事实、人物、时间、数据不变**；保持情绪内核和口播节奏。
+4. 适合短视频口播，口语化自然，不要AI腔。
+5. 输出完整改写后的正文，不要只输出修改部分，也不要输出解释。
+
+请直接输降重后的完整正文："""
+
+    r = call_llm(provider, model, key, prompt, temperature=0.9)
+    return {"script": r.text.strip()}, r

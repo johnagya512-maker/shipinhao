@@ -1,4 +1,4 @@
-"""绘图客户端。封装配图生成，支持 doubao/kling/tongyi。
+"""绘图客户端。封装配图生成，支持 doubao/kling/tongyi/jimeng。
 
 注：各供应商绘图 API 形态差异较大且多为异步任务制，此处提供统一同步封装与
 mock 模式（无 Key 或 provider=mock 时返回占位图），便于 G 模块与端到端先跑通。
@@ -453,7 +453,7 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                    model: str | None = None, timeout: float = 60.0,
                    aspect_ratio: str = "9:16", ref_uri: str | None = None,
                    base_url: str | None = None, proxy: str | None = None,
-                   grayscale: bool = False) -> ImageResult:
+                   grayscale: bool = False, no_crop: bool = False) -> ImageResult:
     """生成单张配图。无 Key 或 provider=mock 时走占位图。
     ref_uri 非空时走图生图（把参考图作为 image 传入），用于人物镜头保持主角一致性
     （同一个人、不同场景——提示词须明确"保持面部不变、改变场景姿势"，见 build_image_prompts）；
@@ -466,6 +466,8 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         return ImageResult(str(out_path), sub_type, suggested_duration, {"mock": True})
 
     # 真实供应商：此处仅给出统一调用骨架，具体协议按 provider 补全。
+    # 整段包 try：任何未预期异常（JSON 解析失败 / 下标越界 / 写文件 / PIL 处理等）都转 ImageError，
+    # 让上层 with_retry 重试、_gen_with_fallback 降级占位，避免裸异常穿透成 HTTP 500。
     try:
         url = _endpoint(provider, base_url)
 
@@ -475,18 +477,16 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
                                 model or "gpt-image-2", timeout, proxy,
                                 ref_uri=ref_uri, label="配图")
             out_path.write_bytes(imgs[0])
-            _normalize(out_path, size=(w, h), grayscale=grayscale)
+            _normalize(out_path, size=(w, h), grayscale=grayscale, no_crop=no_crop)
             return ImageResult(str(out_path), sub_type, suggested_duration, {})
 
-        # OpenAI 兼容协议分支（中转站或 gpt 模型）：简化 payload，与豆包官方API不同。
-        # 中转站(tu-zi等)不管模型名是 gpt 还是 doubao，都必须用 OpenAI 标准格式。
+        # OpenAI 兼容协议分支（中转站或 gpt 模型）：统一使用 JSON 格式传递 image 字段
+        # 中转站(tu-zi等)不支持 multipart/edits 接口，必须用 JSON 格式
         if _is_gpt(model, base_url):
-            # 图生图：统一走 JSON 格式传 image 字段（edits/multipart 接口中转站不支持，会报 451 InvalidParam）。
-            # 组图也用同样方式，两条路径保持一致。
             imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio), 1,
                                 model, timeout, proxy, label="配图", ref_uri=ref_uri)
             out_path.write_bytes(imgs[0])
-            _normalize(out_path, size=(w, h), grayscale=grayscale)
+            _normalize(out_path, size=(w, h), grayscale=grayscale, no_crop=no_crop)
             return ImageResult(str(out_path), sub_type, suggested_duration, {})
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         # 豆包（火山方舟）Seedream 文生图：必须带 model（模型 ID / 接入点 ID）。
@@ -504,50 +504,56 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         if proxy:
             _kw["proxy"] = proxy
         resp = httpx.post(url, json=payload, headers=headers, **_kw)
+
+        if resp.status_code == 401:
+            raise ImageError("绘图 API Key 无效", retryable=False)
+        if resp.status_code == 429:
+            raise ImageError("绘图限流", retryable=True)
+        if resp.status_code >= 500:
+            raise ImageError(f"绘图服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
+        if resp.status_code >= 400:
+            body = resp.text[:300]
+            low = body.lower()
+            # 451 = 内容审核拦截（HTTP 451 Unavailable For Legal Reasons，国内中转站常用此码表示审核）。
+            # 原样重试无用，标 audit=True 交上层 LLM 改写补救。
+            if resp.status_code == 451:
+                raise ImageError(f"配图被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
+            # 区分两类审核：输入文案敏感（InputText…）重试无用——同一 prompt 必然再被拒，
+            # 直接判不可重试、由编排降级占位，省得白烧请求和钱；输出图片误判（OutputImage…）
+            # 有随机性，标记可重试让上层 re-roll。
+            if "inputtext" in low and "sensitive" in low:
+                # 输入文案敏感：原样重发必再被拒(retryable=False不盲目重试), 但标 audit=True
+                # 让上层降级占位+LLM改写补救(改个说法就能过)——这才是输入敏感的正确解法。
+                raise ImageError(f"配图输入文案被审核拒绝(可改写): {body}", retryable=False, audit=True)
+            if "SensitiveContent" in body or "sensitive" in low:
+                # 输出图片被审核拒绝：不在后台自动退避重试(retryable=False，不触发 IMG_RETRY 反复烧钱)，
+                # 标 audit=True 直接降级占位+原因，等用户在画廊手动「重新生成」。是否再花钱由用户决定。
+                raise ImageError(f"配图被内容审核拒绝(可手动重生): {body}", retryable=False, audit=True)
+            # 其他 4xx（model 不对 / 参数不符等）透出真实报错，不可重试。
+            raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
+
+        data = resp.json().get("data") or []
+        if not data or not data[0].get("url"):
+            # 豆包/中转站返 200 但 data 空(同 gpt 返空场景): 标 retryable=False 不自动重试,
+            # 降级占位等手动重生。避免旧代码 resp.json()["data"][0] 直接 IndexError:
+            # 后台靠双保险兜住, 但单图重试路径会 500 没占位。显式抛 ImageError 两条路径都优雅占位。
+            raise ImageError(f"配图未返回图片(返空, 不自动重试): {str(resp.text)[:120]}", retryable=False)
+        img_url = data[0]["url"]
+        img_bytes = httpx.get(img_url, **_kw).content
+        out_path.write_bytes(img_bytes)
+        # 统一缩放到目标比例尺寸（黑白风格强制转灰度）
+        _normalize(out_path, size=(w, h), grayscale=grayscale, no_crop=no_crop)
+        return ImageResult(str(out_path), sub_type, suggested_duration, {})
+    except ImageError:
+        raise  # 已是 ImageError 直接向上抛
     except httpx.TimeoutException as e:
         raise ImageError(f"配图超时: {e}", retryable=True)
     except httpx.RequestError as e:
         raise ImageError(f"配图请求错误: {e}", retryable=True)
-
-    if resp.status_code == 401:
-        raise ImageError("绘图 API Key 无效", retryable=False)
-    if resp.status_code == 429:
-        raise ImageError("绘图限流", retryable=True)
-    if resp.status_code >= 500:
-        raise ImageError(f"绘图服务端错误 {resp.status_code}: {resp.text[:300]}", retryable=True)
-    if resp.status_code >= 400:
-        body = resp.text[:300]
-        low = body.lower()
-        # 451 = 内容审核拦截（HTTP 451 Unavailable For Legal Reasons，国内中转站常用此码表示审核）。
-        # 原样重试无用，标 audit=True 交上层 LLM 改写补救。
-        if resp.status_code == 451:
-            raise ImageError(f"配图被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
-        # 区分两类审核：输入文案敏感（InputText…）重试无用——同一 prompt 必然再被拒，
-        # 直接判不可重试、由编排降级占位，省得白烧请求和钱；输出图片误判（OutputImage…）
-        # 有随机性，标记可重试让上层 re-roll。
-        if "inputtext" in low and "sensitive" in low:
-            # 输入文案敏感：原样重发必再被拒(retryable=False不盲目重试), 但标 audit=True
-            # 让上层降级占位+LLM改写补救(改个说法就能过)——这才是输入敏感的正确解法。
-            raise ImageError(f"配图输入文案被审核拒绝(可改写): {body}", retryable=False, audit=True)
-        if "SensitiveContent" in body or "sensitive" in low:
-            # 输出图片被审核拒绝：不在后台自动退避重试(retryable=False，不触发 IMG_RETRY 反复烧钱)，
-            # 标 audit=True 直接降级占位+原因，等用户在画廊手动「重新生成」。是否再花钱由用户决定。
-            raise ImageError(f"配图被内容审核拒绝(可手动重生): {body}", retryable=False, audit=True)
-        # 其他 4xx（model 不对 / 参数不符等）透出真实报错，不可重试。
-        raise ImageError(f"配图被拒 {resp.status_code}: {body}", retryable=False)
-
-    data = resp.json().get("data") or []
-    if not data or not data[0].get("url"):
-        # 豆包/中转站返 200 但 data 空(同 gpt 返空场景): 标 retryable=False 不自动重试,
-        # 降级占位等手动重生。避免旧代码 resp.json()["data"][0] 直接 IndexError:
-        # 后台靠双保险兜住, 但单图重试路径会 500 没占位。显式抛 ImageError 两条路径都优雅占位。
-        raise ImageError(f"配图未返回图片(返空, 不自动重试): {str(resp.text)[:120]}", retryable=False)
-    img_url = data[0]["url"]
-    img_bytes = httpx.get(img_url, **_kw).content
-    out_path.write_bytes(img_bytes)
-    # 统一缩放到目标比例尺寸（黑白风格强制转灰度）
-    _normalize(out_path, size=(w, h), grayscale=grayscale)
-    return ImageResult(str(out_path), sub_type, suggested_duration, {})
+    except Exception as e:
+        # 兜底：JSON 解析失败 / IndexError / IOError / PIL 错误等任何未预期异常。
+        # 标 retryable=False 不自动重试（这类错误重试也无用），降级占位等用户手动重生。
+        raise ImageError(f"配图异常: {type(e).__name__}: {e}", retryable=False)
 
 
 # 豆包组图单次上限（实测 max_images=15 实际只返回 9）
@@ -572,9 +578,11 @@ def _grid_canvas_size(aspect_ratio: str | None) -> tuple[int, int]:
 
 
 def _make_grid_template(path: Path, cw_total: int = GRID_CANVAS, ch_total: int | None = None,
-                        line: int = GRID_LINE):
+                        line: int = GRID_LINE, ref_uri: str | None = None):
     """画一张 3×3 白底+浅灰格子的网格模板，作为图生图参考图，给模型「填格」用。
-    支持非方形画布(横版传 ch_total)。"""
+    支持非方形画布(横版传 ch_total)。
+    ref_uri 非空时，把人物参考图嵌入到第一个格子中，作为人物示例，
+    这样模型既能看懂网格结构，又能参考人物外貌保持一致性。"""
     from PIL import ImageDraw
     if ch_total is None:
         ch_total = cw_total
@@ -586,47 +594,67 @@ def _make_grid_template(path: Path, cw_total: int = GRID_CANVAS, ch_total: int |
         r, c = i // cols, i % cols
         d.rectangle([c * cw + line, r * ch + line,
                      (c + 1) * cw - line, (r + 1) * ch - line], fill=(235, 235, 235))
+    # 有人物参考图时，把人物肖像嵌入到第一个格子中作为示例
+    if ref_uri:
+        try:
+            import base64
+            import io
+            # 解析 data URI
+            if ref_uri.startswith("data:image/"):
+                header, b64_data = ref_uri.split(",", 1)
+                ref_bytes = base64.b64decode(b64_data)
+            else:
+                ref_bytes = Path(ref_uri).read_bytes()
+            ref_img = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
+            # 把人物图缩放到第一个格子的大小（留边距）
+            margin = line * 3
+            box = (0 * cw + margin, 0 * ch + margin,
+                   1 * cw - margin, 1 * ch - margin)
+            rw, rh = box[2] - box[0], box[3] - box[1]
+            ref_img = ref_img.resize((rw, rh), Image.LANCZOS)
+            img.paste(ref_img, (box[0], box[1]))
+        except Exception:
+            pass  # 嵌入失败不影响模板功能
     img.save(path, "PNG")
 
 
 def _split_grid(grid_path: Path, out_paths: list, sub_types: list, durations: list,
                 aspect_ratio: str = "9:16", grayscale: bool = False) -> list:
     """把一张规整 3×3 大图切成 ≤9 张单图，写到各 out_path，返回 ImageResult 列表。
-    竖版(9:16)：每格中心裁出 9:16 再归一化；其它比例：每格直接归一化。
+    竖版(9:16)：每格中心裁出 9:16 再缩放；其它比例：每格直接缩放。
     out_paths 不足 9 个时只切前 len(out_paths) 格。grayscale=True 时每格强制转黑白。"""
     w, h = _dims_for(aspect_ratio)
     img = Image.open(grid_path).convert("RGB")
     GW, GH = img.size
     rows, cols = GRID_RC
     cw, ch = GW // cols, GH // rows
-    # 每格向内收缩裁边：模型画的白色分隔线有宽度、且 9 格不完全等大，硬按 1/3 均分会切到
-    # 白线或邻格（表现为成片边缘有白边/画面偏格）。向内收 ~7% 裁掉外圈白线区，保证画面干净。
-    inset_x = int(cw * 0.07)
-    inset_y = int(ch * 0.07)
     res = []
     for i, (op, st, du) in enumerate(zip(out_paths, sub_types, durations)):
         if i >= GRID_CELLS:
             break
         r, c = i // cols, i % cols
-        # 先按格定位，四边各向内收 inset，避开白色分隔线
-        x0, y0 = c * cw + inset_x, r * ch + inset_y
-        x1, y1 = c * cw + cw - inset_x, r * ch + ch - inset_y
+        # 按格定位，四边各向内收缩7%裁掉外围白线残边（模型画的白色分隔线有宽度且格子不完全等大）
+        inset = 0.07
+        x0 = int(c * cw + cw * inset)
+        y0 = int(r * ch + ch * inset)
+        x1 = int(c * cw + cw * (1 - inset))
+        y1 = int(r * ch + ch * (1 - inset))
         cell = img.crop((x0, y0, x1, y1))
-        # 每格按【目标比例】中心裁切后再缩放，避免近正方形的格子被直接 resize 成 16:9/9:16
-        # 而横向或纵向拉伸（人物变胖/变扁、画面变扭）。对所有比例通用，不只竖版。
-        ccw, cch = cell.size
-        dst_ratio = w / h
-        src_ratio = ccw / cch
-        if src_ratio > dst_ratio:
-            # 格子比目标更宽：裁掉左右
-            tw = int(cch * dst_ratio)
-            left = max(0, (ccw - tw) // 2)
-            cell = cell.crop((left, 0, min(left + tw, ccw), cch))
-        elif src_ratio < dst_ratio:
-            # 格子比目标更高：裁掉上下
-            th = int(ccw / dst_ratio)
-            top = max(0, (cch - th) // 2)
-            cell = cell.crop((0, top, ccw, min(top + th, cch)))
+        # 方形画布(非 16:9)：每格天然接近正方形，直接 resize 成非方形目标比例会把人物拉变形，
+        # 须先居中裁出目标比例再缩放；16:9 画布本身每格已是 16:9，无需再裁（见 _grid_canvas_size）。
+        gcw, gch = _grid_canvas_size(aspect_ratio)
+        if gcw == gch:
+            ccw, cch = cell.size
+            cell_ratio = ccw / cch
+            target_ratio = w / h
+            if cell_ratio > target_ratio:
+                tw = int(cch * target_ratio)
+                left = max(0, (ccw - tw) // 2)
+                cell = cell.crop((left, 0, min(left + tw, ccw), cch))
+            elif cell_ratio < target_ratio:
+                th = int(ccw / target_ratio)
+                top = max(0, (cch - th) // 2)
+                cell = cell.crop((0, top, ccw, min(top + th, cch)))
         cell = cell.resize((w, h), Image.LANCZOS)
         if grayscale:
             cell = cell.convert("L").convert("RGB")
@@ -644,7 +672,9 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
     """九宫格省成本：传 3×3 模板作参考图，一次生成 1 张规整大图（按 1 张计费），本地切 ≤9 张。
     cell_prompt 已是拼好的九格 brief（含风格圣经）。失败抛 ImageError，由调用方整组占位。
     mock 模式直接逐格占位。out_paths 长度 ≤9。
-    注：no_crop 和 ref_uri 参数在九宫格模式下不适用，仅为兼容调用方保留。"""
+    ref_uri 非空时，把人物参考图嵌入到模板的第一个格子中，作为人物示例，
+    模型既能看懂网格结构，又能参考人物外貌保持一致性。
+    no_crop 参数在九宫格模式下不适用，仅为兼容调用方保留。"""
     n = len(out_paths)
     w, h = _dims_for(aspect_ratio)
     use_mock = (not api_key) or provider == "mock"
@@ -662,7 +692,8 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         grid_prompt = (
             "请把整张图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
             "用清晰的白色分隔线隔开。在每个格子里按从左到右、从上到下的编号填入"
-            "对应画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
+            "对应画面，每格背景/环境填满该格，但画面主体不必贴近特写、四周留出安全边距，"
+            "不要越过白色分隔线。\n\n"
             + cell_prompt + "\n\n不要在图片里放任何文字说明。"
         )
         imgs = _apib_request(url, api_key, grid_prompt, aspect_ratio, 1,
@@ -684,29 +715,38 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
     is_gpt_model = "gpt" in m or "dall" in m
     if _is_gpt(model, base_url) and is_gpt_model:
         url = _endpoint(provider, base_url)
+        # GPT 九宫格：使用 3×3 模板 + 参考图（与豆包一致）
+        import base64
+        gcw, gch = _grid_canvas_size(aspect_ratio)
+        tpl_path = out_paths[0].parent / "_grid_template.png"
+        _make_grid_template(tpl_path, gcw, gch, ref_uri=ref_uri)
+        tpl_uri = f"data:image/png;base64,{base64.b64encode(tpl_path.read_bytes()).decode()}"
         grid_prompt = (
-            "请把整张图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
-            "用清晰的白色分隔线隔开。在每个格子里按从左到右、从上到下的编号填入"
-            "对应画面，每格画面填满该格、主体居中、不要越过白色分隔线。\n\n"
+            "参考图是一张 3×3 九宫格模板，由白色分隔线划分成 9 个完全等大的灰色格子。\n"
+            "请严格保持参考图的网格结构和白色格线位置不变（格线必须笔直且等距，不能弯曲或偏移），"
+            "只在每个灰色格子里填入对应编号的照片画面。\n"
+            "【关键要求】每格的背景/环境必须完全填满整个格子，不能有留白或空白区域，"
+            "但画面主体不必贴近特写——主体完整入镜、四周留出安全边距，不要越过白色分隔线。\n\n"
             + cell_prompt + "\n\n不要在图片里放任何文字说明。"
         )
         # 横版用 1536x1024（兔子支持），竖版用正方形 1024x1024（兔子不支持 1024x1536）
         grid_size = "1536x1024" if (aspect_ratio or "9:16") == "16:9" else "1024x1024"
         imgs = _gpt_request(url, api_key, grid_prompt, grid_size, 1,
-                            model, timeout, proxy, label="九宫格")
+                            model, timeout, proxy, label="九宫格", ref_uri=tpl_uri)
         raw = out_paths[0].parent / "_grid_raw.png"
         raw.write_bytes(imgs[0])
         res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
-        try:
-            raw.unlink()
-        except Exception:
-            pass
+        for tmp in (tpl_path, raw):
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
         return res
 
     import base64
     gcw, gch = _grid_canvas_size(aspect_ratio)
     tpl_path = out_paths[0].parent / "_grid_template.png"
-    _make_grid_template(tpl_path, gcw, gch)
+    _make_grid_template(tpl_path, gcw, gch, ref_uri=ref_uri)
     tpl_uri = f"data:image/png;base64,{base64.b64encode(tpl_path.read_bytes()).decode()}"
 
     url = _endpoint(provider, base_url)
@@ -759,7 +799,7 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
                           model: str | None = None, timeout: float = 180.0,
                           aspect_ratio: str = "9:16", ref_uri: str | None = None,
                           base_url: str | None = None, proxy: str | None = None,
-                          grayscale: bool = False) -> list:
+                          grayscale: bool = False, no_crop: bool = False) -> list:
     """组图：一次请求生成多张（豆包 sequential_image_generation）。返回 ImageResult 列表。
     一次最多 BATCH_MAX 张；同批同次生成 → 风格统一；传 ref_uri → 多张保持同一个人。
     返回数量不足时：缺的那几张占位兜底（不自动单图补，避免多花请求；用户可在画廊多选后
@@ -776,12 +816,10 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
         return res
 
     url = _endpoint(provider, base_url)
-    # OpenAI 兼容协议组图分支：一次请求 n 张（单次 n 最多 10），返回 base64 逐张落盘。
-    # 支持参考图：有 ref_uri 时走 /v1/images/edits 实现人物一致性。
+    # OpenAI 兼容协议组图分支：统一使用 JSON 格式传递 image 字段
+    # 中转站不支持 multipart/edits 接口，必须用 JSON 格式
     if _is_gpt(model, base_url):
         try:
-            # 图生图：统一走 JSON 格式传 image 字段（edits/multipart 接口中转站不支持，会报 451 InvalidParam）。
-            # 单张和组图路径保持一致。
             imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio),
                                 min(n, 10), model, timeout, proxy, label="组图", ref_uri=ref_uri)
         except ImageError:
@@ -790,7 +828,7 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
         for i, op in enumerate(out_paths):
             if i < len(imgs):
                 op.write_bytes(imgs[i])
-                _normalize(op, size=(w, h), grayscale=grayscale)
+                _normalize(op, size=(w, h), grayscale=grayscale, no_crop=no_crop)
                 res.append(ImageResult(str(op), sub_types[i], durations[i], {}))
             else:
                 _placeholder(op, sub_types[i], (230, 230, 230), size=(w, h))
@@ -838,7 +876,7 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
             try:
                 img_bytes = httpx.get(data[i]["url"], **_kw).content
                 op.write_bytes(img_bytes)
-                _normalize(op, size=(w, h), grayscale=grayscale)
+                _normalize(op, size=(w, h), grayscale=grayscale, no_crop=no_crop)
                 return ImageResult(str(op), sub_types[i], durations[i], {})
             except Exception:
                 pass
@@ -863,29 +901,37 @@ def _endpoint(provider: str, base_url_override: str | None = None) -> str:
         "doubao": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
         "kling": "https://api.klingai.com/v1/images/generations",
         "tongyi": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis",
+        "jimeng": "https://api.jimeng.ai/v1/images/generations",
     }
     if provider not in eps:
         raise ImageError(f"未知绘图供应商: {provider}", retryable=False)
     return eps[provider]
 
 
-def _normalize(path: Path, size: tuple[int, int] = (WIDTH, HEIGHT), grayscale: bool = False):
-    """缩放并居中裁剪到目标尺寸。grayscale=True 时强制转黑白
-    （黑白风格下模型常不听文字、图生图更会照彩色参考出彩色，本地转灰度是唯一可靠解）。"""
+def _normalize(path: Path, size: tuple[int, int] = (WIDTH, HEIGHT), grayscale: bool = False,
+               no_crop: bool = False):
+    """缩放到目标尺寸。默认(no_crop=False)等比缩放后居中裁剪，画面撑满不留黑边。
+    no_crop=True 时只等比缩放到目标框内、不裁切，保留完整画面（用于 center_h 等下游会自动
+    补黑边的版式，避免裁掉人物头部——见 orchestrator.py 对 img_no_crop 的说明）。
+    grayscale=True 时强制转黑白（黑白风格下模型常不听文字、图生图更会照彩色参考出彩色，
+    本地转灰度是唯一可靠解）。"""
     target_w, target_h = size
     img = Image.open(path).convert("RGB")
     src_ratio = img.width / img.height
     dst_ratio = target_w / target_h
     if src_ratio > dst_ratio:
-        new_h = target_h
-        new_w = int(target_h * src_ratio)
+        fit_w, fit_h = target_w, int(target_w / src_ratio)
+        cover_h, cover_w = target_h, int(target_h * src_ratio)
     else:
-        new_w = target_w
-        new_h = int(target_w / src_ratio)
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    left = (new_w - target_w) // 2
-    top = (new_h - target_h) // 2
-    img = img.crop((left, top, left + target_w, top + target_h))
+        fit_w, fit_h = int(target_h * src_ratio), target_h
+        cover_w, cover_h = target_w, int(target_w / src_ratio)
+    if no_crop:
+        img = img.resize((fit_w, fit_h), Image.LANCZOS)
+    else:
+        img = img.resize((cover_w, cover_h), Image.LANCZOS)
+        left = (cover_w - target_w) // 2
+        top = (cover_h - target_h) // 2
+        img = img.crop((left, top, left + target_w, top + target_h))
     if grayscale:
         img = img.convert("L").convert("RGB")  # 转灰度再回RGB(保持3通道, 下游统一)
     img.save(path, "PNG")

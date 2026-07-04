@@ -1,5 +1,6 @@
 """任务相关路由。"""
 import uuid
+from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Query, Form
 from fastapi.responses import FileResponse
@@ -117,6 +118,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         aspect_ratio=body.aspect_ratio, layout=body.layout or "full",
         voice=body.voice, voice_speed=body.voice_speed, bgm=body.bgm or None,
         reference_image=(body.reference_image or None),
+        reference_images=body.reference_images or None,  # 多参考图：[{"key","path"}, ...]
         cost_limit=body.cost_limit, time_limit=body.time_limit,
         enable_subtitles=body.enable_subtitles, enable_animations=body.enable_animations,
         draft_template=body.draft_template or "classic",
@@ -386,7 +388,7 @@ async def upload_audio(task_id: str, bg: BackgroundTasks, file: UploadFile = Fil
     # 如果提供了歌词 → 做歌词对齐，写入 T 模块产物供合成使用
     if lyrics.strip():
         try:
-            seg_texts, seg_durations = align_lyrics(lyrics.strip(), str(audio_path))
+            seg_texts, seg_durations, paragraph_breaks = align_lyrics(lyrics.strip(), str(audio_path))
             t_mr = db.query(ModuleResult).filter_by(task_id=task_id, module="T").first()
             if not t_mr:
                 t_mr = ModuleResult(task_id=task_id, module="T")
@@ -395,6 +397,7 @@ async def upload_audio(task_id: str, bg: BackgroundTasks, file: UploadFile = Fil
             t_mr.output = {
                 "seg_texts": seg_texts,
                 "seg_durations": seg_durations,
+                "paragraph_breaks": paragraph_breaks,
                 "seg_source": "scene",
                 "aligned_by": "lyrics",
             }
@@ -458,6 +461,40 @@ async def upload_reference(file: UploadFile = File(...), db: Session = Depends(g
     ref_path = ref_dir / f"ref_{uuid.uuid4().hex[:12]}{ext}"
     ref_path.write_bytes(data)
     return {"reference_image": str(ref_path)}
+
+
+@router.post("/tasks/upload-reference-multi")
+async def upload_reference_multi(files: list[UploadFile] = File(...), keys: str = "[]",
+                                 db: Session = Depends(get_db)):
+    """批量上传多参考图，返回前端需结合 keys 自行组装。
+    
+    Args:
+        files: 参考图文件列表
+        keys: JSON 数组字符串，每个文件名对应的 key（角色名/场景标识）。
+              如 ["霍英东","张子强","空场景"]
+    
+    返回 {"reference_images": [{key, path, error?}, ...]}，与 files 一一对应（顺序、数量都不变，
+    前端按下标对齐结果），单个文件不合法只置 error 不影响其它文件，绝不静默丢弃整条记录。
+    """
+    import json
+    key_list = json.loads(keys) if keys else []
+    results = []
+    for i, f in enumerate(files):
+        key = key_list[i] if i < len(key_list) else f"role_{i+1}"
+        if f.content_type not in ALLOWED_IMAGE:
+            results.append({"key": key, "path": None, "error": "仅支持 JPG / PNG / WEBP"})
+            continue
+        data = await f.read()
+        if len(data) > MAX_REFERENCE_BYTES:
+            results.append({"key": key, "path": None, "error": "参考图过大（上限 8MB）"})
+            continue
+        ext = Path(f.filename or "ref.png").suffix or ".png"
+        ref_dir = storage_root(db) / "_reference_uploads"
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        ref_path = ref_dir / f"ref_{uuid.uuid4().hex[:12]}{ext}"
+        ref_path.write_bytes(data)
+        results.append({"key": key, "path": str(ref_path)})
+    return {"reference_images": results}
 
 
 @router.post("/tasks/upload-audio")
@@ -649,6 +686,97 @@ def compliance_fix(task_id: str, db: Session = Depends(get_db)):
         db.commit()
     db.refresh(task)
     return task
+
+
+@router.post("/tasks/{task_id}/originality-check")
+def originality_check(task_id: str, db: Session = Depends(get_db)):
+    """手动触发相似度检测：对比 A 清洗稿与 B 改写稿，返回检测结果并写入 O 模块产物。"""
+    from app.modules import text_modules as tm
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    a = db.query(ModuleResult).filter_by(task_id=task_id, module="A").first()
+    b = db.query(ModuleResult).filter_by(task_id=task_id, module="B").first()
+    if not a or not b:
+        raise HTTPException(400, detail="暂无可检测的文案产物（需完成 A/B 两步）")
+    cleaned = (a.output or {}).get("cleaned_text", "")
+    script = (b.output or {}).get("script", "")
+    if not cleaned.strip() or not script.strip():
+        raise HTTPException(400, detail="文案内容为空，无法检测")
+    result = tm.check_originality(cleaned, script, max_similarity_ratio=0.40)
+    mr = db.query(ModuleResult).filter_by(task_id=task_id, module="O").first()
+    if not mr:
+        mr = ModuleResult(task_id=task_id, module="O")
+        db.add(mr)
+    mr.status = "success"
+    mr.output = result
+    mr.finished_at = datetime.utcnow()
+    db.commit()
+    return result
+
+
+@router.post("/tasks/{task_id}/originality-rewrite", response_model=TaskOut)
+def originality_rewrite(task_id: str, db: Session = Depends(get_db)):
+    """继续降重：对当前改写稿再做一次针对性降重，回写 B 产物并更新 O 检测结果。
+    任务保持当前状态，不自动继续后续流程，让用户在详情页确认。"""
+    from app.modules import text_modules as tm
+    from app.core.security import decrypt
+    from app.modules.retry import with_retry
+    from app.services.llm import LLMError
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(404, detail="任务不存在")
+    a = db.query(ModuleResult).filter_by(task_id=task_id, module="A").first()
+    b = db.query(ModuleResult).filter_by(task_id=task_id, module="B").first()
+    if not a or not b:
+        raise HTTPException(400, detail="暂无可改写的文案产物（需完成 A/B 两步）")
+    cleaned = (a.output or {}).get("cleaned_text", "")
+    script = (b.output or {}).get("script", "")
+    if not cleaned.strip() or not script.strip():
+        raise HTTPException(400, detail="文案内容为空，无法改写")
+    cfg = db.get(Config, 1)
+    llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+    if not llm_key:
+        raise HTTPException(400, detail="未配置大模型 API Key，无法改写")
+    with _get_retry_lock(task_id):
+        # 先检测当前稿
+        check_result = tm.check_originality(cleaned, script, max_similarity_ratio=0.40)
+        if check_result["passed"]:
+            _save_o_result(db, task_id, check_result)
+            db.refresh(task)
+            return task
+        try:
+            (fix_out, _fr), _ = with_retry(lambda: tm.run_rewrite_decrease_similarity(
+                cfg.llm_provider, cfg.llm_model, llm_key,
+                cleaned, script, check_result), 2)
+        except LLMError as e:
+            raise HTTPException(502, detail=f"降重改写失败：{e}"[:200])
+        new_script = (fix_out or {}).get("script", "").strip()
+        if not new_script:
+            raise HTTPException(502, detail="改写返回为空，请重试")
+        # 回写 B 产物
+        b.output = {**(b.output or {}), "script": new_script}
+        # 记录降重成本
+        c = cost_svc.actual_llm_cost(_fr.tokens_in, _fr.tokens_out, cfg.llm_provider)
+        cost_svc.record_cost(db, task_id, "O", cfg.llm_provider, c)
+        task.total_cost = float(task.total_cost) + c
+        # 复测并保存 O
+        recheck = tm.check_originality(cleaned, new_script, max_similarity_ratio=0.40)
+        _save_o_result(db, task_id, recheck)
+        db.commit()
+    db.refresh(task)
+    return task
+
+
+def _save_o_result(db: Session, task_id: str, result: dict):
+    """辅助：把原创度检测结果写回 O 模块产物。"""
+    mr = db.query(ModuleResult).filter_by(task_id=task_id, module="O").first()
+    if not mr:
+        mr = ModuleResult(task_id=task_id, module="O")
+        db.add(mr)
+    mr.status = "success"
+    mr.output = result
+    mr.finished_at = datetime.utcnow()
 
 
 @router.get("/tasks/{task_id}/results")
@@ -904,174 +1032,193 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
     再带退避重试(应对内容审核误判的随机性)；仍失败则透出真实原因到该图。"""
     from app.core.security import decrypt
     from app.services.image import ImageError
+    import logging
     from app.modules.image_module import _gen_with_fallback, _sanitize_imagery, _wrap, is_monochrome_style
     from app.modules import tracks
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(404, detail="任务不存在")
-    # 单图重试同样消耗绘图额度，先校验每日成本上限（与初次生图一致）
-    if cost_svc.daily_cap_reached(db):
-        raise HTTPException(429, detail="E_DAILY_CAP: 今日成本已达上限，明日再试或上调上限")
-    cfg = db.query(Config).first()
-    # 单张重试 = 只重生这一张、按 1 张计费，不会放大成本，故豆包也放开（之前误屏蔽了）。
-    # 想省成本、风格统一可改用「一起重新组图」；想精修某一张就用这里的单张换图。
-    e = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
-    p = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
-    sb = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
-    if not e or not e.output or "images" not in e.output:
-        raise HTTPException(400, detail="该任务尚无配图产物，无法单图重试")
-    images = list(e.output["images"])
-    if index < 0 or index >= len(images):
-        raise HTTPException(400, detail=f"图片下标越界（0~{len(images)-1}）")
-    img = dict(images[index])
-    sub_type = img.get("sub_type", "content")
-    # 该任务的统一画风（三层包裹），保证重试图与其它图风格一致。
-    style = tracks.get_style(task.image_style, task.track)
-    sidx = index  # 图片与分镜严格一一对应：image[i]=scene[i]（不再有独立封面占下标0）
 
-    # 取「裸主体」(不含风格包裹)：优先请求里的新词，否则用 SB.scenes 的 desc_prompt。
-    # 注意 P.prompts[i].prompt 是 wrap 过的完整提示词，不能直接当主体（会双重套风格）。
-    subject = _resolve_subject(index, sidx, body.prompt, p, sb, style)
-    if not subject:
-        raise HTTPException(400, detail="缺少提示词，无法生成")
+    logger = logging.getLogger("uvicorn")
+    try:  # 整段包 try：任何未预期异常都转 HTTPException，不再裸抛 500
+        task = db.get(Task, task_id)
+        if not task:
+            raise HTTPException(404, detail="任务不存在")
+        # 单图重试同样消耗绘图额度，先校验每日成本上限（与初次生图一致）
+        if cost_svc.daily_cap_reached(db):
+            raise HTTPException(429, detail="E_DAILY_CAP: 今日成本已达上限，明日再试或上调上限")
+        cfg = db.query(Config).first()
+        # 单张重试 = 只重生这一张、按 1 张计费，不会放大成本，故豆包也放开（之前误屏蔽了）。
+        # 想省成本、风格统一可改用「一起重新组图」；想精修某一张就用这里的单张换图。
+        e = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
+        p = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
+        sb = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
+        if not e or not e.output or "images" not in e.output:
+            raise HTTPException(400, detail="该任务尚无配图产物，无法单图重试")
+        images = list(e.output["images"])
+        if index < 0 or index >= len(images):
+            raise HTTPException(400, detail=f"图片下标越界（0~{len(images)-1}）")
+        img = dict(images[index])
+        sub_type = img.get("sub_type", "content")
+        # 该任务的统一画风（三层包裹），保证重试图与其它图风格一致。
+        style = tracks.get_style(task.image_style, task.track)
+        sidx = index  # 图片与分镜严格一一对应：image[i]=scene[i]（不再有独立封面占下标0）
 
-    # 净化裸主体（柔化敏感意象），再套统一风格包裹 → 最终提示词
-    subject = _sanitize_imagery(subject)
-    img_key = decrypt(cfg.image_api_key_enc) if cfg and cfg.image_api_key_enc else ""
-    out_path = Path(img["path"])
+        # 取「裸主体」(不含风格包裹)：优先请求里的新词，否则用 SB.scenes 的 desc_prompt。
+        # 注意 P.prompts[i].prompt 是 wrap 过的完整提示词，不能直接当主体（会双重套风格）。
+        subject = _resolve_subject(index, sidx, body.prompt, p, sb, style)
+        if not subject:
+            raise HTTPException(400, detail="缺少提示词，无法生成")
 
-    # 人物镜头重试也带参考图保持主角一致（同一个人、不同场景）。
-    ref_uri = None
-    is_char = _is_char_shot(index, sidx, p, sb)
-    if is_char and task.reference_image and task.track == "character_story":
+        # 净化裸主体（柔化敏感意象），再套统一风格包裹 → 最终提示词
+        subject = _sanitize_imagery(subject)
+        img_key = decrypt(cfg.image_api_key_enc) if cfg and cfg.image_api_key_enc else ""
+        out_path = Path(img["path"])
+
+        # 人物镜头重试也带参考图保持主角一致（同一个人、不同场景）。
+        ref_uri = None
+        is_char = _is_char_shot(index, sidx, p, sb)
+        if is_char and task.reference_image and task.track == "character_story":
+            try:
+                from app.services.image import _encode_reference
+                ref_uri = _encode_reference(task.reference_image)
+            except Exception:
+                ref_uri = None
+
+        # 模型/地址/单价：本次请求显式指定的优先，否则跟随全局配置。
+        _model = body.model or (cfg.image_model if cfg else None)
+        _base_url = body.base_url or (getattr(cfg, "image_base_url", None) if cfg else None)
+        _unit_price = body.unit_price if body.unit_price is not None else getattr(cfg, "image_unit_price", None)
+
+        _grayscale = is_monochrome_style(style)
+        # center_h 版式保留完整横图不裁切
+        _no_crop = getattr(task, "layout", "full") == "center_h"
+        logger.info("[retryImage] 单张重试: index=%d, image_style=%s, style_prefix=%s, grayscale=%s, no_crop=%s",
+                    index, task.image_style, style.get("prefix", "None") if style else "None", _grayscale, _no_crop)
+
+        def _gen(subj):
+            """裸主体 → 套风格 → 生成。人物镜头带参考图图生图保持一致性。"""
+            text = _wrap(style, subj)
+            if ref_uri:
+                text = _wrap(style, f"【重要】生成与参考图中完全相同的人物：保持此人的面部特征、五官比例、发型、肤色、性别、年龄完全不变，"
+                                    f"与参考图是同一个人。仅改变以下部分——场景背景、服装、姿势、表情：{subj}。"
+                                    f"绝对不要改变此人的面部外观和身份特征。")
+            return _gen_with_fallback(cfg.image_provider if cfg else "mock", img_key,
+                                      text,
+                                      sub_type, out_path, img.get("suggested_duration", 6),
+                                      model=_model,
+                                      aspect_ratio=tracks.image_ratio_for(task),
+                                      ref_uri=ref_uri,
+                                      base_url=_base_url,
+                                      proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
+                                      grayscale=_grayscale,
+                                      no_crop=_no_crop)
+
         try:
-            from app.services.image import _encode_reference
-            ref_uri = _encode_reference(task.reference_image)
-        except Exception:
-            ref_uri = None
+            result = _gen(subject)
+        except ImageError as ex:
+            raise HTTPException(502, detail=f"配图失败：{ex}")
 
-    # 模型/地址/单价：本次请求显式指定的优先，否则跟随全局配置。
-    _model = body.model or (cfg.image_model if cfg else None)
-    _base_url = body.base_url or (getattr(cfg, "image_base_url", None) if cfg else None)
-    _unit_price = body.unit_price if body.unit_price is not None else getattr(cfg, "image_unit_price", None)
+        failed = bool(result.meta.get("fallback"))
+        reason = result.meta.get("reason") if failed else None
+        rewritten = False
 
-    def _gen(subj):
-        """裸主体 → 套风格 → 生成。人物镜头带参考图图生图保持一致性。"""
-        text = _wrap(style, subj)
-        if ref_uri:
-            text = _wrap(style, f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
-                                f"但改为以下全新画面（不同的姿势、表情、构图）：{subj}")
-        return _gen_with_fallback(cfg.image_provider if cfg else "mock", img_key,
-                                  text,
-                                  sub_type, out_path, img.get("suggested_duration", 6),
-                                  model=_model,
-                                  aspect_ratio=tracks.image_ratio_for(task),
-                                  ref_uri=ref_uri,
-                                  base_url=_base_url,
-                                  proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
-                                  grayscale=is_monochrome_style(style))
+        def _is_audit(rsn):
+            return rsn and ("sensitive" in rsn.lower() or "审核" in rsn or "拒绝" in rsn)
 
-    try:
-        result = _gen(subject)
-    except ImageError as ex:
-        raise HTTPException(502, detail=f"配图失败：{ex}")
+        # 手动点重试 = 用户主动的一次操作，目标「点一次就出图」，但要尽量【保住人物和剧情】，
+        # 不能一上来就降级成空镜（书桌/窗景那种没人物没情节、和文案脱节的画面）。
+        # 故走【阶梯式】改写：第1级含蓄改写(保留人物/场景/情绪，只柔化敏感词) → 仍被拦升第2级
+        # (换掉敏感物件，人物场景还在) → 最后才第3级(纯安全空镜兜底，几乎必过)。
+        # 大多数被拦画面第1级就能过审且保住剧情；只有真·反复过不了审才退化成空镜。
+        # 用户主动触发、最多3级有硬上限，不同于已砍掉的「后台偷偷反复烧」。
+        if failed and _is_audit(reason):
+            from app.modules import text_modules as tm
+            llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
+            if llm_key:
+                base = subject
+                for attempt in range(1, 4):  # 1→2→3 递进，保人物剧情优先，空镜兜底
+                    try:
+                        safe_subj, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
+                                                           llm_key, base, attempt=attempt)
+                        safe_subj = _sanitize_imagery(safe_subj)
+                    except Exception as ex:
+                        reason = reason or f"提示词安全改写失败：{ex}"
+                        break
+                    if not safe_subj or safe_subj == base:
+                        base = safe_subj or base
+                        continue
+                    result = _gen(safe_subj)
+                    subject = safe_subj
+                    rewritten = True
+                    failed = bool(result.meta.get("fallback"))
+                    reason = result.meta.get("reason") if failed else None
+                    if not failed or not _is_audit(reason):
+                        break  # 成功，或换成非审核类错误，停止升级
+                    base = safe_subj  # 仍被审核拦，基于这版继续更激进改写
 
-    failed = bool(result.meta.get("fallback"))
-    reason = result.meta.get("reason") if failed else None
-    rewritten = False
+        # 回存：裸主体写回 SB.scenes 和 P.scenes（画廊读这个显示）；
+        # wrap 过的完整提示词写回 P.prompts（流水线/再生成读这个）。保持两处一致。
+        # 并发安全：多张图可同时重试，回写 E/P/SB 是 read-modify-write，必须在 per-task 锁内
+        # 重新读取最新产物再改单张，否则后提交的请求会覆盖其它图刚写入的结果（丢失更新）。
+        final_img = dict(img)
+        final_img["path"] = result.path
+        final_img["fallback"] = failed
+        if reason:
+            final_img["fail_reason"] = reason
+        elif "fail_reason" in final_img:
+            del final_img["fail_reason"]
 
-    def _is_audit(rsn):
-        return rsn and ("sensitive" in rsn.lower() or "审核" in rsn or "拒绝" in rsn)
+        with _get_retry_lock(task_id):
+            # 锁内重新读取，拿到其它并发重试已写入的最新值
+            e2 = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
+            p2 = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
+            sb2 = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
+            if sb2 and sb2.output:
+                sbo = dict(sb2.output)
+                scs = list(sbo.get("scenes") or [])
+                if 0 <= sidx < len(scs):
+                    scs[sidx] = {**scs[sidx], "desc_prompt": subject}
+                    sbo["scenes"] = scs
+                    sb2.output = sbo
+            if p2 and p2.output:
+                po = dict(p2.output)
+                pl = list(po.get("prompts") or [])
+                if index < len(pl):
+                    pl[index] = {**pl[index], "prompt": _wrap(style, subject)}
+                    po["prompts"] = pl
+                scs = list(po.get("scenes") or [])
+                if 0 <= sidx < len(scs):
+                    scs[sidx] = {**scs[sidx], "desc_prompt": subject}
+                    po["scenes"] = scs
+                p2.output = po
+            if e2 and e2.output and "images" in e2.output:
+                eo = dict(e2.output)
+                imgs = list(eo["images"])
+                if 0 <= index < len(imgs):
+                    imgs[index] = final_img
+                    eo["images"] = imgs
+                    e2.output = eo
+            db.commit()
+            img = final_img
 
-    # 手动点重试 = 用户主动的一次操作，目标「点一次就出图」，但要尽量【保住人物和剧情】，
-    # 不能一上来就降级成空镜（书桌/窗景那种没人物没情节、和文案脱节的画面）。
-    # 故走【阶梯式】改写：第1级含蓄改写(保留人物/场景/情绪，只柔化敏感词) → 仍被拦升第2级
-    # (换掉敏感物件，人物场景还在) → 最后才第3级(纯安全空镜兜底，几乎必过)。
-    # 大多数被拦画面第1级就能过审且保住剧情；只有真·反复过不了审才退化成空镜。
-    # 用户主动触发、最多3级有硬上限，不同于已砍掉的「后台偷偷反复烧」。
-    if failed and _is_audit(reason):
-        from app.modules import text_modules as tm
-        llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
-        if llm_key:
-            base = subject
-            for attempt in range(1, 4):  # 1→2→3 递进，保人物剧情优先，空镜兜底
-                try:
-                    safe_subj, _ = tm.run_safe_rewrite(cfg.llm_provider, cfg.llm_model,
-                                                       llm_key, base, attempt=attempt)
-                    safe_subj = _sanitize_imagery(safe_subj)
-                except Exception as ex:
-                    reason = reason or f"提示词安全改写失败：{ex}"
-                    break
-                if not safe_subj or safe_subj == base:
-                    base = safe_subj or base
-                    continue
-                result = _gen(safe_subj)
-                subject = safe_subj
-                rewritten = True
-                failed = bool(result.meta.get("fallback"))
-                reason = result.meta.get("reason") if failed else None
-                if not failed or not _is_audit(reason):
-                    break  # 成功，或换成非审核类错误，停止升级
-                base = safe_subj  # 仍被审核拦，基于这版继续更激进改写
+        # 计费（重算而非累加）：单图重试替换该张图后，E 成本重算为当前完整 E 产物的实际成本，
+        # 不叠加历史。这样反复重试同一张不会把 total_cost 越滚越高误判超限（成本=最终得到的图）。
+        provider = cfg.image_provider if cfg else "mock"
+        e_now = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
+        cur_imgs = (e_now.output or {}).get("images", []) if e_now else []
+        e_cost = cost_svc.image_cost(cur_imgs, provider,
+                                     getattr(cfg, "image_unit_price", None) if cfg else None,
+                                     model=getattr(cfg, "image_model", None) if cfg else None)
+        cost_svc.rebill_module(db, task, "E", provider, e_cost)
 
-    # 回存：裸主体写回 SB.scenes 和 P.scenes（画廊读这个显示）；
-    # wrap 过的完整提示词写回 P.prompts（流水线/再生成读这个）。保持两处一致。
-    # 并发安全：多张图可同时重试，回写 E/P/SB 是 read-modify-write，必须在 per-task 锁内
-    # 重新读取最新产物再改单张，否则后提交的请求会覆盖其它图刚写入的结果（丢失更新）。
-    final_img = dict(img)
-    final_img["path"] = result.path
-    final_img["fallback"] = failed
-    if reason:
-        final_img["fail_reason"] = reason
-    elif "fail_reason" in final_img:
-        del final_img["fail_reason"]
+        # 返回：是否仍失败、原因、是否做过安全改写、改写后的主体（前端回填到输入框）
+        return {"index": index, "image": img, "failed": failed, "reason": reason,
+                "rewritten": rewritten, "new_prompt": subject if rewritten else None}
 
-    with _get_retry_lock(task_id):
-        # 锁内重新读取，拿到其它并发重试已写入的最新值
-        e2 = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
-        p2 = db.query(ModuleResult).filter_by(task_id=task_id, module="P").first()
-        sb2 = db.query(ModuleResult).filter_by(task_id=task_id, module="SB").first()
-        if sb2 and sb2.output:
-            sbo = dict(sb2.output)
-            scs = list(sbo.get("scenes") or [])
-            if 0 <= sidx < len(scs):
-                scs[sidx] = {**scs[sidx], "desc_prompt": subject}
-                sbo["scenes"] = scs
-                sb2.output = sbo
-        if p2 and p2.output:
-            po = dict(p2.output)
-            pl = list(po.get("prompts") or [])
-            if index < len(pl):
-                pl[index] = {**pl[index], "prompt": _wrap(style, subject)}
-                po["prompts"] = pl
-            scs = list(po.get("scenes") or [])
-            if 0 <= sidx < len(scs):
-                scs[sidx] = {**scs[sidx], "desc_prompt": subject}
-                po["scenes"] = scs
-            p2.output = po
-        if e2 and e2.output and "images" in e2.output:
-            eo = dict(e2.output)
-            imgs = list(eo["images"])
-            if 0 <= index < len(imgs):
-                imgs[index] = final_img
-                eo["images"] = imgs
-                e2.output = eo
-        db.commit()
-        img = final_img
-
-    # 计费（重算而非累加）：单图重试替换该张图后，E 成本重算为当前完整 E 产物的实际成本，
-    # 不叠加历史。这样反复重试同一张不会把 total_cost 越滚越高误判超限（成本=最终得到的图）。
-    provider = cfg.image_provider if cfg else "mock"
-    e_now = db.query(ModuleResult).filter_by(task_id=task_id, module="E").first()
-    cur_imgs = (e_now.output or {}).get("images", []) if e_now else []
-    e_cost = cost_svc.image_cost(cur_imgs, provider,
-                                 getattr(cfg, "image_unit_price", None) if cfg else None,
-                                 model=getattr(cfg, "image_model", None) if cfg else None)
-    cost_svc.rebill_module(db, task, "E", provider, e_cost)
-
-    # 返回：是否仍失败、原因、是否做过安全改写、改写后的主体（前端回填到输入框）
-    return {"index": index, "image": img, "failed": failed, "reason": reason,
-            "rewritten": rewritten, "new_prompt": subject if rewritten else None}
+    except HTTPException:
+        raise  # 已包装过的直接透传
+    except Exception as ex:
+        # 任何未预期异常（DB 连不上、decrypt 失败、下标越界、PIL 错误等）→ 500 变 4xx/明确错误
+        logger.error("[retryImage] 单图重试异常: %s: %s", type(ex).__name__, ex)
+        raise HTTPException(500, detail=f"单图重试内部错误：{type(ex).__name__}: {ex}")
 
 
 @router.post("/tasks/{task_id}/images/batch-retry")
@@ -1131,8 +1278,9 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
         item_ref = ref_uri if is_char else None
         # 人物镜头走图生图：套「同一人物、不同画面」包裹再套风格；否则纯主体套风格。
         if item_ref:
-            text = _wrap(style, f"参考图中的同一个人物，保持其面部特征、五官、气质不变，"
-                                f"但改为以下全新画面（不同的姿势、表情、构图）：{subject}")
+            text = _wrap(style, f"【重要】生成与参考图中完全相同的人物：保持此人的面部特征、五官比例、发型、肤色、性别、年龄完全不变，"
+                                f"与参考图是同一个人。仅改变以下部分——场景背景、服装、姿势、表情：{subject}。"
+                                f"绝对不要改变此人的面部外观和身份特征。")
         else:
             text = _wrap(style, subject)
         tasks.append((text, img.get("sub_type", "content"), Path(img["path"]),
@@ -1173,7 +1321,8 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
                                     grid_mode=_grid, style=style,
                                     base_url=_base_url,
                                     proxy=(getattr(cfg, "proxy_url", None) or "").strip() or None if cfg else None,
-                                    rewrite_fn=_grid_rewrite if _llm_key else None)
+                                    rewrite_fn=_grid_rewrite if _llm_key else None,
+                                    no_crop=getattr(task, "layout", "full") == "center_h")
 
     # 回写：read-modify-write E/P/SB，必须在 per-task 锁内重读最新产物再改选中的几张，
     # 避免与并发的单图重试互相覆盖（丢失更新）。
