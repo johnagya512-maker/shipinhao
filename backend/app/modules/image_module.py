@@ -493,7 +493,8 @@ def render_images_grouped(provider, api_key, tasks, model=None,
 
             def _is_audit(msg):
                 m = (msg or "").lower()
-                return "sensitive" in m or "审核" in m or "拒绝" in m or "451" in m
+                return ("sensitive" in m or "审核" in m or "拒绝" in m or "451" in m
+                        or "moderation" in m or "safety" in m or "violate" in m)
 
             last_err = ""
             for attempt in range(0, 3):  # 第0次原始, 1/2次递进改写

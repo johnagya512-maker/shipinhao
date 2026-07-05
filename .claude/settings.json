@@ -6,7 +6,9 @@
       "Bash(python -m py_compile app/services/orchestrator.py app/modules/text_modules.py app/modules/prompts.py app/services/tts.py app/services/compose.py app/modules/jianying.py app/modules/image_module.py app/api/tasks.py)",
       "Bash(python -m pytest tests/test_core.py -q)",
       "Bash(python -c ' *)",
-      "Bash(cd /d/chennigongzuoshi/shipinhao/backend && rm -f scripts/probe_clone_voice.py && echo \"已删探活脚本\")"
+      "Bash(cd /d/chennigongzuoshi/shipinhao/backend && rm -f scripts/probe_clone_voice.py && echo \"已删探活脚本\")",
+      "Read(//tmp/**)",
+      "Bash(cygpath -w /tmp/diff_part1.txt)"
     ],
     "additionalDirectories": [
       "d:\\d\\chennigongzuoshi\\shipinhao\\backend\\scripts"

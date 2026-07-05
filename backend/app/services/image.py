@@ -303,8 +303,11 @@ def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
         body = resp.text[:300]
         low = body.lower()
         # gpt 内容审核：moderation_blocked / safety system 等。可改写救回，标 audit。
+        # "content polic"(不带下划线) 和 "violate" 补覆盖 gpt-image 官方拒绝文案
+        # ("We're so sorry, but the image we created may violate our content policies...")，
+        # 该文案不含 moderation/safety/content_policy/sensitive 任一关键词，此前会漏判成非审核错误。
         if ("moderation" in low or "safety" in low or "content_policy" in low
-                or "sensitive" in low):
+                or "content polic" in low or "violate" in low or "sensitive" in low):
             raise ImageError(f"{label}被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
         raise ImageError(f"{label}被拒 {resp.status_code}: {body}", retryable=False)
     data = resp.json().get("data") or []
@@ -378,9 +381,9 @@ def _gpt_edit_request(url: str, api_key: str, prompt: str, size: str, n: int,
     if resp.status_code >= 400:
         body = resp.text[:300]
         low = body.lower()
-        # gpt 内容审核
+        # gpt 内容审核。"content polic"/"violate" 补覆盖官方拒绝文案，理由同 _gpt_request。
         if ("moderation" in low or "safety" in low or "content_policy" in low
-                or "sensitive" in low):
+                or "content polic" in low or "violate" in low or "sensitive" in low):
             raise ImageError(f"{label}被内容审核拒绝(可改写): {body}", retryable=False, audit=True)
         raise ImageError(f"{label}被拒 {resp.status_code}: {body}", retryable=False)
 

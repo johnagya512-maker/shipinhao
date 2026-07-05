@@ -11,10 +11,15 @@
 - 未配置采集 Key 时抛 CollectUnavailable，由编排降级为"手填逐字稿"，不阻断链路。
 - ASR 是平台无关的（只下载 video_url 转写），所以新增平台只需在这里加一条。
 """
+import logging
 import os
 import re
 import httpx
 from dataclasses import dataclass, field
+
+# 注意：不能用 logging.getLogger("uvicorn")——uvicorn 启动后会给这个 logger
+# 设 propagate=False（只输出到 stderr），传不到 root 的文件 handler，日志会“打了但看不见”。
+logger = logging.getLogger(__name__)
 
 # TikHub 服务基址。
 TIKHUB_BASE = os.environ.get("TIKHUB_BASE", "https://api.tikhub.io")
@@ -24,14 +29,16 @@ TIKHUB_BASE = os.environ.get("TIKHUB_BASE", "https://api.tikhub.io")
 # 路径可被环境变量 TIKHUB_PATH_<PLATFORM> 覆盖、参数名可被 TIKHUB_PARAM_<PLATFORM> 覆盖，
 # 无需改代码即可校正。<PLATFORM>：DOUYIN/TIKTOK/KUAISHOU/XIAOHONGSHU/BILIBILI/WEIBO/WECHAT。
 # 已据 TikHub 文档确认：douyin/kuaishou/wechat 的路径；其余为最可能的命名，按需用环境变量校正。
+# 值为 (路径, 链接参数名, HTTP方法)。wechat 是当前唯一的 POST+JSON body 接口
+# （TikHub 该接口不接受 GET query 参数，body 里传 share_url），其余均为 GET。
 _DEFAULT_PATHS = {
-    "douyin": ("/api/v1/douyin/web/fetch_one_video_by_share_url", "share_url"),
-    "tiktok": ("/api/v1/tiktok/web/fetch_one_video_by_share_url", "share_url"),
-    "kuaishou": ("/api/v1/kuaishou/web/fetch_one_video_by_url", "url"),
-    "xiaohongshu": ("/api/v1/xiaohongshu/web/get_note_info_v2", "share_text"),
-    "bilibili": ("/api/v1/bilibili/web/fetch_one_video", "bv_id"),
-    "weibo": ("/api/v1/weibo/web/fetch_post_detail", "url"),
-    "wechat": ("/api/v1/wechat_channels/fetch_video_by_share_url", "share_url"),
+    "douyin": ("/api/v1/douyin/web/fetch_one_video_by_share_url", "share_url", "GET"),
+    "tiktok": ("/api/v1/tiktok/web/fetch_one_video_by_share_url", "share_url", "GET"),
+    "kuaishou": ("/api/v1/kuaishou/web/fetch_one_video_by_url", "url", "GET"),
+    "xiaohongshu": ("/api/v1/xiaohongshu/web/get_note_info_v2", "share_text", "GET"),
+    "bilibili": ("/api/v1/bilibili/web/fetch_one_video", "bv_id", "GET"),
+    "weibo": ("/api/v1/weibo/web/fetch_post_detail", "url", "GET"),
+    "wechat": ("/api/v1/wechat_channels/v2/fetch_video_detail", "share_url", "POST"),
 }
 
 # 平台中文名，用于元数据展示。
@@ -50,7 +57,8 @@ _PLATFORM_HINTS = [
     ("bilibili", ("bilibili.com", "b23.tv", "bili2233")),
     ("weibo", ("weibo.com", "weibo.cn", "t.cn")),
     ("wechat", ("channels.weixin.qq.com", "finder", "weixin.qq.com/finder",
-                "v.weixin.qq.com", "wxaurl.cn", "support.weixin.qq.com")),
+                "weixin.qq.com/sph", "v.weixin.qq.com", "wxaurl.cn",
+                "support.weixin.qq.com")),
 ]
 
 
@@ -96,16 +104,18 @@ def detect_platform(url_or_share: str) -> str:
     return ""
 
 
-def _endpoint_for(platform: str) -> tuple[str, str]:
-    """取某平台的 (完整接口 URL, 链接参数名)。路径和参数名均可被环境变量覆盖：
-    TIKHUB_PATH_<PLATFORM> 改路径，TIKHUB_PARAM_<PLATFORM> 改链接参数名。"""
+def _endpoint_for(platform: str) -> tuple[str, str, str]:
+    """取某平台的 (完整接口 URL, 链接参数名, HTTP方法)。均可被环境变量覆盖：
+    TIKHUB_PATH_<PLATFORM> 改路径，TIKHUB_PARAM_<PLATFORM> 改链接参数名，
+    TIKHUB_METHOD_<PLATFORM> 改请求方法（GET/POST）。"""
     entry = _DEFAULT_PATHS.get(platform)
     if not entry:
         raise CollectError(f"E6007: 暂未配置平台 {platform} 的采集接口")
-    default_path, default_param = entry
+    default_path, default_param, default_method = entry
     path = os.environ.get(f"TIKHUB_PATH_{platform.upper()}") or default_path
     param = os.environ.get(f"TIKHUB_PARAM_{platform.upper()}") or default_param
-    return TIKHUB_BASE.rstrip("/") + path, param
+    method = (os.environ.get(f"TIKHUB_METHOD_{platform.upper()}") or default_method).upper()
+    return TIKHUB_BASE.rstrip("/") + path, param, method
 
 
 def fetch_video(url_or_share: str, provider: str, api_key: str | None,
@@ -127,7 +137,7 @@ def fetch_video(url_or_share: str, provider: str, api_key: str | None,
     if provider != "tikhub":
         raise CollectError(f"E6002: 暂不支持的采集供应商: {provider}")
 
-    endpoint, param_name = _endpoint_for(platform)
+    endpoint, param_name, method = _endpoint_for(platform)
     headers = {"Authorization": f"Bearer {api_key}"}
     # 多数"按链接"接口收原始分享口令也能解析，故传完整 url_or_share（含口令文本）。
     params = {param_name: url_or_share.strip() or url}
@@ -138,7 +148,10 @@ def fetch_video(url_or_share: str, provider: str, api_key: str | None,
     last_err = None
     for attempt in range(3):
         try:
-            resp = httpx.get(endpoint, params=params, headers=headers, **client_kw)
+            if method == "POST":
+                resp = httpx.post(endpoint, json=params, headers=headers, **client_kw)
+            else:
+                resp = httpx.get(endpoint, params=params, headers=headers, **client_kw)
             break
         except httpx.RequestError as e:
             last_err = e
@@ -161,8 +174,29 @@ def fetch_video(url_or_share: str, provider: str, api_key: str | None,
     if resp.status_code >= 400:
         raise CollectError(f"E6005: 采集接口返回 {resp.status_code}: {resp.text[:200]}")
 
-    out = _parse_response(resp.json())
+    body = resp.json()
+    # TikHub 部分接口即便请求失败也返回 HTTP 200，真实状态在 body.code 里；
+    # data 为空同时 code 非成功码时视为失败，直接报错，避免让下游把兜底垃圾数据当视频地址用。
+    if isinstance(body, dict) and not body.get("data") and body.get("code") not in (None, 200, 0):
+        msg = body.get("message") or body.get("msg") or str(body)[:200]
+        raise CollectError(
+            f"E6009: {PLATFORM_NAMES.get(platform, platform)} 采集接口返回失败"
+            f"（code={body.get('code')}）: {msg}")
+
+    out = _parse_response(body)
     out.platform = platform
+    if not out.video_url:
+        # 解析不出视频地址时把完整原始响应落盘（不截断），便于按平台实际字段结构补解析规则。
+        # 只保留最近一次，避免占空间；路径固定，出问题后直接去数据目录 logs/ 下翻。
+        try:
+            import json
+            from pathlib import Path
+            from app.core.config import _DATA_DIR
+            debug_path = Path(_DATA_DIR) / "logs" / f"collect_debug_{platform}.json"
+            debug_path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.warning(f"[collect] {platform} 响应未解析出 video_url，完整原始响应已写入 {debug_path}")
+        except Exception as e:
+            logger.warning(f"[collect] {platform} 响应未解析出 video_url，且调试落盘失败: {e}")
     return out
 
 
@@ -233,7 +267,10 @@ def _deep_find_video_url(node, depth=0):
     if depth > 8:
         return ""
     if isinstance(node, str):
-        if node.startswith("http") and (".mp4" in node or "play" in node or "video" in node):
+        # api.tikhub.io / docs.tikhub.io 是接口自身域名，其下链接（文档、路由回显等）
+        # 绝不可能是真实视频文件地址——曾把 wechat 接口失败时返回的文档链接误判成视频地址。
+        if node.startswith("http") and "tikhub.io" not in node and (
+                ".mp4" in node or "play" in node or "video" in node):
             return node
         return ""
     if isinstance(node, list):

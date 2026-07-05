@@ -1121,7 +1121,9 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
         rewritten = False
 
         def _is_audit(rsn):
-            return rsn and ("sensitive" in rsn.lower() or "审核" in rsn or "拒绝" in rsn)
+            low = rsn.lower() if rsn else ""
+            return bool(rsn) and ("sensitive" in low or "审核" in rsn or "拒绝" in rsn
+                                   or "moderation" in low or "safety" in low or "violate" in low)
 
         # 手动点重试 = 用户主动的一次操作，目标「点一次就出图」，但要尽量【保住人物和剧情】，
         # 不能一上来就降级成空镜（书桌/窗景那种没人物没情节、和文案脱节的画面）。
