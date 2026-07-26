@@ -40,3 +40,9 @@ backend/clone_voices.json
 
 # 桌面端打包产物
 desktop/release/
+
+# asar 解包检查临时目录
+_asar_check/
+
+# 数据库备份
+backend/app.db.backup_*
