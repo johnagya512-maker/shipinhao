@@ -471,7 +471,7 @@ def render_images_grouped(provider, api_key, tasks, model=None,
                                           out_paths, durations, model=model,
                                           aspect_ratio=aspect_ratio, ref_uri=ref,
                                           base_url=base_url, proxy=proxy, grayscale=_gray,
-                                          no_crop=no_crop, timeout=600.0)
+                                          no_crop=no_crop, timeout=1200.0)
             for k, i in enumerate(indices):
                 results[i] = batch[k]
         except ImageError as e:

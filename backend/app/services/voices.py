@@ -5,6 +5,10 @@
 合成/试听时若返回 E6210（音色不存在或无授权），提示用户换一个或检查账号。
 """
 
+import json
+from pathlib import Path
+from app.core.config import _DATA_DIR
+
 # 分类元信息（前端左侧分类列表用，保持顺序）
 # 火山(volcano)只保留探活通过的 uranus 音色，无方言/多情感授权故不列；
 # 方言/多情感如需用，走 Edge TTS(yuntts_edge/edge_local)，其音色库另维护。
@@ -123,10 +127,54 @@ VOICE_LIBRARY = [
     {"id": "zh_male_beijingxiaoye_emo_v2_mars_bigtts", "name": "北京小爷", "tag": "多情感·京腔", "category": "emotion", "emotion": "happy"},
     {"id": "zh_male_ruyayichen_emo_v2_mars_bigtts", "name": "儒雅逸辰", "tag": "多情感·儒雅", "category": "emotion", "emotion": "neutral"},
     {"id": "ICL_zh_female_huoponvhai_tob", "name": "活泼女孩", "tag": "多情感·活泼", "category": "emotion", "emotion": "excited"},
-    # ── 声音复刻（账号自训克隆音色，走 volcano_icl，需新版控制台 API Key）──
-    {"id": "S_kXK5czr62", "name": "晓松音色", "tag": "我的复刻", "category": "clone"},
-    {"id": "S_jXK5czr62", "name": "女朗读音色", "tag": "我的复刻", "category": "clone"},
 ]
+
+
+# ── 声音复刻音色支持从用户数据目录配置文件热加载 ──
+# 这样平台上新增/删除复刻音色时，只需修改 data/clone_voices.json 并重启后端，
+# 无需再改代码和重新打包。
+_CLONE_VOICES_FILE: Path = _DATA_DIR / "clone_voices.json"
+
+_DEFAULT_CLONE_VOICES = [
+    # 已确认可用的复刻音色（按火山控制台「声音复刻 → 我的音色」中的名称与 voice_id 对应）。
+    {"id": "S_gXK5czr62", "name": "男声2", "tag": "我的复刻", "category": "clone"},
+    {"id": "S_hXK5czr62", "name": "男声1", "tag": "我的复刻", "category": "clone"},
+    {"id": "S_iXK5czr62", "name": "王立群音色", "tag": "我的复刻", "category": "clone"},
+    {"id": "S_jXK5czr62", "name": "女朗读音色", "tag": "我的复刻", "category": "clone"},
+    {"id": "S_kXK5czr62", "name": "晓松音色", "tag": "我的复刻", "category": "clone"},
+]
+
+
+def _filter_clone_voices(items: list[dict]) -> list[dict]:
+    """过滤掉占位或未填写的复刻音色条目（id 为空或以 PLEASE_FILL 开头）。"""
+    return [
+        {**item, "tag": item.get("tag", "我的复刻"), "category": "clone"}
+        for item in items
+        if item.get("id") and not str(item.get("id", "")).startswith("PLEASE_FILL")
+    ]
+
+
+def _load_clone_voices() -> list[dict]:
+    """从用户数据目录的 clone_voices.json 加载复刻音色。"""
+    if not _CLONE_VOICES_FILE.exists():
+        try:
+            _CLONE_VOICES_FILE.write_text(
+                json.dumps(_DEFAULT_CLONE_VOICES, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return _filter_clone_voices(_DEFAULT_CLONE_VOICES)
+    try:
+        data = json.loads(_CLONE_VOICES_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return _filter_clone_voices(data)
+    except Exception:
+        pass
+    return _filter_clone_voices(_DEFAULT_CLONE_VOICES)
+
+
+CLONE_VOICES: list[dict] = _load_clone_voices()
 
 
 # ── 云声配音 Edge TTS 音色库（微软 Edge 神经网络音色，会员免费、不限量、无需探活）──
@@ -164,10 +212,11 @@ EDGE_VOICE_LIBRARY = [
 
 def library_for(provider: str | None):
     """按 TTS 供应商返回 (音色清单, 是否需要探活)。
-    yuntts_edge 用 Edge 音色库且无需探活（恒可用）；其余用火山候选库（需探活）。"""
+    yuntts_edge 用 Edge 音色库且无需探活（恒可用）；其余用火山候选库（需探活）。
+    复刻音色从用户数据目录的 clone_voices.json 热加载。"""
     if provider in ("yuntts_edge", "edge_local"):
         return EDGE_VOICE_LIBRARY, False
-    return VOICE_LIBRARY, True
+    return VOICE_LIBRARY + CLONE_VOICES, True
 
 
 def categories_for(library) -> list[dict]:
@@ -227,7 +276,7 @@ def ensure_probe(provider: str, appid: str | None, api_key: str | None) -> None:
     def _run():
         from app.services import tts as tts_svc
         result: dict[str, bool] = {}
-        for v in VOICE_LIBRARY:
+        for v in VOICE_LIBRARY + CLONE_VOICES:
             try:
                 tts_svc.test_connectivity(provider, api_key, voice=v["id"],
                                           appid=appid, timeout=20.0)

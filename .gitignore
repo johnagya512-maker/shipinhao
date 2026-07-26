@@ -35,5 +35,8 @@ Thumbs.db
 backend/logs/
 *.log
 
+# 用户本地声音复刻音色配置（含账号专属 voice_id，不入库）
+backend/clone_voices.json
+
 # 桌面端打包产物
 desktop/release/

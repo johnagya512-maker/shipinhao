@@ -73,7 +73,13 @@ function startBackend() {
     console.log(tag, line.trim())
     if (logStream) { try { logStream.write(`[${new Date().toISOString()}] ${line}`) } catch { /* 忽略 */ } }
   }
-  backendProc = spawn(cmd, args, opts)
+  // detached + windowsHide：后端作为独立进程启动，不依附于启动它的 cmd 窗口，
+  // 也不显示黑色命令行窗口；关掉启动客户端的 cmd 不会影响后端/客户端。
+  backendProc = spawn(cmd, args, {
+    ...opts,
+    detached: true,
+    windowsHide: true,
+  })
   backendProc.stdout?.on('data', (d) => write('[backend]', d))
   backendProc.stderr?.on('data', (d) => write('[backend]', d))
   backendProc.on('exit', (code) => write('[backend]', `exited ${code}\n`))
@@ -155,13 +161,27 @@ app.whenReady().then(async () => {
   createWindow()
 })
 
+function killBackend() {
+  if (!backendProc) return
+  if (process.platform === 'win32') {
+    // Windows 下 detached 子进程不能直接用 .kill()，用 taskkill 结束进程树。
+    const pid = backendProc.pid
+    if (pid) {
+      spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { windowsHide: true, detached: true })
+    }
+  } else {
+    try { process.kill(-backendProc.pid, 'SIGTERM') } catch {}
+  }
+  backendProc = null
+}
+
 app.on('window-all-closed', () => {
-  if (backendProc) backendProc.kill()
+  killBackend()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
-  if (backendProc) backendProc.kill()
+  killBackend()
 })
 
 module.exports = { API_ORIGIN }

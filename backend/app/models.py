@@ -61,6 +61,8 @@ class Task(Base):
     creation_mode: Mapped[str] = mapped_column(String(16), default="same_topic")
     # 生图模式：per_image（逐张，画质优先）/ grid（九宫格省成本，一次出9张切割，省约89%）
     image_gen_mode: Mapped[str] = mapped_column(String(12), default="per_image")
+    # 图数模式：auto（按文案时长自动计算）/ fixed_5（固定只生成5张图）
+    image_count_mode: Mapped[str] = mapped_column(String(12), default="auto")
     # 处理模式：full_auto（完整跑）/ semi_auto（不改写，仅分句）/ direct（不改写、机械切分）
     processing_mode: Mapped[str] = mapped_column(String(12), default="full_auto")
     # 暂停确认：none（不停）/ key_nodes（关键节点）/ every_step（每步）/ custom（自定义步骤）
@@ -116,7 +118,7 @@ class Config(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     llm_provider: Mapped[str] = mapped_column(String(20), default="deepseek")
-    llm_model: Mapped[str] = mapped_column(String(50), default="deepseek-chat")
+    llm_model: Mapped[str] = mapped_column(String(50), default="deepseek-v4-pro")
     llm_api_key_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     image_provider: Mapped[str] = mapped_column(String(20), default="doubao")
     image_model: Mapped[str] = mapped_column(String(80), default="doubao-seedream-4-5-251128")
