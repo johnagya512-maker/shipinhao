@@ -142,6 +142,7 @@ export default function TaskCreatePage() {
     draft_template: 'guofeng',
     creation_mode: 'same_topic',
     image_gen_mode: 'grid',
+    image_count_mode: 'auto',
     processing_mode: 'full_auto', pause_mode: 'key_nodes', pause_steps: [],
   }
   function loadDraft(): { form: TaskCreate; previewScript: string; inputMode: 'transcript' | 'douyin'; parseMeta: ParseMeta | null } {
@@ -451,24 +452,28 @@ export default function TaskCreatePage() {
           </label>
         )}
 
-        {/* 视频类型：口播视频 / 唱歌·MV */}
+        {/* 模式选择：口播 / 唱歌 / 固定5张图 三选一 */}
         <div>
-          <span className="text-sm text-slate-400">视频类型</span>
-          <div className="mt-2 flex gap-2">
-            <button type="button" onClick={() => set({ video_mode: 'vlog' })}
-              className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
-                form.video_mode === 'vlog' ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-              }`}>
-              <div className={`text-sm ${form.video_mode === 'vlog' ? 'text-brand-300' : 'text-slate-200'}`}>口播视频</div>
-              <div className="text-[10px] text-slate-500">讲解·叙事</div>
-            </button>
-            <button type="button" onClick={() => set({ video_mode: 'music' })}
-              className={`flex-1 px-2 py-1.5 rounded-lg border text-center transition-colors ${
-                form.video_mode === 'music' ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
-              }`}>
-              <div className={`text-sm ${form.video_mode === 'music' ? 'text-brand-300' : 'text-slate-200'}`}>唱歌·MV</div>
-              <div className="text-[10px] text-slate-500">上传音频+歌词对齐</div>
-            </button>
+          <span className="text-sm text-slate-400">模式选择 <span className="text-[11px] text-slate-600">· 口播/唱歌/固定5张图三选一</span></span>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {([
+              { key: 'vlog', name: '口播视频', desc: '讲解·叙事', patch: { video_mode: 'vlog', image_count_mode: 'auto' } },
+              { key: 'music', name: '唱歌·MV', desc: '上传音频+歌词对齐', patch: { video_mode: 'music', image_count_mode: 'auto' } },
+              { key: 'fixed_5', name: '固定5张图', desc: '强制只生成5张图', patch: { video_mode: 'vlog', image_count_mode: 'fixed_5' } },
+            ] as const).map((m) => {
+              const curKey = form.video_mode === 'music' ? 'music' : form.image_count_mode === 'fixed_5' ? 'fixed_5' : 'vlog'
+              const on = curKey === m.key
+              return (
+                <button key={m.key} type="button"
+                  onClick={() => { if (imageOn || m.key !== 'fixed_5') set(m.patch) }}
+                  className={`px-2 py-1.5 rounded-lg border text-center transition-colors ${
+                    on ? 'bg-brand-600/15 border-brand-500 ring-1 ring-brand-500/30' : 'bg-slate-800/40 border-slate-700 hover:border-slate-600'
+                  } ${m.key === 'fixed_5' && !imageOn ? 'opacity-40 pointer-events-none select-none' : ''}`}>
+                  <div className={`text-sm ${on ? 'text-brand-300' : 'text-slate-200'}`}>{m.name}</div>
+                  <div className="text-[10px] text-slate-500">{m.desc}</div>
+                </button>
+              )
+            })}
           </div>
         </div>
 

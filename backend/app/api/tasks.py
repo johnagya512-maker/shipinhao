@@ -13,7 +13,7 @@ from app.api.auth import require_auth
 from app.api.schemas import (TaskCreate, TaskOut, EstimateOut, RerunRequest,
                              TaskListOut, TaskListItem, ScenesPatch,
                              ImageRetryRequest, ImageBatchRetryRequest, StepRerunRequest)
-from app.models import Task, Config, ModuleResult
+from app.models import Task, Config, ModuleResult, CostLog
 from app.services import cost as cost_svc
 from app.services import orchestrator, compose
 from app.services.lyrics_align import align_lyrics
@@ -25,7 +25,8 @@ router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_auth)])
 # read-modify-write，并发会丢失更新。用 per-task 锁保护「重读→改单张→写回」临界区，
 # 生图本身（慢、不碰共享数据）留在锁外并行。
 import threading
-_retry_locks: dict[str, threading.Lock] = {}
+import weakref
+_retry_locks: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 _retry_locks_guard = threading.Lock()
 
 
@@ -45,6 +46,51 @@ MAX_REFERENCE_BYTES = 20 * 1024 * 1024  # 主角参考图最大 20MB(前端先�
 # 音频魔数（文件头）：用于校验真实类型，防止伪装扩展名（PRD 12.3）
 AUDIO_MAGIC = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"RIFF", b"\x00\x00\x00")
 AUDIO_MIN_SEC, AUDIO_MAX_SEC = 30, 300  # PRD 5.4 E3002
+_UPLOAD_STALE_HOURS = 24  # 暂存文件超过此时长且无任务引用则删除
+
+# BUG-14: base_url 白名单，防止 SSRF。只允许空（跟随全局配置）或已知中转站域名。
+_ALLOWED_BASE_URL_HOSTS = {
+    "api.apimart.com",
+    "api.apicore.ai",
+    "api.tu-zi.com",
+    "api.openai.com",
+    "ark.cn-beijing.volces.com",
+}
+
+
+def _validate_base_url(base_url: str | None):
+    """BUG-14: 校验 base_url 只能是白名单内的域名，防止 SSRF。"""
+    if not base_url:
+        return
+    from urllib.parse import urlparse
+    host = urlparse(base_url).hostname or ""
+    if host not in _ALLOWED_BASE_URL_HOSTS:
+        raise HTTPException(400, detail=f"不允许的 base_url 域名: {host}")
+
+
+def _cleanup_stale_uploads(directory: Path, pattern: str, db: Session, stale_hours: int = _UPLOAD_STALE_HOURS):
+    """清理暂存目录中超过 stale_hours 小时的孤儿文件（无对应任务引用）。BUG-13 修复。"""
+    if not directory.exists():
+        return
+    import time as _time
+    cutoff = _time.time() - stale_hours * 3600
+    for f in directory.iterdir():
+        if not f.is_file() or not f.match(pattern):
+            continue
+        if f.stat().st_mtime > cutoff:
+            continue
+        path_str = str(f)
+        # 检查是否被任何任务引用（reference_image / reference_images / audio_file）
+        in_use = db.query(Task).filter(
+            (Task.reference_image == path_str) |
+            (Task.audio_file == path_str)
+        ).first()
+        if in_use:
+            continue
+        try:
+            f.unlink()
+        except Exception:
+            pass
 
 
 def _run_pipeline_bg(task_id: str):
@@ -102,7 +148,9 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         _processing_mode = "direct"
 
     # 成本预估校验（无逐字稿时按链接采集后的估值留待运行时校验，提交时用占位长度）
-    est = cost_svc.estimate_cost(transcript or "x" * 500, body.modules, None,
+    # 固定 5 张图模式：按 5 张图估算成本
+    image_count = 5 if (body.image_count_mode or "auto") == "fixed_5" else None
+    est = cost_svc.estimate_cost(transcript or "x" * 500, body.modules, image_count,
                                  cfg.llm_provider, cfg.image_provider,
                                  body.image_gen_mode or "per_image",
                                  getattr(cfg, "image_unit_price", None))
@@ -125,6 +173,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         video_mode=body.video_mode or "vlog",
         creation_mode=body.creation_mode or "same_topic",
         image_gen_mode=body.image_gen_mode or "per_image",
+        image_count_mode=body.image_count_mode or "auto",
         processing_mode=_processing_mode, pause_mode=body.pause_mode,
         pause_steps=body.pause_steps or None,
         status="pending",
@@ -270,7 +319,9 @@ def estimate(body: TaskCreate, db: Session = Depends(get_db)):
     provider_img = cfg.image_provider if cfg else "doubao"
     # transcript 可选：未填（走链接采集）时按占位长度估算上限。
     text = (body.transcript or "").strip() or "x" * 500
-    est = cost_svc.estimate_cost(text, body.modules, None, provider_llm, provider_img,
+    # 固定 5 张图模式：成本估算按 5 张算，不按时长动态估算
+    image_count = 5 if (body.image_count_mode or "auto") == "fixed_5" else None
+    est = cost_svc.estimate_cost(text, body.modules, image_count, provider_llm, provider_img,
                                  body.image_gen_mode or "per_image",
                                  getattr(cfg, "image_unit_price", None) if cfg else None)
     return EstimateOut(estimated_cost=est, daily_cap_reached=cost_svc.daily_cap_reached(db))
@@ -351,8 +402,18 @@ def _compose_bg(task_id: str, audio_path: str, subs: bool, anim: bool, output_mo
     db = SessionLocal()
     try:
         compose.compose_video(db, task_id, audio_path, subs, anim, output_mode=output_mode)
-    except Exception:
-        pass  # 失败状态已在 compose 内写库
+    except Exception as e:
+        # BUG-G: _load_assets 抛出的 ValueError（配图/分段未就绪）会被静默吞掉，
+        # 任务永久卡在 processing。在此兜底写 failed，确保状态可恢复。
+        try:
+            task = db.get(Task, task_id)
+            if task and task.status == "processing":
+                task.status = "failed"
+                task.error_code = "E5001"
+                task.error_message = str(e)[:500]
+                db.commit()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -368,6 +429,8 @@ async def upload_audio(task_id: str, bg: BackgroundTasks, file: UploadFile = Fil
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(404, detail="任务不存在")
+    if task.status == "processing":
+        raise HTTPException(400, detail="任务正在处理中，请稍后再试")
     if task.status not in ("awaiting_audio", "completed", "failed"):
         raise HTTPException(400, detail="任务尚未到可上传音频阶段")
     if output_mode not in ("jianying", "mp4"):
@@ -408,6 +471,15 @@ async def upload_audio(task_id: str, bg: BackgroundTasks, file: UploadFile = Fil
             logging.getLogger("uvicorn").warning(
                 "歌词对齐失败 task=%s: %s", task_id, e
             )
+    else:
+        # BUG-20: TTS 失败后用户手动上传音频，T 模块仍显示"失败"。
+        # 上传成功即代表音频来源已由用户提供，将 T 状态更新为 success，
+        # 让详情页展示正确状态（合成成片的逻辑走 _compose_bg，不依赖此字段）。
+        t_mr = db.query(ModuleResult).filter_by(task_id=task_id, module="T").first()
+        if t_mr and t_mr.status == "failed":
+            t_mr.status = "success"
+            t_mr.output = {"audio_path": str(audio_path), "seg_source": "manual_upload"}
+            db.commit()
 
     task.status = "processing"
     db.commit()
@@ -458,6 +530,7 @@ async def upload_reference(file: UploadFile = File(...), db: Session = Depends(g
     ext = Path(file.filename or "ref.png").suffix or ".png"
     ref_dir = storage_root(db) / "_reference_uploads"
     ref_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_uploads(ref_dir, "ref_*", db)
     ref_path = ref_dir / f"ref_{uuid.uuid4().hex[:12]}{ext}"
     ref_path.write_bytes(data)
     return {"reference_image": str(ref_path)}
@@ -508,6 +581,7 @@ async def upload_audio(file: UploadFile = File(...), db: Session = Depends(get_d
     ext = Path(file.filename or "audio.mp3").suffix or ".mp3"
     audio_dir = storage_root(db) / "_audio_uploads"
     audio_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_stale_uploads(audio_dir, "audio_*", db)
     audio_path = audio_dir / f"audio_{uuid.uuid4().hex[:12]}{ext}"
     audio_path.write_bytes(data)
     return {"audio_file": str(audio_path)}
@@ -596,26 +670,24 @@ def delete_task(task_id: str, db: Session = Depends(get_db)):
         raise HTTPException(400, detail="仅已完成/失败/已取消/已拦截的任务可删除")
     # 从调度队列移除（防边缘情况）
     scheduler.cancel_queued(task_id)
-    # 删除模块结果
+    # 先在事务内删除所有 DB 记录（ModuleResult + CostLog + Task），再清磁盘
+    # BUG-8: 不删 CostLog 会导致已删任务的费用被计入每日上限，误拦新任务
+    # BUG-6: 放同一事务，避免进程崩溃后 DB 和磁盘状态不一致
     db.query(ModuleResult).filter_by(task_id=task_id).delete()
-    # 删除配图目录
-    img_dir = storage_root(db) / task_id / "images"
-    if img_dir.exists():
-        shutil.rmtree(img_dir, ignore_errors=True)
-    # 删除剪映草稿/成片目录
-    draft_dir = storage_root(db) / task_id / "jianying"
-    if draft_dir.exists():
-        shutil.rmtree(draft_dir, ignore_errors=True)
-    # 删除音频/视频目录
-    audio_dir = storage_root(db) / task_id / "audio"
-    if audio_dir.exists():
-        shutil.rmtree(audio_dir, ignore_errors=True)
-    video_dir = storage_root(db) / task_id / "video"
-    if video_dir.exists():
-        shutil.rmtree(video_dir, ignore_errors=True)
-    # 删除任务记录
+    db.query(CostLog).filter_by(task_id=task_id).delete()
     db.delete(task)
     db.commit()
+    # 事务提交后再清磁盘（即使失败也不影响 DB 一致性）
+    storage = storage_root(db)
+    for subdir in ("images", "jianying", "audio", "video"):
+        d = storage / task_id / subdir
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+    # BUG-H: 清理空父目录（只删空目录，有残留文件时静默跳过）
+    try:
+        (storage / task_id).rmdir()
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -630,8 +702,17 @@ def resume_task(task_id: str, bg: BackgroundTasks, db: Session = Depends(get_db)
         raise HTTPException(400, detail="任务当前不处于待确认状态")
     if cost_svc.daily_cap_reached(db):
         raise HTTPException(402, detail="E2003: 每日成本上限已达")
-    task.status = "pending"
+    # BUG-1: 原子 CAS——只有当前仍是 awaiting_confirm 才改为 pending，
+    # 防止并发两个 resume 请求都通过检查后双跑 pipeline（双重生图扣费）。
+    from sqlalchemy import update
+    rows = db.execute(
+        update(Task)
+        .where(Task.id == task_id, Task.status == "awaiting_confirm")
+        .values(status="pending")
+    ).rowcount
     db.commit()
+    if rows == 0:
+        raise HTTPException(400, detail="任务当前不处于待确认状态")
     scheduler.submit(task.id, _resume_pipeline_bg, task.id)
     db.refresh(task)
     return task
@@ -756,10 +837,9 @@ def originality_rewrite(task_id: str, db: Session = Depends(get_db)):
             raise HTTPException(502, detail="改写返回为空，请重试")
         # 回写 B 产物
         b.output = {**(b.output or {}), "script": new_script}
-        # 记录降重成本
+        # 记录降重成本（rebill 替换而非累加，防止多次调用叠加）
         c = cost_svc.actual_llm_cost(_fr.tokens_in, _fr.tokens_out, cfg.llm_provider)
-        cost_svc.record_cost(db, task_id, "O", cfg.llm_provider, c)
-        task.total_cost = float(task.total_cost) + c
+        cost_svc.rebill_module(db, task, "O", cfg.llm_provider, c)
         # 复测并保存 O
         recheck = tm.check_originality(cleaned, new_script, max_similarity_ratio=0.40)
         _save_o_result(db, task_id, recheck)
@@ -866,8 +946,10 @@ def rerun_task(task_id: str, body: RerunRequest, bg: BackgroundTasks,
         raise HTTPException(402, detail="E2003: 每日成本上限已达")
     if body.transcript and body.transcript.strip():
         task.transcript = body.transcript.strip()
-        # 改了文案：清空已有模块结果，从头重跑（旧产物已失效）
+        # 改了文案：清空旧模块结果和 CostLog，从头重跑（BUG-L: 不清 CostLog 会导致日限额虚高）
         db.query(ModuleResult).filter_by(task_id=task_id).delete()
+        db.query(CostLog).filter_by(task_id=task_id).delete()
+        task.total_cost = 0.0
     task.status = "pending"
     task.error_code = None
     task.error_message = None
@@ -1084,6 +1166,7 @@ def retry_image(task_id: str, index: int, body: ImageRetryRequest,
 
         # 模型/地址/单价：本次请求显式指定的优先，否则跟随全局配置。
         _model = body.model or (cfg.image_model if cfg else None)
+        _validate_base_url(body.base_url)
         _base_url = body.base_url or (getattr(cfg, "image_base_url", None) if cfg else None)
         _unit_price = body.unit_price if body.unit_price is not None else getattr(cfg, "image_unit_price", None)
 
@@ -1306,6 +1389,7 @@ def batch_retry_images(task_id: str, body: ImageBatchRetryRequest,
     _llm_key = decrypt(cfg.llm_api_key_enc) if cfg and cfg.llm_api_key_enc else ""
     # 模型/地址/单价：本次请求显式指定的优先，否则跟随全局配置。
     _model = body.model or (cfg.image_model if cfg else None)
+    _validate_base_url(body.base_url)
     _base_url = body.base_url or (getattr(cfg, "image_base_url", None) if cfg else None)
     _unit_price = body.unit_price if body.unit_price is not None else getattr(cfg, "image_unit_price", None)
 
@@ -1401,12 +1485,24 @@ def rerun_step(task_id: str, module: str, bg: BackgroundTasks,
         raise HTTPException(404, detail="任务不存在")
     if module not in _DOWNSTREAM:
         raise HTTPException(400, detail=f"不支持从 {module} 单步重跑")
+    if task.status == "processing":
+        raise HTTPException(400, detail="任务正在处理中，请稍后再试")
     if cost_svc.daily_cap_reached(db):
         raise HTTPException(402, detail="E2003: 每日成本上限已达")
-    # 清掉该步及其下游产物，上游保留 → resume 时上游命中缓存、从该步真正重算
+    # 清掉该步及其下游产物和对应 CostLog，上游保留 → resume 时上游命中缓存、从该步真正重算
+    # BUG-M: 不清 CostLog 会导致 total_cost 虚高，_check_limits 误判超支
+    downstream_modules = _DOWNSTREAM[module]
     db.query(ModuleResult).filter(
         ModuleResult.task_id == task_id,
-        ModuleResult.module.in_(_DOWNSTREAM[module])).delete(synchronize_session=False)
+        ModuleResult.module.in_(downstream_modules)).delete(synchronize_session=False)
+    db.query(CostLog).filter(
+        CostLog.task_id == task_id,
+        CostLog.module.in_(downstream_modules)).delete(synchronize_session=False)
+    db.flush()
+    from sqlalchemy import func as _func
+    total = db.query(_func.coalesce(_func.sum(CostLog.cost), 0)).filter(
+        CostLog.task_id == task_id).scalar()
+    task.total_cost = float(total or 0)
     task.status = "pending"
     task.error_code = None
     task.error_message = None

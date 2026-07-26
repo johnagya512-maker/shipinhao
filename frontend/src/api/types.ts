@@ -37,6 +37,7 @@ export interface TaskCreate {
   video_mode?: string       // vlog(口播) | music(唱歌·MV)
   creation_mode?: string
   image_gen_mode?: string
+  image_count_mode?: string   // auto(按时长自动计算) | fixed_5(固定5张图)
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]
@@ -132,6 +133,7 @@ export interface TaskDetail {
   aspect_ratio?: string | null
   layout?: string | null
   image_gen_mode?: string
+  image_count_mode?: string
   reference_image?: string | null
   voice?: string | null
   voice_speed?: number

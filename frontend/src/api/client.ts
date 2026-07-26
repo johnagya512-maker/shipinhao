@@ -64,7 +64,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'TimeoutError') {
-      throw new ApiError('请求超时，可能是大模型响应太慢，请重试。', 0, 'E_TIMEOUT')
+      // 生图等长耗时接口：前端断开后后端仍可能继续向上游付费生成。
+      // 提示用户先刷新查看结果，避免立即重试导致重复扣费。
+      throw new ApiError('请求已发送但前端等待超时，后台可能仍在处理。请等待 1-2 分钟后刷新页面查看结果，不要立即重试，以免重复扣费。', 0, 'E_TIMEOUT')
     }
     throw new ApiError('网络请求失败，请检查后端是否在运行。', 0, 'E_NETWORK')
   }
@@ -234,18 +236,18 @@ export const api = {
     request<{ index: number; image: GeneratedImage; failed: boolean; reason?: string | null
       rewritten?: boolean; new_prompt?: string | null }>(
       `/tasks/${id}/images/${index}/retry`, {
-        // 单张生图后端最坏要跑满重试(gpt 断连重试4次×90s+退避≈420s)，给 10 分钟兜底
+        // 单张生图：APIMart 异步接口可能较慢，给足 900 秒；
+        // 同步接口（tu-zi/gpt/豆包官方）通常几秒~几十秒完成。
         method: 'POST', body: JSON.stringify({
           prompt: prompt ?? null,
           model: preset?.model ?? null,
           base_url: preset?.base_url ?? null,
           unit_price: preset?.unit_price ?? null,
         }),
-        signal: AbortSignal.timeout(600_000),  // 从 300 秒提高到 600 秒
+        signal: AbortSignal.timeout(900_000),
       }),
-  // 多张图一起重新组图：传选中的图片下标，后端合并成一次组图请求生成（省请求、
-  // 风格统一、人物一致）。后端按 ref 把图合并成最多两组、各一次请求出多张并发下载，
-  // 不随张数线性变慢。逐张模式并发数=5，多张需分批：9张=两批(5+4)，每批最坏420s，给 15 分钟兜底。
+  // 多张图一起重新组图：APIMart 异步接口 5 张图可能需等待数分钟，给足 1200 秒；
+  // 同步接口（tu-zi/gpt/豆包）通常 120 秒内完成。
   // genMode 可当场指定本次出图方式（grid 九宫格省成本 / per_image 逐张画质优先）；
   // 不传则跟随建任务时选的模式。
   batchRetryImages: (id: string, indices: number[], genMode?: string,
@@ -259,7 +261,7 @@ export const api = {
           base_url: preset?.base_url ?? null,
           unit_price: preset?.unit_price ?? null,
         }),
-        signal: AbortSignal.timeout(900_000),  // 从 600 秒提高到 900 秒（15 分钟）
+        signal: AbortSignal.timeout(1_200_000),
       }),
   // 单步重跑：清掉该步及下游产物，从该步重算（上游走缓存）。
   rerunStep: (id: string, module: string) =>

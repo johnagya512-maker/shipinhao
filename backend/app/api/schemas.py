@@ -37,6 +37,7 @@ class TaskCreate(BaseModel):
     video_mode: str = "vlog"             # vlog(口播) | music(唱歌·MV)
     creation_mode: str = "same_topic"    # same_topic(拆结构二创) | lite(轻量改写) | remix(中度仿写) | book_remix(图书带货深度二创) | none(不拆直接改写)
     image_gen_mode: str = "grid"    # grid(九宫格省成本,默认) | per_image(逐张,画质优先)
+    image_count_mode: str = "auto"  # auto(按时长自动计算) | fixed_5(固定只生成5张图)
     processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
     # 预览二创后用户编辑确认的定稿文案。非空时：作为最终文案，跳过 A 清洗 + B 改写
     # （走 direct 模式直接用），保证「所见即所得」、并省两次 LLM 调用。
@@ -69,7 +70,8 @@ class ImageRetryRequest(BaseModel):
     prompt: str | None = None
     model: str | None = None
     base_url: str | None = None
-    unit_price: float | None = None
+    # BUG-14: unit_price=0 会让成本核算失效，加范围限制；> 0 才有效
+    unit_price: float | None = Field(default=None, gt=0, le=100)
 
 
 class ImageBatchRetryRequest(BaseModel):
@@ -82,7 +84,8 @@ class ImageBatchRetryRequest(BaseModel):
     gen_mode: str | None = None
     model: str | None = None
     base_url: str | None = None
-    unit_price: float | None = None
+    # BUG-14: 同 ImageRetryRequest
+    unit_price: float | None = Field(default=None, gt=0, le=100)
 
 
 class StepRerunRequest(BaseModel):
@@ -95,7 +98,8 @@ class TaskOut(BaseModel):
     id: str
     status: str
     total_cost: float
-    image_gen_mode: str = "per_image"
+    image_gen_mode: str = "per_image"  # grid | per_image
+    image_count_mode: str = "auto"     # auto | fixed_5
     error_code: str | None = None
     error_message: str | None = None
 

@@ -146,14 +146,19 @@ def record_cost(db: Session, task_id: str, module: str, provider: str, cost: flo
 def rebill_module(db: Session, task, module: str, provider: str, cost: float):
     """重算某模块成本（替换而非累加）。用于图片重试/重新组图：当前 E 产物的实际成本
     覆盖该模块旧账，避免历史叠加把 total_cost 越滚越高、误判超限。
-    做法：删该 task+module 的旧 CostLog → 记一笔新的 → total_cost 重算为各模块当前之和。"""
-    db.query(CostLog).filter(CostLog.task_id == task.id, CostLog.module == module).delete()
-    db.add(CostLog(task_id=task.id, module=module, provider=provider, cost=cost))
-    db.flush()
-    total = db.query(func.coalesce(func.sum(CostLog.cost), 0)).filter(
-        CostLog.task_id == task.id).scalar()
-    task.total_cost = float(total or 0)
-    db.commit()
+    做法：删该 task+module 的旧 CostLog → 记一笔新的 → total_cost 重算为各模块当前之和。
+    BUG-16: 删旧+插新+sum 放在同一事务内，防止中途崩溃丢失计费记录。"""
+    try:
+        db.query(CostLog).filter(CostLog.task_id == task.id, CostLog.module == module).delete()
+        db.add(CostLog(task_id=task.id, module=module, provider=provider, cost=cost))
+        db.flush()
+        total = db.query(func.coalesce(func.sum(CostLog.cost), 0)).filter(
+            CostLog.task_id == task.id).scalar()
+        task.total_cost = float(total or 0)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return task.total_cost
 
 

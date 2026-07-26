@@ -1,6 +1,6 @@
 {
   "name": "shipinhao-desktop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "视频号图书带货 AI 工作流 - 桌面客户端",
   "main": "main.js",
   "scripts": {

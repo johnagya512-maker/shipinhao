@@ -12,13 +12,13 @@ const TTS_PROVIDERS = ['edge_local', 'volcano', 'siliconflow', 'yuntts_edge']
 // 内置配图预设模板：库里没存过预设时供「应用」快速填充。仅含模型/地址/单价，不含 key。
 // 应用后需手动填入对应平台的 API Key，然后点"存为预设"保存 key，下次切换就能自动切 key。
 const BUILTIN_PRESETS: ImagePreset[] = [
+  // Apimart 中转站（api.apib.ai）- 默认使用，价格最优，异步协议
+  { name: 'gpt-image-2（Apimart）', model: 'gpt-image-2', base_url: 'https://api.apib.ai/v1/images/generations', unit_price: 0.042 },
+  { name: '豆包 Seedream（Apimart）', model: 'doubao-seedream-4-5-251128', base_url: 'https://api.apib.ai/v1/images/generations', unit_price: 0.058 },
+
   // 兔子中转站（tu-zi.com）
   { name: '豆包 Seedream（兔子）', model: 'doubao-seedream-4-5-251128', base_url: 'https://api.tu-zi.com/v1/images/generations', unit_price: 0.25 },
   { name: 'gpt-image-2（兔子）', model: 'gpt-image-2', base_url: 'https://api.tu-zi.com/v1/images/generations', unit_price: 0.058 },
-
-  // Apimart 中转站（api.apib.ai）- 价格最优，异步协议
-  { name: '豆包 Seedream（Apimart）', model: 'doubao-seedream-4-5-251128', base_url: 'https://api.apib.ai/v1/images/generations', unit_price: 0.058 },
-  { name: 'gpt-image-2（Apimart）', model: 'gpt-image-2', base_url: 'https://api.apib.ai/v1/images/generations', unit_price: 0.042 },
 
   // 豆包官方（ark.cn-beijing.volces.com）
   { name: '豆包 Seedream（官方）', model: 'doubao-seedream-4-5-251128', base_url: 'https://ark.cn-beijing.volces.com/api/v3/images/generations', unit_price: 0.20 },

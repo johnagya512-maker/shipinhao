@@ -5,9 +5,12 @@ mock 模式（无 Key 或 provider=mock 时返回占位图），便于 G 模块�
 真实供应商接入在 _call_<provider> 中补全。
 """
 import httpx
+import logging
 from dataclasses import dataclass, field
 from PIL import Image
 from pathlib import Path
+
+logger = logging.getLogger("uvicorn")
 
 
 @dataclass
@@ -169,12 +172,14 @@ def _apib_request(url: str, api_key: str, prompt: str, aspect_ratio: str, n: int
     if ref_uri:
         payload["image_urls"] = [ref_uri]  # 参考图
 
-    _kw = {"timeout": timeout}
+    # 提交请求很快；若上游卡住，用 timeout 会拖慢总预算，单独给个较短超时。
+    submit_timeout = min(30.0, float(timeout))
+    submit_kw = {"timeout": submit_timeout}
     if proxy:
-        _kw["proxy"] = proxy
+        submit_kw["proxy"] = proxy
 
     try:
-        resp = httpx.post(url, json=payload, headers=headers, **_kw)
+        resp = httpx.post(url, json=payload, headers=headers, **submit_kw)
     except httpx.TimeoutException as e:
         raise ImageError(f"{label}提交超时: {e}", retryable=True)
     except httpx.RequestError as e:
@@ -211,13 +216,22 @@ def _apib_request(url: str, api_key: str, prompt: str, aspect_ratio: str, n: int
     except (KeyError, IndexError, ValueError) as e:
         raise ImageError(f"{label}响应解析失败: {e}", retryable=False)
 
+    # 下载图片用独立超时（长一点，避免大图下载失败）
+    _kw = {"timeout": max(30.0, float(timeout) - submit_timeout)}
+    if proxy:
+        _kw["proxy"] = proxy
+
     # 2. 轮询任务状态
     # URL: https://api.apib.ai/v1/images/generations → https://api.apib.ai
-    base_url = url.rsplit("/", 2)[0]
+    # rsplit 3段: 切掉 "v1/images/generations"，避免拼出 /v1/v1/tasks/...
+    base_url = url.rsplit("/", 3)[0]
     query_url = f"{base_url}/v1/tasks/{task_id}"
 
-    max_attempts = 60  # 最多轮询 60 次
-    poll_interval = 2  # 每 2 秒查询一次 (总共最多 120 秒)
+    # 轮询总时长与本次调用允许的最大等待时间对齐（给提交请求留 10 秒余量），
+    # 避免上游实际处理慢时后端提前放弃，导致「已扣费但丢图」。
+    poll_budget = max(30.0, float(timeout) - submit_timeout - 10.0)
+    poll_interval = 2.0
+    max_attempts = max(15, int(poll_budget / poll_interval))
 
     for attempt in range(max_attempts):
         time.sleep(poll_interval)
@@ -240,31 +254,50 @@ def _apib_request(url: str, api_key: str, prompt: str, aspect_ratio: str, n: int
             task_status = task_data.get("status")
 
             if task_status == "completed":
-                # 任务完成，获取图片 URL
-                image_url = task_data.get("image_url")
-                if not image_url:
-                    # 尝试从 image_urls 数组获取
+                # APIMart 实际返回结构优先用 image_url / image_urls；
+                # 也兼容文档里写的 data.result.images[*].url[] 结构。
+                image_urls = []
+                result_obj = task_data.get("result") or {}
+                if isinstance(result_obj, dict):
+                    for img_obj in result_obj.get("images", []):
+                        if isinstance(img_obj, dict):
+                            url_field = img_obj.get("url")
+                            if isinstance(url_field, list) and url_field:
+                                image_urls.append(url_field[0])
+                            elif isinstance(url_field, str):
+                                image_urls.append(url_field)
+                if not image_urls:
                     image_urls = task_data.get("image_urls", [])
-                    if image_urls:
-                        image_url = image_urls[0]
+                if not image_urls and task_data.get("image_url"):
+                    image_urls = [task_data["image_url"]]
 
-                if not image_url:
+                if not image_urls:
                     raise ImageError(f"{label}完成但未返回图片URL", retryable=False)
 
-                # 3. 下载图片
-                img_resp = httpx.get(image_url, **_kw)
-                return [img_resp.content]
+                # 3. 下载所有图片
+                imgs = []
+                for image_url in image_urls:
+                    try:
+                        img_resp = httpx.get(image_url, **_kw)
+                        imgs.append(img_resp.content)
+                    except Exception as e:
+                        raise ImageError(f"{label}下载图片失败: {e}", retryable=False)
+                return imgs
 
-            elif task_status == "failed":
-                error_msg = task_data.get("error", "Unknown error")
+            elif task_status in ("failed", "cancelled"):
+                err = task_data.get("error") or {}
+                if isinstance(err, dict):
+                    error_msg = err.get("message") or err.get("type") or "Unknown error"
+                else:
+                    error_msg = err or "Unknown error"
                 raise ImageError(f"{label}生成失败: {error_msg}", retryable=False)
 
             # 其他状态（processing, pending, submitted）继续等待
         except (KeyError, ValueError):
             continue
 
-    # 超时
-    raise ImageError(f"{label}生成超时（{max_attempts * poll_interval}秒）", retryable=True)
+    # 轮询超时：上游任务已提交，再重试会变成重复扣费，所以 retryable=False。
+    raise ImageError(f"{label}生成超时（{int(poll_budget)}秒内未见到结果）", retryable=False)
 
 
 def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
@@ -275,15 +308,20 @@ def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
     错误语义沿用 ImageError（含审核 audit 标记），与豆包分支保持一致。"""
     import base64
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    # APIMart 文档示例返回 url，且支持 reference_images 数组作参考图；其他中转站常用 b64_json + image 字段。
+    is_apib_url = any(h in (url or "") for h in _APIB_HOSTS)
     payload = {
         "model": model,
         "prompt": prompt,
         "n": max(1, n),
-        "response_format": "b64_json",  # gpt-image-2 必需参数：明确返回 base64 格式
-        "quality": "high",  # 高质量渲染
+        "response_format": "url" if is_apib_url else "b64_json",
+        "quality": "high",
     }
     if ref_uri:
-        payload["image"] = ref_uri  # 图生图：JSON 传 data URI（中转站支持，edits 接口不支持）
+        if is_apib_url:
+            payload["reference_images"] = [ref_uri]
+        else:
+            payload["image"] = ref_uri  # 图生图：JSON 传 data URI（中转站支持，edits 接口不支持）
     _kw = {"timeout": timeout}
     if proxy:
         _kw["proxy"] = proxy
@@ -324,7 +362,8 @@ def _gpt_request(url: str, api_key: str, prompt: str, size: str, n: int,
         # 这种返空若判 retryable 会被上层 IMG_RETRY 反复重打 → 一张图扣 N 次钱却拿不到图
         # (task: "扣60几次0张图"的元凶)。故标 retryable=False: 不自动重试、直接占位, 一张最多扣1次,
         # 是否再花钱由用户在画廊手动「重新生成」决定。
-        raise ImageError(f"{label}未返回图片(中转站返空, 不自动重试)", retryable=False)
+        logger.warning(f"{label} APIMart/gpt 返空: status={resp.status_code} body={resp.text[:1000]}")
+        raise ImageError(f"{label}未返回图片(中转站返空, 不自动重试): {str(resp.text)[:200]}", retryable=False)
     return out
 
 
@@ -474,20 +513,26 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
     try:
         url = _endpoint(provider, base_url)
 
-        # APIMart (apib.ai) 异步协议分支：提交任务 → 轮询状态 → 下载图片
-        if _is_apib(base_url):
+        # APIMart (apib.ai/apimart.ai) 是异步任务制，走专用轮询分支。
+        # BUG-18: 实测慢请求可能需要 1755s，固定 600s 会误判超时并占位。
+        # APIMart 给 2000s 轮询预算；其他同步接口正常很快，120s 足够。
+        is_apib = _is_apib(base_url)
+        effective_timeout = 2000.0 if is_apib else min(float(timeout), 120.0)
+
+        # APIMart (apib.ai/apimart.ai) 是异步任务制，走专用轮询分支。
+        if is_apib:
             imgs = _apib_request(url, api_key, prompt, aspect_ratio, 1,
-                                model or "gpt-image-2", timeout, proxy,
-                                ref_uri=ref_uri, label="配图")
+                                 model or "gpt-image-2", effective_timeout, proxy,
+                                 ref_uri=ref_uri, label="配图")
             out_path.write_bytes(imgs[0])
             _normalize(out_path, size=(w, h), grayscale=grayscale, no_crop=no_crop)
             return ImageResult(str(out_path), sub_type, suggested_duration, {})
 
-        # OpenAI 兼容协议分支（中转站或 gpt 模型）：统一使用 JSON 格式传递 image 字段
+        # OpenAI 兼容协议分支（中转站 / gpt 模型）：统一使用 JSON 格式传递 image 字段
         # 中转站(tu-zi等)不支持 multipart/edits 接口，必须用 JSON 格式
         if _is_gpt(model, base_url):
             imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio), 1,
-                                model, timeout, proxy, label="配图", ref_uri=ref_uri)
+                                model, effective_timeout, proxy, label="配图", ref_uri=ref_uri)
             out_path.write_bytes(imgs[0])
             _normalize(out_path, size=(w, h), grayscale=grayscale, no_crop=no_crop)
             return ImageResult(str(out_path), sub_type, suggested_duration, {})
@@ -503,7 +548,7 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
         if ref_uri:
             # 图生图：传参考图保持人物一致性（Seedream 4.x 支持 image 入参，实测有效）
             payload["image"] = ref_uri
-        _kw = {"timeout": timeout}
+        _kw = {"timeout": effective_timeout}
         if proxy:
             _kw["proxy"] = proxy
         resp = httpx.post(url, json=payload, headers=headers, **_kw)
@@ -550,7 +595,9 @@ def generate_image(provider: str, api_key: str, prompt: str, sub_type: str,
     except ImageError:
         raise  # 已是 ImageError 直接向上抛
     except httpx.TimeoutException as e:
-        raise ImageError(f"配图超时: {e}", retryable=True)
+        # 同步接口超时后，上游大概率已扣费但不一定完成，再重试会变成重复扣费；
+        # APIMart 异步接口有自己的轮询重试逻辑，不会走到这里。
+        raise ImageError(f"配图超时: {e}", retryable=False)
     except httpx.RequestError as e:
         raise ImageError(f"配图请求错误: {e}", retryable=True)
     except Exception as e:
@@ -689,8 +736,13 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
             res.append(ImageResult(str(op), st, du, {"mock": True, "grid": True}))
         return res
 
-    # APIMart 异步协议九宫格分支：纯文字提示画 3×3（和 OpenAI 格式类似）
-    if _is_apib(base_url):
+    # APIMart 与 OpenAI 兼容，走同步 /v1/images/generations；允许等久一点。
+    # 其他同步接口（tu-zi/豆包官方）正常很快，120 秒足够。
+    is_apib = _is_apib(base_url)
+    effective_timeout = 2000.0 if is_apib else min(float(timeout), 120.0)
+
+    # APIMart 异步协议九宫格分支：纯文字提示画 3×3
+    if is_apib:
         url = _endpoint(provider, base_url)
         grid_prompt = (
             "请把整张图片均匀划分成 3 行 3 列、共 9 个完全等大的方格，"
@@ -700,17 +752,20 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
             + cell_prompt + "\n\n不要在图片里放任何文字说明。"
         )
         imgs = _apib_request(url, api_key, grid_prompt, aspect_ratio, 1,
-                            model or "gpt-image-2", timeout, proxy, label="九宫格")
+                             model or "gpt-image-2", effective_timeout, proxy,
+                             ref_uri=ref_uri, label="九宫格")
         raw = out_paths[0].parent / "_grid_raw.png"
         raw.write_bytes(imgs[0])
-        res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
         try:
-            raw.unlink()
-        except Exception:
-            pass
+            res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
+        finally:
+            try:
+                raw.unlink()
+            except Exception:
+                pass
         return res
 
-    # OpenAI 兼容协议九宫格分支：仅 gpt/dall-e 模型走纯文字九宫格。
+    # OpenAI 兼容协议九宫格分支（中转站 / gpt/dall-e 模型）：仅 gpt/dall-e 模型走纯文字九宫格。
     # 豆包模型即使走中转站，也用带模板图的九宫格（豆包不支持 OpenAI 标准尺寸档位）。
     # 注：文字画 3×3 规整度依赖模型能力，切图可能偏格。
     # 竖版九宫格用正方形画布（兔子中转站不支持 1024x1536 竖版尺寸，会断连）。
@@ -735,15 +790,17 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         # 横版用 1536x1024（兔子支持），竖版用正方形 1024x1024（兔子不支持 1024x1536）
         grid_size = "1536x1024" if (aspect_ratio or "9:16") == "16:9" else "1024x1024"
         imgs = _gpt_request(url, api_key, grid_prompt, grid_size, 1,
-                            model, timeout, proxy, label="九宫格", ref_uri=tpl_uri)
+                            model, effective_timeout, proxy, label="九宫格", ref_uri=tpl_uri)
         raw = out_paths[0].parent / "_grid_raw.png"
         raw.write_bytes(imgs[0])
-        res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
-        for tmp in (tpl_path, raw):
-            try:
-                tmp.unlink()
-            except Exception:
-                pass
+        try:
+            res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
+        finally:
+            for tmp in (tpl_path, raw):
+                try:
+                    tmp.unlink()
+                except Exception:
+                    pass
         return res
 
     import base64
@@ -759,13 +816,14 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
                "response_format": "url", "stream": False, "watermark": False}
     if model:
         payload["model"] = model
-    _kw = {"timeout": timeout}
+    _kw = {"timeout": effective_timeout}
     if proxy:
         _kw["proxy"] = proxy
     try:
         resp = httpx.post(url, json=payload, headers=headers, **_kw)
     except httpx.TimeoutException as e:
-        raise ImageError(f"九宫格超时: {e}", retryable=True)
+        # 同步接口超时不重试，避免重复扣费。
+        raise ImageError(f"九宫格超时: {e}", retryable=False)
     except httpx.RequestError as e:
         raise ImageError(f"九宫格请求错误: {e}", retryable=True, disconnect=True)
     if resp.status_code == 401:
@@ -790,10 +848,14 @@ def generate_grid_image(provider: str, api_key: str, cell_prompt: str,
         raw.write_bytes(httpx.get(data[0]["url"], **_kw).content)
     except Exception as e:
         raise ImageError(f"九宫格下载失败: {e}", retryable=True)
-    res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
-    for tmp in (tpl_path, raw):
-        try: tmp.unlink()
-        except Exception: pass
+    try:
+        res = _split_grid(raw, out_paths, sub_types, durations, aspect_ratio, grayscale=grayscale)
+    finally:
+        for tmp in (tpl_path, raw):
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
     return res
 
 
@@ -819,12 +881,36 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
         return res
 
     url = _endpoint(provider, base_url)
-    # OpenAI 兼容协议组图分支：统一使用 JSON 格式传递 image 字段
-    # 中转站不支持 multipart/edits 接口，必须用 JSON 格式
+    # APIMart 与 OpenAI 兼容，走同步 /v1/images/generations；允许等久一点。
+    # 其他同步接口（tu-zi/豆包官方）正常很快，120 秒足够。
+    is_apib = _is_apib(base_url)
+    effective_timeout = 2000.0 if is_apib else min(float(timeout), 120.0)
+
+    # APIMart 异步协议组图分支
+    if is_apib:
+        try:
+            imgs = _apib_request(url, api_key, prompt, aspect_ratio,
+                                 min(n, 10), model or "gpt-image-2", effective_timeout, proxy,
+                                 ref_uri=ref_uri, label="组图")
+        except ImageError:
+            raise
+        res = []
+        for i, op in enumerate(out_paths):
+            if i < len(imgs):
+                op.write_bytes(imgs[i])
+                _normalize(op, size=(w, h), grayscale=grayscale, no_crop=no_crop)
+                res.append(ImageResult(str(op), sub_types[i], durations[i], {}))
+            else:
+                _placeholder(op, sub_types[i], (230, 230, 230), size=(w, h))
+                res.append(ImageResult(str(op), sub_types[i], durations[i],
+                                       {"fallback": True, "reason": "组图返回数量不足"}))
+        return res
+
+    # OpenAI 兼容协议组图分支（中转站 / gpt 模型）
     if _is_gpt(model, base_url):
         try:
             imgs = _gpt_request(url, api_key, prompt, _gpt_size(aspect_ratio),
-                                min(n, 10), model, timeout, proxy, label="组图", ref_uri=ref_uri)
+                                min(n, 10), model, effective_timeout, proxy, label="组图", ref_uri=ref_uri)
         except ImageError:
             raise
         res = []
@@ -849,13 +935,14 @@ def generate_images_batch(provider: str, api_key: str, prompt: str,
         payload["model"] = model
     if ref_uri:
         payload["image"] = ref_uri
-    _kw = {"timeout": timeout}
+    _kw = {"timeout": effective_timeout}
     if proxy:
         _kw["proxy"] = proxy
     try:
         resp = httpx.post(url, json=payload, headers=headers, **_kw)
     except httpx.TimeoutException as e:
-        raise ImageError(f"组图超时: {e}", retryable=True)
+        # 同步接口超时不重试，避免重复扣费。
+        raise ImageError(f"组图超时: {e}", retryable=False)
     except httpx.RequestError as e:
         raise ImageError(f"组图请求错误: {e}", retryable=True)
     if resp.status_code == 401:

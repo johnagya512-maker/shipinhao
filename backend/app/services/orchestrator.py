@@ -337,12 +337,10 @@ def run_pipeline(db: Session, task_id: str):
                         # 回写 B 产物，让详情页/后续分句用降重后的稿
                         _save_result(db, task.id, "B", "success",
                                      output={"script": script})
-                        # 记录降重这次 LLM 调用成本
+                        # BUG-17: 用 rebill 替代累加，防止多次降重把 O 模块成本重复叠加
                         c = cost_svc.actual_llm_cost(_or.tokens_in, _or.tokens_out,
                                                      cfg.llm_provider)
-                        cost_svc.record_cost(db, task.id, "O", cfg.llm_provider, c)
-                        task.total_cost = float(task.total_cost) + c
-                        db.commit()
+                        cost_svc.rebill_module(db, task, "O", cfg.llm_provider, c)
                     else:
                         break
                 except Exception:
@@ -474,6 +472,12 @@ def run_pipeline(db: Session, task_id: str):
             est_dur = len(script) / cost_svc.CHARS_PER_SECOND
             suggest_images = im.count_for_duration(est_dur, seconds_per_image=tracks.seconds_per_image(task.track))
 
+            # 固定 5 张图模式：强制目标图数为 5，覆盖时长估算
+            is_fixed_5 = getattr(task, "image_count_mode", None) == "fixed_5"
+            if is_fixed_5:
+                suggest_images = 5
+                logger.info("[P] 固定 5 张图模式：强制 suggest_images=5")
+
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
             # 参考图 data URI 不落库（体积大），每次现编码，供人物镜头图生图用。
             # 多参考图：构建 ref_map {key: ref_uri}，按分镜的 character_key 匹配
@@ -572,7 +576,10 @@ def run_pipeline(db: Session, task_id: str):
                 # 注意：绝不能把超出部分全倒进最后一段——那样最后一镜会吞掉大半脚本(实测 2520 字)，
                 # 配音几百秒，视频里最后一张图定格好几分钟(task_7e246655893b 的 8 分钟定格教训)。
                 # 正确做法：相邻段雨露均沾地合并，让 MAX 段时长大致均衡。
-                if len(seg_texts) > im.MAX_IMAGES:
+                if is_fixed_5 and len(seg_texts) > 5:
+                    seg_texts = _merge_segments_evenly(seg_texts, 5)
+                    logger.info("[P] 固定 5 张图模式：seg_texts 合并为 5 段")
+                elif len(seg_texts) > im.MAX_IMAGES:
                     seg_texts = _merge_segments_evenly(seg_texts, im.MAX_IMAGES)
                 sb_segments = [{"text": t} for t in seg_texts]
                 scenes = None
@@ -596,7 +603,17 @@ def run_pipeline(db: Session, task_id: str):
                 # 先按 [MIN,MAX] 夹分镜数（与 build_image_prompts 内部同口径），保证
                 # scenes 与 prompts 数量一致、不错位。
                 raw_scenes = scenes or []
-                if raw_scenes:
+                if is_fixed_5:
+                    # 固定 5 张图：优先用 SB 分镜，数量不足/超限时退回 segment 截字兜底
+                    if raw_scenes and len(raw_scenes) >= 5:
+                        n_images = 5
+                        aligned_scenes = raw_scenes[:5]
+                        logger.info("[P] 固定 5 张图模式：取 SB 前 5 个分镜")
+                    else:
+                        n_images = 5
+                        aligned_scenes = []
+                        logger.info("[P] 固定 5 张图模式：SB 分镜不足 5，回退 segment 截字")
+                elif raw_scenes:
                     n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, len(raw_scenes)))
                     # 分镜比上限多时截断（极少见，MAX_IMAGES=48）；比下限少时不补，
                     # 由 build_image_prompts 直接按现有分镜数出图。

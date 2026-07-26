@@ -107,7 +107,8 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
     if (/sensitive|审核|拒绝|reject/i.test(s))
       return '提示词被内容审核拦截，请改写画面描述（避开敏感/暴力/政治字眼）后重试'
     if (/限流|429|rate/i.test(s)) return '触发限流，稍等片刻再重试'
-    if (/超时|timeout/i.test(s)) return '请求超时，可直接再试一次'
+    if (/超时|timeout/i.test(s))
+      return '请求已发送但前端等待超时，后台可能仍在处理。请等待 1-2 分钟后刷新页面，不要立即重试，以免重复扣费。'
     if (/key|401|无效/i.test(s)) return '绘图 API Key 无效，请到配置页检查'
     return s.slice(0, 80)
   }
@@ -238,7 +239,14 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
       setSelected(new Set())
       onChanged()
     } catch (e) {
-      setErr((e as ApiError).message)
+      const msg = (e as ApiError).message
+      setErr(msg)
+      // 批量重试失败时（如超时），把提示同步到每张选中图上，避免用户只看到全局错误而反复点重试。
+      setFailReason((m) => {
+        const next = { ...m }
+        imgIndices.forEach((idx) => { next[idx] = humanReason(msg) })
+        return next
+      })
     } finally {
       setBatchRunningPersisted(false)
       batchLockRef.current = false  // 无论成功失败都释放锁
@@ -289,7 +297,7 @@ export default function SceneGallery({ taskId, modules, onChanged }: Props) {
           </select>
           <select value={batchMode}
             onChange={(e) => setBatchMode(e.target.value as '' | 'grid' | 'per_image')}
-            title="本次重组的出图方式：九宫格一次请求出多张省钱；逐张每张单独出、画质优先（黑白等强约束更稳）"
+            title="本次重组的出图方式：九宫格一次请求出多张省钱；逐张每张单独出、画质优先"
             className="px-2 py-1.5 rounded-lg text-sm bg-slate-700 text-slate-200 border-none
               focus:ring-1 focus:ring-brand-500">
             <option value="">出图方式：跟随任务</option>
