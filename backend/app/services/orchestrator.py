@@ -637,6 +637,17 @@ def run_pipeline(db: Session, task_id: str):
                     ref_uri=ref_uri,
                     ref_map=ref_map if ref_map else None,  # 多参考图映射
                     character_keys=character_keys if character_keys else None)
+                # SB 失败/分镜不足时 used_items 的 cap 全空 → _voice_segments_from_scenes
+                # 会退回 F 原始分段，TTS 段数与图数不等 → jianying 对齐失败 → 结尾循环复用重复帧。
+                # 修复：cap 全空时从 F 分段均匀合并填入，保证 scenes.cap 非空、三轨能对齐。
+                if used_items and not any(it.get("cap") for it in used_items):
+                    merged_caps = _merge_segments_evenly(
+                        [s.get("text", "") for s in segments], len(used_items))
+                    merged_caps += [""] * (len(used_items) - len(merged_caps))
+                    for it, cap in zip(used_items, merged_caps):
+                        it["cap"] = cap
+                    logger.info("[P] SB 回退：均匀合并 F 分段填入 cap（%d段→%d张）",
+                                len(segments), len(used_items))
                 # P 产物带上 scenes（含 cap/desc_prompt/has_character），供前端分镜画廊逐句编辑、
                 # 及配音/字幕取 cap。用 build_image_prompts 实际使用的 used_items 落库（不是
                 # aligned_scenes）——保证 P.scenes 与图（prompts_list）严格同源同长，配音段数
@@ -755,7 +766,13 @@ def run_pipeline(db: Session, task_id: str):
             try:
                 audio_dir = storage_root(db) / task.id / "audio"
                 existing_tts = _get_result(db, task.id, "T")
-                if existing_tts and existing_tts.status == "success":
+                # 缓存复用前校验段数：T 的 seg_durations 段数必须与当前分镜数一致，
+                # 否则图数变了（如切换固定5张）但 T 是旧的，对齐会失败 → 强制重合成。
+                _tts_seg_ok = (
+                    existing_tts and existing_tts.status == "success"
+                    and len((existing_tts.output or {}).get("seg_durations") or []) == len(tts_segments)
+                )
+                if _tts_seg_ok:
                     audio_path = existing_tts.output.get("audio_path")
                 else:
                     r = tts_svc.synthesize(tts_segments, cfg.tts_provider, tts_key,

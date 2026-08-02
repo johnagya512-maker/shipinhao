@@ -9,10 +9,13 @@
 """
 import base64
 import re
+import sys
 import subprocess
 import tempfile
 import time
 import uuid
+
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 from pathlib import Path
 import httpx
 from dataclasses import dataclass
@@ -341,7 +344,7 @@ def _remove_long_silence(path: Path) -> None:
             [ff, "-y", "-i", str(path), "-af",
              "silenceremove=stop_periods=-1:stop_duration=1.5:stop_threshold=-40dB:stop_silence=0.4",
              "-c:a", "libmp3lame", "-b:a", "192k", str(tmp)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, creationflags=_NO_WINDOW)
         if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 1024:
             tmp.replace(path)
         else:
@@ -406,7 +409,7 @@ def _concat_audio(parts: list[Path], out_path: Path):
     filt = "".join(f"[{i}:a]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
     cmd += ["-filter_complex", filt, "-map", "[out]",
             "-c:a", "libmp3lame", "-ar", "44100", "-b:a", "192k", str(out_path)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_NO_WINDOW)
     if r.returncode != 0:
         raise TTSError(f"E6206: 音频拼接失败: {r.stderr[:200]}")
 
@@ -418,7 +421,7 @@ def _silence_ratio(path: Path) -> float:
         ff = _ffmpeg_exe()
         r = subprocess.run([ff, "-i", str(path), "-af",
                             "silencedetect=noise=-40dB:d=2", "-f", "null", "-"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, creationflags=_NO_WINDOW)
         sils = re.findall(r"silence_duration:\s*([\d.]+)", r.stderr or "")
         siltot = sum(float(x) for x in sils)
         dur = _probe_duration(path)
@@ -484,7 +487,7 @@ def _trim_trailing_silence(path: Path) -> None:
         r = subprocess.run([ff, "-y", "-i", str(path), "-af",
                             "silenceremove=stop_periods=-1:stop_duration=2:stop_threshold=-40dB",
                             "-c:a", "libmp3lame", "-b:a", "192k", str(tmp)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, creationflags=_NO_WINDOW)
         if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 500:
             tmp.replace(path)
         else:
@@ -498,7 +501,7 @@ def _probe_duration(path: Path) -> float:
     # ffmpeg 读时长：解析 stderr 里的 "Duration: HH:MM:SS.ss"
     try:
         ff = _ffmpeg_exe()
-        r = subprocess.run([ff, "-i", str(path)], capture_output=True, text=True)
+        r = subprocess.run([ff, "-i", str(path)], capture_output=True, text=True, creationflags=_NO_WINDOW)
         m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", r.stderr or "")
         if m:
             h, mn, s = m.groups()

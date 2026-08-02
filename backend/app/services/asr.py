@@ -13,8 +13,11 @@ import time
 import uuid
 import base64
 import tempfile
+import sys
 import subprocess
 import httpx
+
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 from dataclasses import dataclass
 
 # 硅基流动语音转文字端点（OpenAI 兼容）。
@@ -103,7 +106,7 @@ def _run_ffmpeg_extract(media_url: str, out_path: str, timeout: float,
         "-t", "1800",
         out_path,
     ]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, creationflags=_NO_WINDOW)
     # 解析实际写出的音频时长（取 stderr 里最后一个 time=）。
     got_sec = 0.0
     for m in re.finditer(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", p.stderr or ""):

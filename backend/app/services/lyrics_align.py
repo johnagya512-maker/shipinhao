@@ -12,8 +12,10 @@
 """
 import os
 import re
+import sys
 import subprocess
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 # 段落分隔（空行）对应的暂停时长（秒）
 _PARAGRAPH_PAUSE = 0.5
@@ -31,7 +33,7 @@ def _get_audio_duration(audio_path: str) -> float:
     """用 ffmpeg 解析音频时长（秒）。"""
     ff = _ffmpeg_exe()
     cmd = [ff, "-i", audio_path, "-f", "null", "-"]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW)
     m = re.search(r"Duration:\s+(\d+):(\d+):(\d+(?:\.\d+)?)", p.stderr or "")
     if m:
         hh, mm, ss = m.groups()
