@@ -114,6 +114,30 @@ def _merge_segments_evenly(parts: list[str], n: int) -> list[str]:
     return out
 
 
+def _merge_scenes_evenly(scenes: list[dict], n: int) -> list[dict]:
+    """把多个 SB 分镜均匀合并成 n 个分镜，保证末尾文案不被截掉。
+    cap 拼接（保留全文），desc_prompt 取每组最后一个分镜的画面描述，
+    has_character 只要组内有一个 True 就为 True。"""
+    n = max(1, n)
+    total = len(scenes)
+    if total <= n:
+        return list(scenes)
+    base, extra = divmod(total, n)
+    out, idx = [], 0
+    for g in range(n):
+        size = base + (1 if g < extra else 0)
+        group = scenes[idx:idx + size]
+        idx += size
+        merged = {
+            "cap": "".join(str(s.get("cap", "") or "") for s in group),
+            "desc_prompt": str(group[-1].get("desc_prompt", "") or ""),
+            "has_character": any(s.get("has_character", True) for s in group),
+            "character_key": group[-1].get("character_key"),
+        }
+        out.append(merged)
+    return out
+
+
 def _voice_segments_from_scenes(db: Session, task_id: str, fallback_segments: list) -> tuple[list, str]:
     """配音/字幕分段统一取自分镜 cap（与图片同源 → 图-字-音三轨一一对齐）。
     从 P 产物读 scenes，每个分镜的 cap 作为一段配音文本；返回 ([{"text": cap}, ...], "scene")。
@@ -607,8 +631,14 @@ def run_pipeline(db: Session, task_id: str):
                     # 固定 5 张图：优先用 SB 分镜，数量不足/超限时退回 segment 截字兜底
                     if raw_scenes and len(raw_scenes) >= 5:
                         n_images = 5
-                        aligned_scenes = raw_scenes[:5]
-                        logger.info("[P] 固定 5 张图模式：取 SB 前 5 个分镜")
+                        if len(raw_scenes) == 5:
+                            aligned_scenes = raw_scenes
+                        else:
+                            # 分镜超过5个时均匀合并：cap 拼接保留全文（含末尾引导语），
+                            # desc_prompt 取每组最后一个分镜的画面描述。
+                            merged = _merge_scenes_evenly(raw_scenes, 5)
+                            aligned_scenes = merged
+                        logger.info("[P] 固定 5 张图模式：SB %d 个分镜→合并为 5", len(raw_scenes))
                     else:
                         n_images = 5
                         aligned_scenes = []
