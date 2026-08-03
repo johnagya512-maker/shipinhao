@@ -137,6 +137,7 @@ _CLONE_VOICES_FILE: Path = _DATA_DIR / "clone_voices.json"
 
 _DEFAULT_CLONE_VOICES = [
     # 已确认可用的复刻音色（按火山控制台「声音复刻 → 我的音色」中的名称与 voice_id 对应）。
+    {"id": "S_fXK5czr62", "name": "阿夏", "tag": "我的复刻", "category": "clone"},
     {"id": "S_gXK5czr62", "name": "男声2", "tag": "我的复刻", "category": "clone"},
     {"id": "S_hXK5czr62", "name": "男声1", "tag": "我的复刻", "category": "clone"},
     {"id": "S_iXK5czr62", "name": "王立群音色", "tag": "我的复刻", "category": "clone"},
