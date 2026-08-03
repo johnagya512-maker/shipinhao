@@ -220,13 +220,19 @@ def build_image_prompts(book_info, segments, out_dir: Path, image_count=5,
     for x in (scenes or []):
         if isinstance(x, dict):
             dp = _sanitize_imagery(str(x.get("desc_prompt") or x.get("desc") or ""))
-            if dp.strip():
-                norm_scenes.append({
-                    "cap": str(x.get("cap", "")),
-                    "desc_prompt": dp,
-                    "has_character": bool(x.get("has_character", True)),
-                    "character_key": str(x.get("character_key", "") or "").strip() or None,
-                })
+            if not dp.strip():
+                # desc_prompt 被审核词替换后变空：用 cap 截字兜底，保住分镜数量
+                # （不能直接丢弃——会导致 P.scenes 比 SB 分镜少一项，TTS 段数也少一段，
+                # 最后一段配音永远缺失）。
+                dp = _sanitize_imagery(str(x.get("cap", ""))[:40])
+            if not dp.strip():
+                dp = fallback_subject  # cap 也空：用赛道兜底主体
+            norm_scenes.append({
+                "cap": str(x.get("cap", "")),
+                "desc_prompt": dp,
+                "has_character": bool(x.get("has_character", True)),
+                "character_key": str(x.get("character_key", "") or "").strip() or None,
+            })
         elif str(x).strip():
             norm_scenes.append({"cap": "", "desc_prompt": _sanitize_imagery(str(x)),
                                 "has_character": True, "character_key": None})
