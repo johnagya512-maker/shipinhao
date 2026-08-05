@@ -143,12 +143,9 @@ def _populate(script, image_paths, image_weights, audio_path, segments,
     if enable_subtitles and segments:
         import re as _re
         style, border, sub_extra = _subtitle_style(draft, tpl.subtitle_style(tmpl))
-        if aligned:
-            # 分镜对齐：第 i 段字幕直接用第 i 张图的时间区间（== 第 i 段配音）。
-            # 每段文字按 ≤12 字切成多条短字幕，在该分镜区间内按字数比例平分。
+        if aligned and len(segments) == len(img_starts):
+            # 分镜对齐（图数==字幕段数）：第 i 段字幕直接用第 i 张图的时间区间。
             for idx, seg in enumerate(segments):
-                if idx >= len(img_starts):
-                    break
                 text = (seg.get("text") or "").strip()
                 if not text:
                     continue

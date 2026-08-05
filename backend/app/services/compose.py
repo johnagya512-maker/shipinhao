@@ -37,8 +37,9 @@ def _load_assets(db: Session, task_id: str):
     seg_texts = (t_out or {}).get("seg_texts") if t_out else None
     seg_durations = (t_out or {}).get("seg_durations") if t_out else None
     if seg_texts and (t_out or {}).get("seg_source") == "scene":
-        # 分镜源：字幕分段=分镜 cap，与图片一一对应。
-        segments = [{"text": t} for t in seg_texts]
+        # 分镜源：图片轨用 seg_durations 对齐，字幕轨用 F 的原始口播分段
+        # （F 段粒度细、有 estimated_duration，字幕不会全挤在一个分镜窗口里）。
+        segments = f_out["segments"]
     else:
         # 回退老路：F 的口播分段（手动上传音频、SB 失败等）。
         segments = f_out["segments"]
