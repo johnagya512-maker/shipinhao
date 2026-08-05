@@ -594,7 +594,13 @@ def run_pipeline(db: Session, task_id: str):
                 # 按段一一对齐。失败不阻断——回退 build_image_prompts 的 segment 截字。
                 seg_texts = tm.run_split_for_storyboard(
                     cfg.llm_provider, cfg.llm_model, llm_key, script)
-                if not seg_texts:
+                # LLM 输出 token 超限时会截断，导致 seg_texts 总字数远少于原文。
+                # 用 85% 阈值检测截断：截断则回退规则切分，保证全文不丢字。
+                seg_total_chars = sum(len(t) for t in seg_texts)
+                if not seg_texts or seg_total_chars < len(script) * 0.85:
+                    logger.warning(
+                        "[SB] LLM 分段疑似截断（%d/%d 字），回退规则切分",
+                        seg_total_chars, len(script))
                     seg_texts = tm.split_for_storyboard(script)
                 # 夹到 [MIN,MAX] 张：过多则【均匀合并】成 MAX 段，过少不补。
                 # 注意：绝不能把超出部分全倒进最后一段——那样最后一镜会吞掉大半脚本(实测 2520 字)，
