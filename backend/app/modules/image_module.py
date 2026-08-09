@@ -24,7 +24,7 @@ def _img_retry_for(model: str | None) -> int:
 # 张数随时长动态变，封顶避免成本失控；下限保证封面+内容+CTA 基本结构。
 SECONDS_PER_IMAGE = 8
 MIN_IMAGES = 3
-MAX_IMAGES = 48
+MAX_IMAGES = 20
 
 
 def count_for_duration(total_duration: float,

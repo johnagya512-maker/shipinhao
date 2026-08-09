@@ -252,15 +252,12 @@ def run_pipeline(db: Session, task_id: str):
                 raise TaskAborted("E2002",
                                   f"采集转写后预估成本 {real_est} 元超过上限 {task.cost_limit} 元")
 
-        # A 清洗（direct=「不改文案」跳过清洗，原文一字不改、不调 LLM、不计费；
-        # semi_auto/full_auto 仍做清洗）
-        if task.processing_mode == "direct":
-            existing_a = _get_result(db, task.id, "A")
-            if existing_a and existing_a.status == "success":
-                cleaned = existing_a.output.get("cleaned_text", task.transcript)
-            else:
-                cleaned = task.transcript
-                _save_result(db, task.id, "A", "success", output={"cleaned_text": cleaned})
+        # A 清洗（semi_auto/direct=「不改文案」跳过清洗，原文一字不改、不调 LLM、不计费；
+        # full_auto 仍做清洗）
+        # 注意：不能复用旧 A 结果——任务可能之前以 full_auto 跑过，旧 A 是 LLM 清洗版会丢末尾 CTA。
+        if task.processing_mode in ("direct", "semi_auto"):
+            cleaned = task.transcript
+            _save_result(db, task.id, "A", "success", output={"cleaned_text": cleaned})
         else:
             a_out = _llm_step(db, task, cfg, llm_key, "A",
                               lambda: tm.run_clean(cfg.llm_provider, cfg.llm_model, llm_key,
@@ -401,42 +398,40 @@ def run_pipeline(db: Session, task_id: str):
             except Exception:
                 db.rollback()
 
-        # H 合规闸门（强制，按赛道词库；三种处理模式都跑——保留合规兜底）。
-        # pausable=False：H 的暂停由下方自定义逻辑控制（仅在仍有风险时才停，干净通过不打扰）。
-        h_out = _llm_step(db, task, cfg, llm_key, "H",
-                          lambda: tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
-                                                    script, track=task.track),
-                          started, pausable=False)
-        # 不通过 → 自动合规化改写后重审，最多 2 轮；过了就用改后稿继续。
-        # awaiting_user_confirm 标记：resume 复用 H 产物时跳过本段，避免无限改写/暂停。
-        _fix_round = 0
-        while (not h_out["passed"] and not h_out.get("awaiting_user_confirm")
-               and _fix_round < 2):
-            _fix_round += 1
-            try:
-                fix_out, _fr = tm.run_compliance_fix(
-                    cfg.llm_provider, cfg.llm_model, llm_key,
-                    script, h_out.get("violations") or [], track=task.track)
-            except Exception:
-                break  # 改写失败（如 LLM 报错）→ 退出循环走下方确认/通过逻辑
-            new_script = (fix_out or {}).get("script", "").strip()
-            if not new_script or new_script == script:
-                break
-            script = new_script
-            # 改后稿回写 B 产物（direct/semi 模式无 B 则回写 A），让详情页/分句用合规稿
-            _wb = "B" if task.processing_mode == "full_auto" else "A"
-            _key = "script" if _wb == "B" else "cleaned_text"
-            _save_result(db, task.id, _wb, "success", output={_key: script})
-            h_chk = tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
-                                      script, track=task.track)
-            h_out = h_chk[0] if isinstance(h_chk, tuple) else h_chk
-            h_out["auto_fixed"] = _fix_round  # 标记已自动改写第几轮，供前端提示
-            _save_result(db, task.id, "H", "success", output=h_out)
-        # 仍不通过：自动改写已尽力，停在文案确认关卡交用户定夺（不丢改写成果、不硬放行）。
-        if not h_out["passed"] and not h_out.get("awaiting_user_confirm"):
-            h_out["awaiting_user_confirm"] = True
-            _save_result(db, task.id, "H", "success", output=h_out)
-            raise _Paused("H")
+        # H 合规闸门：仅 full_auto 模式跑；不改写模式（direct/semi_auto）完全跳过，
+        # 用户原文一字不动直接继续，不检测、不改写、不暂停。
+        if task.processing_mode == "full_auto":
+            h_out = _llm_step(db, task, cfg, llm_key, "H",
+                              lambda: tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
+                                                        script, track=task.track),
+                              started, pausable=False)
+            # 不通过 → 自动合规化改写后重审，最多 2 轮；过了就用改后稿继续。
+            # awaiting_user_confirm 标记：resume 复用 H 产物时跳过本段，避免无限改写/暂停。
+            _fix_round = 0
+            while (not h_out["passed"] and not h_out.get("awaiting_user_confirm")
+                   and _fix_round < 2):
+                _fix_round += 1
+                try:
+                    fix_out, _fr = tm.run_compliance_fix(
+                        cfg.llm_provider, cfg.llm_model, llm_key,
+                        script, h_out.get("violations") or [], track=task.track)
+                except Exception:
+                    break
+                new_script = (fix_out or {}).get("script", "").strip()
+                if not new_script or new_script == script:
+                    break
+                script = new_script
+                _save_result(db, task.id, "B", "success", output={"script": script})
+                h_chk = tm.run_compliance(cfg.llm_provider, cfg.llm_model, llm_key,
+                                          script, track=task.track)
+                h_out = h_chk[0] if isinstance(h_chk, tuple) else h_chk
+                h_out["auto_fixed"] = _fix_round
+                _save_result(db, task.id, "H", "success", output=h_out)
+            # 仍不通过：停在文案确认关卡交用户定夺。
+            if not h_out["passed"] and not h_out.get("awaiting_user_confirm"):
+                h_out["awaiting_user_confirm"] = True
+                _save_result(db, task.id, "H", "success", output=h_out)
+                raise _Paused("H")
 
         # F 分段（必选）。direct 模式机械切分（不调 LLM、不计费）；其余走 LLM 分句。
         if task.processing_mode == "direct":
@@ -592,16 +587,21 @@ def run_pipeline(db: Session, task_id: str):
                 # 把 script 拆成 50-80 字一段的原文切片（一字不改），失败再回退到程序规则切分。
                 # cap 由程序强制填为原文片，LLM 不碰文案 → 配音/字幕念的就是你的原文、且与画面
                 # 按段一一对齐。失败不阻断——回退 build_image_prompts 的 segment 截字。
-                seg_texts = tm.run_split_for_storyboard(
-                    cfg.llm_provider, cfg.llm_model, llm_key, script)
-                # LLM 输出 token 超限时会截断，导致 seg_texts 总字数远少于原文。
-                # 用 85% 阈值检测截断：截断则回退规则切分，保证全文不丢字。
-                seg_total_chars = sum(len(t) for t in seg_texts)
-                if not seg_texts or seg_total_chars < len(script) * 0.85:
-                    logger.warning(
-                        "[SB] LLM 分段疑似截断（%d/%d 字），回退规则切分",
-                        seg_total_chars, len(script))
+                # 不改写模式（direct/semi_auto）：直接用规则切分，绕过 LLM 避免切分时顺手改字。
+                if task.processing_mode in ("direct", "semi_auto"):
                     seg_texts = tm.split_for_storyboard(script)
+                    logger.info("[SB] 不改写模式：跳过 LLM 分段，使用规则切分（%d段）", len(seg_texts))
+                else:
+                    seg_texts = tm.run_split_for_storyboard(
+                        cfg.llm_provider, cfg.llm_model, llm_key, script)
+                    # LLM 输出 token 超限时会截断，导致 seg_texts 总字数远少于原文。
+                    # 用 85% 阈值检测截断：截断则回退规则切分，保证全文不丢字。
+                    seg_total_chars = sum(len(t) for t in seg_texts)
+                    if not seg_texts or seg_total_chars < len(script) * 0.85:
+                        logger.warning(
+                            "[SB] LLM 分段疑似截断（%d/%d 字），回退规则切分",
+                            seg_total_chars, len(script))
+                        seg_texts = tm.split_for_storyboard(script)
                 # 夹到 [MIN,MAX] 张：过多则【均匀合并】成 MAX 段，过少不补。
                 # 注意：绝不能把超出部分全倒进最后一段——那样最后一镜会吞掉大半脚本(实测 2520 字)，
                 # 配音几百秒，视频里最后一张图定格好几分钟(task_7e246655893b 的 8 分钟定格教训)。
@@ -651,9 +651,13 @@ def run_pipeline(db: Session, task_id: str):
                         logger.info("[P] 固定 5 张图模式：SB 分镜不足 5，回退 segment 截字")
                 elif raw_scenes:
                     n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, len(raw_scenes)))
-                    # 分镜比上限多时截断（极少见，MAX_IMAGES=48）；比下限少时不补，
-                    # 由 build_image_prompts 直接按现有分镜数出图。
-                    aligned_scenes = raw_scenes[:n_images]
+                    # 分镜比上限多时均匀合并（保留全文内容，不截断丢失后段文案）；
+                    # 比下限少时不补，由 build_image_prompts 直接按现有分镜数出图。
+                    if len(raw_scenes) > n_images:
+                        aligned_scenes = _merge_scenes_evenly(raw_scenes, n_images)
+                        logger.info("[P] 分镜 %d 超限 %d，均匀合并", len(raw_scenes), n_images)
+                    else:
+                        aligned_scenes = raw_scenes
                 else:
                     n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, suggest_images))
                     aligned_scenes = []
@@ -719,7 +723,11 @@ def run_pipeline(db: Session, task_id: str):
                 # 生图是最烧钱的步骤，开跑前再查一次取消/超限——用户点了取消就别再发这批图。
                 _check_limits(db, task, started)
                 _img_proxy = (getattr(cfg, "proxy_url", None) or "").strip() or None
-                if mode == "grid":
+                if mode == "skip":
+                    logger.info("[E] 跳过生图: %d 张全部使用占位图，零成本", len(prompts_list))
+                    images = [im.placeholder_result(op, st, sd, reason="skip")
+                              for (_, st, op, sd, _) in prompts_list]
+                elif mode == "grid":
                     grid_style = tracks.get_style(task.image_style, task.track)
                     logger.info("[E] 九宫格模式: image_style=%s, style=%s, grayscale=%s",
                                 task.image_style, grid_style.get("prefix", "None") if grid_style else "None",
