@@ -242,6 +242,19 @@ export default function TaskCreatePage() {
     } catch { /* 失败回滚到后端真实值 */ api.getConfig().then((c) => setFavorites(c.tts_favorites ?? [])).catch(() => {}) }
   }
 
+  async function addCloneVoice(voiceId: string, name: string) {
+    const r = await api.addCloneVoice(voiceId, name)
+    setVoices((prev) => {
+      const ids = new Set(prev.map((v) => v.id))
+      return [...prev, ...r.clone_voices.filter((v) => !ids.has(v.id))]
+    })
+  }
+
+  async function removeCloneVoice(voiceId: string) {
+    await api.removeCloneVoice(voiceId)
+    setVoices((prev) => prev.filter((v) => v.id !== voiceId))
+  }
+
   const voiceById = useMemo(() => new Map(voices.map((v) => [v.id, v])), [voices])
   // 创建页 chips：收藏的音色 + 当前选中的（即使没收藏也显示），去重
   const chipVoices = useMemo(() => {
@@ -891,10 +904,11 @@ export default function TaskCreatePage() {
 
         <div className={dimImg}>
           <span className="text-sm text-slate-400">生图模式</span>
-          <div className="mt-2 grid grid-cols-2 gap-2">
+          <div className="mt-2 grid grid-cols-3 gap-2">
             {[
               { key: 'per_image', name: '逐张生成', desc: '每张单独出图，画质最稳，成本按张算' },
               { key: 'grid', name: '九宫格省成本', desc: '一次出9张切割，省约89%成本，风格统一' },
+              { key: 'skip', name: '跳过生图', desc: '全部占位图，零成本，可手动补图' },
             ].map((m) => {
               const on = (form.image_gen_mode || 'per_image') === m.key
               return (
@@ -1176,6 +1190,8 @@ export default function TaskCreatePage() {
           value={form.voice ?? ''} favorites={favorites}
           onSelect={(id) => set({ voice: id })}
           onToggleFav={toggleFav}
+          onAddCloneVoice={addCloneVoice}
+          onRemoveCloneVoice={removeCloneVoice}
           onClose={() => setShowVoicePicker(false)}
         />
       )}

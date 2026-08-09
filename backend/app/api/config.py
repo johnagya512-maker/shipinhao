@@ -168,7 +168,28 @@ def update_config(body: ConfigUpdate, db: Session = Depends(get_db)):
     return _to_out(cfg)
 
 
-@router.get("/bgm-list")
+@router.post("/clone-voices")
+def add_clone_voice(body: dict):
+    """添加复刻音色。body: {voice_id, name, tag?}。立即写入 clone_voices.json 并更新内存。"""
+    voice_id = (body or {}).get("voice_id", "").strip()
+    name = (body or {}).get("name", "").strip()
+    tag = (body or {}).get("tag", "我的复刻")
+    if not voice_id or not name:
+        raise HTTPException(400, detail="参数错误：需要 voice_id 和 name")
+    try:
+        entry = voices_svc.add_clone_voice(voice_id, name, tag)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e))
+    return {"voice": entry, "clone_voices": voices_svc.CLONE_VOICES}
+
+
+@router.delete("/clone-voices/{voice_id}")
+def remove_clone_voice(voice_id: str):
+    """删除复刻音色。立即写入 clone_voices.json 并更新内存。"""
+    voices_svc.remove_clone_voice(voice_id)
+    return {"clone_voices": voices_svc.CLONE_VOICES}
+
+
 def bgm_list(db: Session = Depends(get_db)):
     """列出 BGM 目录下的音频文件名（mp3/wav/m4a）。未配置目录则返回空列表。"""
     from pathlib import Path

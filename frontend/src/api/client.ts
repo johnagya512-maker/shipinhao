@@ -169,6 +169,16 @@ export const api = {
     request<{ favorites: string[] }>('/config/favorites', {
       method: 'PUT', body: JSON.stringify({ voice_id: voiceId, action }),
     }),
+  // 添加复刻音色
+  addCloneVoice: (voiceId: string, name: string, tag?: string) =>
+    request<{ voice: VoiceItem; clone_voices: VoiceItem[] }>('/config/clone-voices', {
+      method: 'POST', body: JSON.stringify({ voice_id: voiceId, name, tag }),
+    }),
+  // 删除复刻音色
+  removeCloneVoice: (voiceId: string) =>
+    request<{ clone_voices: VoiceItem[] }>(`/config/clone-voices/${encodeURIComponent(voiceId)}`, {
+      method: 'DELETE',
+    }),
 
   // ── 任务 ──
   listTasks: (params: { status?: string; page?: number; page_size?: number } = {}) => {

@@ -139,6 +139,7 @@ _DEFAULT_CLONE_VOICES = [
     # 已确认可用的复刻音色（按火山控制台「声音复刻 → 我的音色」中的名称与 voice_id 对应）。
     {"id": "S_eXK5czr62", "name": "于谦", "tag": "我的复刻", "category": "clone"},
     {"id": "S_fXK5czr62", "name": "阿夏", "tag": "我的复刻", "category": "clone"},
+    {"id": "S_dXK5czr62", "name": "阿夏22", "tag": "我的复刻", "category": "clone"},
     {"id": "S_gXK5czr62", "name": "男声2", "tag": "我的复刻", "category": "clone"},
     {"id": "S_hXK5czr62", "name": "男声1", "tag": "我的复刻", "category": "clone"},
     {"id": "S_iXK5czr62", "name": "王立群音色", "tag": "我的复刻", "category": "clone"},
@@ -177,6 +178,42 @@ def _load_clone_voices() -> list[dict]:
 
 
 CLONE_VOICES: list[dict] = _load_clone_voices()
+
+
+def _save_clone_voices() -> None:
+    """将当前 CLONE_VOICES 持久化到 clone_voices.json。"""
+    try:
+        _CLONE_VOICES_FILE.write_text(
+            json.dumps(
+                [{"id": v["id"], "name": v["name"], "tag": v.get("tag", "我的复刻")} for v in CLONE_VOICES],
+                ensure_ascii=False, indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def add_clone_voice(voice_id: str, name: str, tag: str = "我的复刻") -> dict:
+    """添加一条复刻音色，立即写入 clone_voices.json 并更新内存列表。"""
+    voice_id = voice_id.strip()
+    name = name.strip()
+    if not voice_id or not name:
+        raise ValueError("voice_id 和 name 不能为空")
+    if any(v["id"] == voice_id for v in CLONE_VOICES):
+        raise ValueError(f"音色 {voice_id} 已存在")
+    entry = {"id": voice_id, "name": name, "tag": tag, "category": "clone"}
+    CLONE_VOICES.append(entry)
+    _save_clone_voices()
+    return entry
+
+
+def remove_clone_voice(voice_id: str) -> None:
+    """删除一条复刻音色，立即写入 clone_voices.json 并更新内存列表。"""
+    new_list = [v for v in CLONE_VOICES if v["id"] != voice_id]
+    CLONE_VOICES.clear()
+    CLONE_VOICES.extend(new_list)
+    _save_clone_voices()
 
 
 # ── 云声配音 Edge TTS 音色库（微软 Edge 神经网络音色，会员免费、不限量、无需探活）──

@@ -42,6 +42,20 @@ export default function VoiceReconfigDialog({ taskId, currentVoice, currentSpeed
     } catch { /* 失败静默，不影响使用 */ }
   }
 
+  const addCloneVoice = async (voiceId: string, name: string) => {
+    const r = await api.addCloneVoice(voiceId, name)
+    setVoices((prev) => {
+      const ids = new Set(prev.map((v) => v.id))
+      return [...prev, ...r.clone_voices.filter((v) => !ids.has(v.id))]
+    })
+  }
+
+  const removeCloneVoice = async (voiceId: string) => {
+    await api.removeCloneVoice(voiceId)
+    setVoices((prev) => prev.filter((v) => v.id !== voiceId))
+  }
+
+
   // 提交：调用后端接口更换配音并重新生成
   const handleSubmit = async () => {
     setSubmitting(true)
@@ -165,6 +179,8 @@ export default function VoiceReconfigDialog({ taskId, currentVoice, currentSpeed
           favorites={favorites}
           onSelect={setVoice}
           onToggleFav={toggleFavorite}
+          onAddCloneVoice={addCloneVoice}
+          onRemoveCloneVoice={removeCloneVoice}
           onClose={() => setShowVoicePicker(false)}
         />
       )}

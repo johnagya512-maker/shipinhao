@@ -12,14 +12,20 @@ interface Props {
   onSelect: (voiceId: string) => void
   onToggleFav: (voiceId: string) => void
   onClose: () => void
+  onAddCloneVoice?: (voiceId: string, name: string) => Promise<void>
+  onRemoveCloneVoice?: (voiceId: string) => Promise<void>
 }
 
 const FAV = '__fav__'
 
-export default function VoicePicker({ voices, categories, value, favorites, onSelect, onToggleFav, onClose }: Props) {
+export default function VoicePicker({ voices, categories, value, favorites, onSelect, onToggleFav, onClose, onAddCloneVoice, onRemoveCloneVoice }: Props) {
   const [cat, setCat] = useState<string>(favorites.length ? FAV : (categories[0]?.key ?? ''))
   const [q, setQ] = useState('')
   const { previewingId, error, preview } = useVoicePreview()
+  const [addId, setAddId] = useState('')
+  const [addName, setAddName] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [addErr, setAddErr] = useState('')
 
   const favSet = useMemo(() => new Set(favorites), [favorites])
 
@@ -34,6 +40,19 @@ export default function VoicePicker({ voices, categories, value, favorites, onSe
 
   const countOf = (key: string) =>
     key === FAV ? favorites.length : voices.filter((v) => v.category === key).length
+
+  const handleAdd = async () => {
+    if (!addId.trim() || !addName.trim()) { setAddErr('请填写音色 ID 和名称'); return }
+    setAdding(true); setAddErr('')
+    try {
+      await onAddCloneVoice?.(addId.trim(), addName.trim())
+      setAddId(''); setAddName('')
+    } catch (e: unknown) {
+      setAddErr((e as Error).message || '添加失败')
+    } finally {
+      setAdding(false)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -59,6 +78,27 @@ export default function VoicePicker({ voices, categories, value, favorites, onSe
           {/* 右侧音色列表 */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {error && <div className="text-[11px] text-red-400 px-2 py-1">{error}</div>}
+
+            {/* 声音复刻分类：顶部添加表单 */}
+            {cat === 'clone' && onAddCloneVoice && (
+              <div className="mb-2 p-2.5 rounded-lg border border-slate-700/60 bg-slate-800/40 space-y-2">
+                <div className="text-[11px] text-slate-400 font-medium">添加复刻音色</div>
+                <div className="flex gap-2">
+                  <input value={addId} onChange={(e) => setAddId(e.target.value)}
+                    placeholder="音色 ID（如 S_xXK5czr62）"
+                    className="flex-1 min-w-0 bg-slate-950/60 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200 outline-none focus:border-brand-500/60 font-mono" />
+                  <input value={addName} onChange={(e) => setAddName(e.target.value)}
+                    placeholder="显示名称"
+                    className="w-24 bg-slate-950/60 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-200 outline-none focus:border-brand-500/60" />
+                  <button onClick={handleAdd} disabled={adding}
+                    className="shrink-0 px-3 py-1 rounded-md text-xs font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50">
+                    {adding ? '…' : '添加'}
+                  </button>
+                </div>
+                {addErr && <div className="text-[11px] text-red-400">{addErr}</div>}
+              </div>
+            )}
+
             {filtered.length === 0 && (
               <div className="text-sm text-slate-500 text-center mt-8">
                 {cat === FAV ? '还没有收藏音色，点 ☆ 收藏常用的' : '没有匹配的音色'}
@@ -68,7 +108,8 @@ export default function VoicePicker({ voices, categories, value, favorites, onSe
               const on = v.id === value
               const fav = favSet.has(v.id)
               const playing = previewingId === v.id
-              const unavail = v.available === false   // 探活确认当前账号未授权
+              const unavail = v.available === false
+              const isClone = v.category === 'clone'
               return (
                 <div key={v.id} className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border ${
                   on ? 'bg-brand-600/15 border-brand-500' : 'bg-slate-800/40 border-slate-700/60'} ${
@@ -94,6 +135,12 @@ export default function VoicePicker({ voices, categories, value, favorites, onSe
                       on ? 'bg-emerald-600/30 text-emerald-300' : 'bg-brand-600 text-white hover:bg-brand-700'}`}>
                     {on ? '✓ 已选' : '选用'}
                   </button>
+                  {isClone && onRemoveCloneVoice && (
+                    <button onClick={() => onRemoveCloneVoice(v.id)} title="删除此复刻音色"
+                      className="shrink-0 px-1 text-slate-600 hover:text-red-400 text-xs">
+                      🗑
+                    </button>
+                  )}
                 </div>
               )
             })}
