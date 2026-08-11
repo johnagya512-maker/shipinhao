@@ -70,7 +70,9 @@ def estimate_cost(transcript: str, modules: list[str], image_count: int | None,
         llm_cost += (in_tokens + out) / 1000 * unit
     img_cost = 0.0
     if "E" in modules:
-        if image_gen_mode == "grid":
+        if image_gen_mode == "skip":
+            billable = 0
+        elif image_gen_mode == "grid":
             import math
             billable = math.ceil(image_count / 9)
         else:
@@ -106,7 +108,7 @@ def image_billable_units(images: list, model: str | None = None) -> float:
             # gpt-image：占位对应的请求一般照样扣钱，计入。但「连接层断连」(Server disconnected /
             # 请求错误)是服务器没收到/没回任何响应，中转站多半未受理、未扣费 → 不计，避免高估。
             reason = str(meta.get("reason") or meta.get("fail_reason") or "")
-            if "请求错误" in reason or "disconnected" in reason.lower():
+            if reason == "skip" or "请求错误" in reason or "disconnected" in reason.lower():
                 continue
         # gpt-image：占位图对应的请求照样发生过、照样扣钱，计入。
         is_grid = bool(meta.get("grid"))
