@@ -491,11 +491,13 @@ def run_pipeline(db: Session, task_id: str):
             est_dur = len(script) / cost_svc.CHARS_PER_SECOND
             suggest_images = im.count_for_duration(est_dur, seconds_per_image=tracks.seconds_per_image(task.track))
 
-            # 固定 5 张图模式：强制目标图数为 5，覆盖时长估算
-            is_fixed_5 = getattr(task, "image_count_mode", None) == "fixed_5"
+            # 固定张数模式：强制目标图数为用户指定值，覆盖时长估算
+            _icm = getattr(task, "image_count_mode", None)
+            is_fixed_5 = _icm in ("fixed", "fixed_5")
+            fixed_count = max(3, min(20, getattr(task, "fixed_image_count", None) or 5))
             if is_fixed_5:
-                suggest_images = 5
-                logger.info("[P] 固定 5 张图模式：强制 suggest_images=5")
+                suggest_images = fixed_count
+                logger.info("[P] 固定张数模式：强制 suggest_images=%d", fixed_count)
 
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
             # 参考图 data URI 不落库（体积大），每次现编码，供人物镜头图生图用。
@@ -606,9 +608,9 @@ def run_pipeline(db: Session, task_id: str):
                 # 注意：绝不能把超出部分全倒进最后一段——那样最后一镜会吞掉大半脚本(实测 2520 字)，
                 # 配音几百秒，视频里最后一张图定格好几分钟(task_7e246655893b 的 8 分钟定格教训)。
                 # 正确做法：相邻段雨露均沾地合并，让 MAX 段时长大致均衡。
-                if is_fixed_5 and len(seg_texts) > 5:
-                    seg_texts = _merge_segments_evenly(seg_texts, 5)
-                    logger.info("[P] 固定 5 张图模式：seg_texts 合并为 5 段")
+                if is_fixed_5 and len(seg_texts) > fixed_count:
+                    seg_texts = _merge_segments_evenly(seg_texts, fixed_count)
+                    logger.info("[P] 固定张数模式：seg_texts 合并为 %d 段", fixed_count)
                 elif len(seg_texts) > im.MAX_IMAGES:
                     seg_texts = _merge_segments_evenly(seg_texts, im.MAX_IMAGES)
                 sb_segments = [{"text": t} for t in seg_texts]
@@ -634,21 +636,19 @@ def run_pipeline(db: Session, task_id: str):
                 # scenes 与 prompts 数量一致、不错位。
                 raw_scenes = scenes or []
                 if is_fixed_5:
-                    # 固定 5 张图：优先用 SB 分镜，数量不足/超限时退回 segment 截字兜底
-                    if raw_scenes and len(raw_scenes) >= 5:
-                        n_images = 5
-                        if len(raw_scenes) == 5:
+                    # 固定张数：优先用 SB 分镜，数量不足/超限时退回 segment 截字兜底
+                    if raw_scenes and len(raw_scenes) >= fixed_count:
+                        n_images = fixed_count
+                        if len(raw_scenes) == fixed_count:
                             aligned_scenes = raw_scenes
                         else:
-                            # 分镜超过5个时均匀合并：cap 拼接保留全文（含末尾引导语），
-                            # desc_prompt 取每组最后一个分镜的画面描述。
-                            merged = _merge_scenes_evenly(raw_scenes, 5)
+                            merged = _merge_scenes_evenly(raw_scenes, fixed_count)
                             aligned_scenes = merged
-                        logger.info("[P] 固定 5 张图模式：SB %d 个分镜→合并为 5", len(raw_scenes))
+                        logger.info("[P] 固定张数模式：SB %d 个分镜→合并为 %d", len(raw_scenes), fixed_count)
                     else:
-                        n_images = 5
+                        n_images = fixed_count
                         aligned_scenes = []
-                        logger.info("[P] 固定 5 张图模式：SB 分镜不足 5，回退 segment 截字")
+                        logger.info("[P] 固定张数模式：SB 分镜不足 %d，回退 segment 截字", fixed_count)
                 elif raw_scenes:
                     n_images = max(im.MIN_IMAGES, min(im.MAX_IMAGES, len(raw_scenes)))
                     # 分镜比上限多时均匀合并（保留全文内容，不截断丢失后段文案）；

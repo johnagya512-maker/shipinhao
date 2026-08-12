@@ -37,7 +37,8 @@ export interface TaskCreate {
   video_mode?: string       // vlog(口播) | music(唱歌·MV)
   creation_mode?: string
   image_gen_mode?: string
-  image_count_mode?: string   // auto(按时长自动计算) | fixed_5(固定5张图)
+  image_count_mode?: string   // auto(按时长自动计算) | fixed(固定张数) | fixed_5(旧值兼容)
+  fixed_image_count?: number  // image_count_mode=fixed 时生效，范围 3-20
   processing_mode?: string
   pause_mode?: string
   pause_steps?: string[]

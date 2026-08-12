@@ -148,8 +148,9 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         _processing_mode = "direct"
 
     # 成本预估校验（无逐字稿时按链接采集后的估值留待运行时校验，提交时用占位长度）
-    # 固定 5 张图模式：按 5 张图估算成本
-    image_count = 5 if (body.image_count_mode or "auto") == "fixed_5" else None
+    # 固定张数模式：按实际指定张数估算成本
+    _mode = body.image_count_mode or "auto"
+    image_count = (body.fixed_image_count or 5) if _mode in ("fixed", "fixed_5") else None
     est = cost_svc.estimate_cost(transcript or "x" * 500, body.modules, image_count,
                                  cfg.llm_provider, cfg.image_provider,
                                  body.image_gen_mode or "per_image",
@@ -174,6 +175,7 @@ def create_task(body: TaskCreate, bg: BackgroundTasks, db: Session = Depends(get
         creation_mode=body.creation_mode or "same_topic",
         image_gen_mode=body.image_gen_mode or "per_image",
         image_count_mode=body.image_count_mode or "auto",
+        fixed_image_count=body.fixed_image_count or 5,
         processing_mode=_processing_mode, pause_mode=body.pause_mode,
         pause_steps=body.pause_steps or None,
         status="pending",
@@ -319,8 +321,9 @@ def estimate(body: TaskCreate, db: Session = Depends(get_db)):
     provider_img = cfg.image_provider if cfg else "doubao"
     # transcript 可选：未填（走链接采集）时按占位长度估算上限。
     text = (body.transcript or "").strip() or "x" * 500
-    # 固定 5 张图模式：成本估算按 5 张算，不按时长动态估算
-    image_count = 5 if (body.image_count_mode or "auto") == "fixed_5" else None
+    # 固定张数模式：成本估算按实际指定张数，不按时长动态估算
+    _mode = body.image_count_mode or "auto"
+    image_count = (body.fixed_image_count or 5) if _mode in ("fixed", "fixed_5") else None
     est = cost_svc.estimate_cost(text, body.modules, image_count, provider_llm, provider_img,
                                  body.image_gen_mode or "per_image",
                                  getattr(cfg, "image_unit_price", None) if cfg else None)

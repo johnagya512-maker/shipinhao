@@ -81,6 +81,7 @@ def _ensure_columns():
         ("tasks", "audio_file", "VARCHAR(500)"),
         ("tasks", "lyrics", "TEXT"),
         ("tasks", "reference_images", "JSON"),
+        ("tasks", "fixed_image_count", "INTEGER DEFAULT 5"),
     ]
     insp = inspect(engine)
     existing_tables = set(insp.get_table_names())

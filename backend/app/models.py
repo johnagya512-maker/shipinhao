@@ -61,8 +61,10 @@ class Task(Base):
     creation_mode: Mapped[str] = mapped_column(String(16), default="same_topic")
     # 生图模式：per_image（逐张，画质优先）/ grid（九宫格省成本，一次出9张切割，省约89%）
     image_gen_mode: Mapped[str] = mapped_column(String(12), default="per_image")
-    # 图数模式：auto（按文案时长自动计算）/ fixed_5（固定只生成5张图）
+    # 图数模式：auto（按文案时长自动计算）/ fixed（固定张数，见 fixed_image_count）/ fixed_5（旧值兼容）
     image_count_mode: Mapped[str] = mapped_column(String(12), default="auto")
+    # 固定张数模式下的目标图数（image_count_mode=fixed 时生效），范围 3-20
+    fixed_image_count: Mapped[int] = mapped_column(Integer, default=5)
     # 处理模式：full_auto（完整跑）/ semi_auto（不改写，仅分句）/ direct（不改写、机械切分）
     processing_mode: Mapped[str] = mapped_column(String(12), default="full_auto")
     # 暂停确认：none（不停）/ key_nodes（关键节点）/ every_step（每步）/ custom（自定义步骤）
