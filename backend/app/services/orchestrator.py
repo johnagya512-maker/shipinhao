@@ -494,7 +494,7 @@ def run_pipeline(db: Session, task_id: str):
             # 固定张数模式：强制目标图数为用户指定值，覆盖时长估算
             _icm = getattr(task, "image_count_mode", None)
             is_fixed_5 = _icm in ("fixed", "fixed_5")
-            fixed_count = max(3, min(20, getattr(task, "fixed_image_count", None) or 5))
+            fixed_count = max(1, min(20, getattr(task, "fixed_image_count", None) or 5))
             if is_fixed_5:
                 suggest_images = fixed_count
                 logger.info("[P] 固定张数模式：强制 suggest_images=%d", fixed_count)
