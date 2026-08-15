@@ -38,7 +38,7 @@ class TaskCreate(BaseModel):
     creation_mode: str = "same_topic"    # same_topic(拆结构二创) | lite(轻量改写) | remix(中度仿写) | book_remix(图书带货深度二创) | none(不拆直接改写)
     image_gen_mode: str = "grid"    # grid(九宫格省成本,默认) | per_image(逐张,画质优先)
     image_count_mode: str = "auto"  # auto(按时长自动计算) | fixed(固定张数) | fixed_5(旧值兼容)
-    fixed_image_count: int = Field(default=5, ge=3, le=20)  # image_count_mode=fixed 时生效
+    fixed_image_count: int = Field(default=5, ge=1, le=20)  # image_count_mode=fixed 时生效
     processing_mode: str = "full_auto"   # full_auto | semi_auto | direct
     # 预览二创后用户编辑确认的定稿文案。非空时：作为最终文案，跳过 A 清洗 + B 改写
     # （走 direct 模式直接用），保证「所见即所得」、并省两次 LLM 调用。
