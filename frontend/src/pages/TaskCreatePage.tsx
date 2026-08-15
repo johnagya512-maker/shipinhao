@@ -501,7 +501,7 @@ export default function TaskCreatePage() {
                   {isFixed ? (
                     <div className="flex items-center justify-center gap-1 mt-0.5" onClick={(e) => e.stopPropagation()}>
                       <button type="button" className="w-5 h-5 rounded text-slate-300 bg-slate-700 hover:bg-slate-600 text-xs leading-none"
-                        onClick={(e) => { e.stopPropagation(); set({ fixed_image_count: Math.max(3, cnt - 1) }) }}>−</button>
+                        onClick={(e) => { e.stopPropagation(); set({ fixed_image_count: Math.max(1, cnt - 1) }) }}>−</button>
                       <span className="text-brand-300 text-sm font-medium w-4 text-center">{cnt}</span>
                       <button type="button" className="w-5 h-5 rounded text-slate-300 bg-slate-700 hover:bg-slate-600 text-xs leading-none"
                         onClick={(e) => { e.stopPropagation(); set({ fixed_image_count: Math.min(20, cnt + 1) }) }}>+</button>

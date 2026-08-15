@@ -186,7 +186,7 @@ def _emit_caption_chunks(script, text, seg_start_us, seg_end_us, style, border, 
         except Exception:
             clip = None
     font = extra.get("font")
-    caps = _split_caption(text, max_chars=10)
+    caps = _split_caption(text, max_chars=9999)
     total_chars = sum(len(c) for c in caps) or 1
     span = seg_end_us - seg_start_us
     cum = 0
