@@ -499,6 +499,38 @@ def run_pipeline(db: Session, task_id: str):
                 suggest_images = fixed_count
                 logger.info("[P] 固定张数模式：强制 suggest_images=%d", fixed_count)
 
+            # skip 模式：跳过 CP/SB/P 全部 LLM 步骤，直接生成占位图落库，后续缓存命中自动跳过
+            if getattr(task, "image_gen_mode", None) == "skip":
+                _existing_e = _get_result(db, task.id, "E")
+                if not (_existing_e and _existing_e.status == "success"):
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    n_skip = fixed_count if is_fixed_5 else max(im.MIN_IMAGES, min(im.MAX_IMAGES, suggest_images))
+                    _skip_prompts, _skip_items = im.build_image_prompts(
+                        book_info, segments, out_dir,
+                        image_count=n_skip,
+                        track=task.track, image_style=task.image_style)
+                    _skip_images = [im.placeholder_result(op, st, sd, reason="skip")
+                                    for (_, st, op, sd, _) in _skip_prompts]
+                    # 同时写 P 缓存，避免后面 existing_p 未命中而触发 CP/SB
+                    _skip_scenes = [{"id": i + 1, "cap": (it.get("cap") or ""),
+                                     "desc_prompt": "", "has_character": False}
+                                    for i, it in enumerate(_skip_items)]
+                    _save_result(db, task.id, "P", "success",
+                                 output={"prompts": [{"prompt": p, "sub_type": st,
+                                                      "out_path": str(op), "duration": sd,
+                                                      "has_char": False}
+                                                     for (p, st, op, sd, _) in _skip_prompts],
+                                         "scenes": _skip_scenes})
+                    _save_result(db, task.id, "E", "success",
+                                 output={"images": [{"path": r.path, "sub_type": r.sub_type,
+                                                     "suggested_duration": r.suggested_duration,
+                                                     "fallback": True, "grid": False,
+                                                     "fail_reason": "skip"}
+                                                    for r in _skip_images]},
+                                 cost=0)
+                    logger.info("[E] 跳过生图：%d 张占位图已落库，跳过 CP/SB/P", n_skip)
+                    _maybe_pause(db, task, "E")
+
             # Step3 提示词生成（"P"）：组装绘图任务列表，落库供暂停时预览。无 LLM 计费。
             # 参考图 data URI 不落库（体积大），每次现编码，供人物镜头图生图用。
             # 多参考图：构建 ref_map {key: ref_uri}，按分镜的 character_key 匹配
